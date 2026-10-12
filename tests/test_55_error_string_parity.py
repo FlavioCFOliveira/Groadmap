@@ -958,35 +958,6 @@ EXEMPT_KEYS = {
         "specified by COMMANDS.md (\"what follows is the engine's own "
         "text and is not specified here\")."
     ),
-    "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>": (
-        "NOT REACHABLE AT THE PINNED ENGINE, and the specification says so in "
-        "the scenario column of the row itself. Every statement now crosses a "
-        "graph server, and the class of this refusal does not cross it: the "
-        "engine's Bolt server forwards the engine's diagnostic -- the field kind "
-        "and both figures -- under a client-error code it also gives to every "
-        "other argument the engine refuses, and the sentinel that selects this "
-        "line stays on the server's side. MEASURED through a running server, a "
-        "70000-byte label comes back on the parse/execution row above, ending in "
-        "the engine's own diagnostic: the caller learns what is wrong, and learns "
-        "it only from text COMMANDS.md does not specify -- the very outcome this "
-        "line was published to end. Recovering the class by matching that "
-        "diagnostic is forbidden by GRAPH.md \"Field Length Limits\", rule 3: "
-        "the text is the engine's to reword and a match on it fails silently at "
-        "the next version bump, and the shared code cannot select the line "
-        "either, because it would select it for refusals that are not an "
-        "over-long field (rule 13). COMMANDS.md keeps the row rather than "
-        "withdrawing it because the class is real and the remedy is an "
-        "engine-side change, and it states in as many words that nothing in this "
-        "repository can drive the line. What IS still driven, in "
-        "tests/test_69_graph_field_length.py: that an over-long field of either "
-        "kind is refused with exit code 1 and the parse/execution line followed "
-        "by the engine's diagnostic -- neither this line nor the generic text "
-        "naming only a session -- that a shorter one is accepted, that the "
-        "refusal leaves nothing behind and the store stays usable, and that a "
-        "syntax error still writes the parse/execution line WITH the engine's own "
-        "diagnostic. internal/commands/graph_fieldlength_test.go measures the "
-        "bound in process, where the sentinel still survives."
-    ),
     "Error: graph store error: graph store unavailable: <detail>": (
         "internal/commands/graph_socket.go (graphServerFailure) and "
         "internal/web/data.go (servedGraphError): the branch each takes for a "
@@ -1088,6 +1059,23 @@ TAIL_EXEMPT_KEYS = {
         "COMMANDS.md § Graph Server Socket Error Lines states that the part rmp fixes "
         "is everything up to and including `cannot bind <socket>: `; the text after it "
         "is the operating system's."
+    ),
+    "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>": (
+        "<engine diagnostic>",
+        "COMMANDS.md § Client Error Cases: the line is a hybrid. rmp writes the "
+        "class, the fact that nothing was written and the remedy, up to and "
+        "including `Shorten the field the engine names: `, and that head is "
+        "asserted exactly; the engine's diagnostic ends the line, because only the "
+        "engine knows which field is at fault and by how much, and its wording is "
+        "the engine's (GRAPH.md \"Field Length Limits\", rules 3, 4 and 13)."
+    ),
+    "Error: graph store error: graph store backup failed; the store was not migrated: <detail>": (
+        "<detail>",
+        "COMMANDS.md § Serve Error Cases: what follows the head is the account of "
+        "what stopped the backup -- here, the path of the entry of graph/ that is "
+        "neither a regular file nor a directory -- and the head, which carries the "
+        "sentinel and the fact that the store was not migrated, is asserted exactly "
+        "(GRAPH.md \"Graph Store Format Migration\", rule 7)."
     ),
     "Error: running migrations: migration <version> failed: applying migration: <step>: <detail>": (
         "<detail>",
@@ -3498,24 +3486,11 @@ class TestErrorStringParity:
             note="graph client bare positional query",
         )
 
-    # test_graph_field_too_long_line is RETIRED, and the line it drove is
-    # exempted instead (see EXEMPT_KEYS, which carries the whole reason).
-    #
-    # The condition is real and the row is still published; what changed is that
-    # nothing can produce the line. Every statement crosses a graph server, and
-    # the engine's Bolt server forwards this refusal's diagnostic under a code it
-    # shares with every other argument error, so the sentinel that selects the
-    # line never reaches this side and the condition arrives on the
-    # parse/execution row instead, ending in the engine's diagnostic.
-    # SPEC/COMMANDS.md § Client Error Cases says so in the scenario column of the
-    # row itself and states that nothing in this repository can drive it.
-    #
-    # What this test asserted BESIDES the line is not dropped. It also asserted
-    # that the refused statement left nothing behind -- not even the well-formed
-    # element it created before the over-long label -- and that a genuine syntax
-    # error still writes the parse/execution line. Both are driven by
-    # tests/test_69_graph_field_length.py, against the same shape, and that
-    # module also holds the account of what the withdrawal cost.
+    # The field-length line is driven by test_graph_field_length_and_store_backup_lines:
+    # the pinned engine's server gives the refusal a failure code of its own,
+    # and the client selects the line by it. What the refusal leaves behind --
+    # nothing, not even the well-formed element created before the over-long
+    # label -- is driven by tests/test_69_graph_field_length.py.
 
     def test_graph_statement_time_budget(self):
         """The statement time budget line, driven rather than exempted
@@ -3532,9 +3507,9 @@ class TestErrorStringParity:
 
         **That the line survives the crossing is not an assumption here, it is
         the assertion.** The budget failure is one of the few the engine's Bolt
-        server carries across as a TYPED failure rather than replacing (unlike
-        the field-length refusal, which EXEMPT_KEYS records), and this case is
-        what would fail if that stopped being true.
+        server carries across as a TYPED failure, as it carries the field-length
+        refusal under codes of its own, and this case is what would fail if that
+        stopped being true.
 
         **Driven, not exempted, and deliberately so.** The budget is provokable
         through the binary, unlike the four strings EXEMPT_KEYS names, whose
@@ -4432,6 +4407,44 @@ class TestErrorStringParity:
         assert waited >= 7.0, (
             f"the client gave up after {waited:.2f}s, before its 7.5s backstop: whatever "
             f"ended the wait, it was not the backstop")
+
+    def test_graph_field_length_and_store_backup_lines(self):
+        """Two lines the pinned engine made reachable, each driven by the
+        condition its row names.
+
+        The field-length line is selected by the failure code the engine's
+        server gives the refusal of an over-long field, and by nothing else
+        (GRAPH.md "Field Length Limits", rules 3 and 13): a label of 70000
+        bytes is refused with it, and the engine's diagnostic that ends it
+        names the length. The backup line is written by a server that finds
+        the store in the single-file write-ahead-log format and cannot copy it:
+        a symbolic link inside graph/ is an entry a backup refuses to copy
+        (GRAPH.md "Graph Store Format Migration", rules 4 and 7).
+        """
+        r = self.roadmap
+        self.test.start_graph_server(r)
+        self.check_head(
+            "Error: graph engine error: graph field too long; nothing was written. "
+            "Shorten the field the engine names: <engine diagnostic>",
+            ["graph", "client", "-r", r, "--query", "CREATE (n:`" + "L" * 70000 + "`)"], 1,
+            ("70000",), note="a 70000-byte label", timeout=60)
+
+        unconverted = self._another_roadmap("single_file")
+        graph_dir = self.test.home_dir / ".roadmaps" / unconverted / "graph"
+        graph_dir.mkdir(mode=0o700)
+        (graph_dir / "wal").write_bytes(b"")
+        outside = self.test.home_dir / "operator-notes"
+        outside.mkdir(mode=0o700)
+        (outside / "restore-procedure.md").write_text("Restore graph-backup-<T>/ by hand.\n")
+        os.symlink(outside, graph_dir / "operator-notes")
+        self.check_head(
+            "Error: graph store error: graph store backup failed; the store was not migrated: <detail>",
+            ["graph", "serve", "-r", unconverted], 1,
+            ("operator-notes",), note="a symbolic link inside a single-file store", timeout=60)
+        assert not (graph_dir / "wal.control").exists(), (
+            "a backup that failed must leave the store unconverted; graph/ now holds wal.control")
+        leftovers = sorted(p.name for p in graph_dir.parent.iterdir() if p.name.startswith("graph-backup-"))
+        assert leftovers == [], f"a failed backup left {leftovers} in the roadmap home"
 
     # ------------------------------------------------------------------
     # The lines rmp tasks #577-#588 published: the home directory, the

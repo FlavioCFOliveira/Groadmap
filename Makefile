@@ -40,7 +40,7 @@ vet:
 # on the make command line or in the environment from replacing a pin, because
 # nothing may disable the check.
 override GOLANGCI_LINT_VERSION := v2.14.0
-override GOSEC_VERSION := v2.29.0
+override GOSEC_VERSION := v2.29.1-0.20261012130337-71577268350e
 
 # The install command of each tool's own section of SPEC/BUILD.md, with the pin
 # in place of its placeholder. A failed version check prints it. The linter's

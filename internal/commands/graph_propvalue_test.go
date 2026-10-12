@@ -223,3 +223,63 @@ func TestGraphWrite_AcceptsLegitimateValues(t *testing.T) {
 		})
 	}
 }
+
+// TestGraphPropertyValue_AListHoldingNullIsRefusedByEveryWriteForm is SPEC/GRAPH.md
+// § What Groadmap Does Not Check, item 9, re-measured as mitigation 3 of
+// § Dependency Maturity Risk requires: every write form refuses a list holding
+// null, on a node and on a relationship, through the ordinary parse-or-execution
+// line, and stores nothing — neither the refused key nor any other effect of the
+// statement. An earlier engine accepted every one of these silently.
+func TestGraphPropertyValue_AListHoldingNullIsRefusedByEveryWriteForm(t *testing.T) {
+	const roadmap = "graph-null-list-refusal"
+	defer servedRoadmap(t, roadmap)()
+
+	for _, seed := range []string{
+		"CREATE (:Spec {key:'SPEC/GRAPH.md', owner:'graph-team'})-[:SPECIFIES {since:'1.15.0'}]->" +
+			"(:Component {key:'internal/graphstore'})",
+	} {
+		if err := runGraphClient([]string{"-r", roadmap, "--query", seed}); err != nil {
+			t.Fatalf("seed %q: %v", seed, err)
+		}
+	}
+	state := func() string {
+		t.Helper()
+		stdout, _ := captureStdStreams(t, func() {
+			if err := runGraphClient([]string{"-r", roadmap, "--query",
+				"MATCH (n) OPTIONAL MATCH (n)-[e]->() RETURN n.key, properties(n), type(e), properties(e) ORDER BY n.key"}); err != nil {
+				t.Fatalf("reading the graph back: %v", err)
+			}
+		})
+		return stdout
+	}
+	before := state()
+
+	for _, statement := range []string{
+		"MATCH (n:Spec {key:'SPEC/GRAPH.md'}) SET n.reviewers = [1, null, 2]",
+		"MATCH (n:Spec {key:'SPEC/GRAPH.md'}) SET n = {key:'SPEC/GRAPH.md', reviewers:[null, 1]}",
+		"MATCH (n:Spec {key:'SPEC/GRAPH.md'}) SET n += {reviewers:[1, null]}",
+		"CREATE (:Spec {key:'SPEC/WEB.md', reviewers:[null, 'web-team']})",
+		"MERGE (:Spec {key:'SPEC/COMMANDS.md', reviewers:[null]})",
+		"MATCH (:Spec)-[e:SPECIFIES]->(:Component) SET e.reviewers = [1, null, 2]",
+		"MATCH (s:Spec {key:'SPEC/GRAPH.md'}), (c:Component) CREATE (s)-[:TRACES {reviewers:[null, 'x']}]->(c)",
+	} {
+		var err error
+		stdout, _ := captureStdStreams(t, func() {
+			err = runGraphClient([]string{"-r", roadmap, "--query", statement})
+		})
+		if err == nil {
+			t.Errorf("%q was accepted; a list holding null is refused by every write form", statement)
+			continue
+		}
+		if !strings.HasPrefix(err.Error(), "graph engine error: graph query failed: ") {
+			t.Errorf("%q failed with %q, want the parse-or-execution line", statement, err.Error())
+		}
+		if stdout != "" {
+			t.Errorf("%q wrote %q to stdout on failure", statement, stdout)
+		}
+	}
+
+	if after := state(); after != before {
+		t.Errorf("the refused statements changed the graph:\nbefore: %s\nafter:  %s", before, after)
+	}
+}

@@ -441,16 +441,7 @@ func TestSignalledServer_StopsWhenAPeerHasStoppedReading(t *testing.T) {
 	// not skip the checkpoint that folds the write-ahead log into the snapshot,
 	// which is the difference between this repair and one that bounded the wait
 	// by abandoning it.
-	if size := walSize(t, filepath.Join(graphDir, "wal")); size != 0 {
-		t.Errorf("the write-ahead log holds %d bytes after the shutdown, want 0: the shutdown "+
-			"checkpoint did not fold it into the snapshot, so the cut abandoned step 4 of "+
-			"SPEC/GRAPH.md § Server Shutdown and the Drain instead of releasing a socket", size)
-	}
-	manifest := filepath.Join(graphDir, "snapshot", "manifest.json")
-	if _, err := os.Stat(manifest); err != nil {
-		t.Errorf("no snapshot manifest at %s after the shutdown (%v): the log was truncated "+
-			"without a snapshot to recover from, or no checkpoint was taken at all", manifest, err)
-	}
+	requireLogFolded(t, graphDir, "after a shutdown that cut a blocked socket")
 
 	// Non-vacuity: the wedging client must find a full socket buffer waiting for
 	// it. A run that delivered less than that never blocked the server, so it

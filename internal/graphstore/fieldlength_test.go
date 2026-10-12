@@ -1,14 +1,12 @@
-// Regression fence for the two field-length predicates and the checkpoint
-// diagnostic they select (rmp task #413).
+// Regression fence for the checkpoint's field-length predicate and the
+// diagnostic it selects (rmp task #413).
 //
-// The two sentinels this package matches share a NAME in their own packages —
+// Two engine sentinels share a NAME in their own packages —
 // store/txn.ErrFieldTooLong and store/snapshot.ErrFieldTooLong — and are
 // different values with opposite consequences. Confusing them would report a
 // commit-time refusal, where nothing was written and the statement is the thing
-// to correct, as an unhealable checkpoint condition, and an unhealable checkpoint
-// condition as a statement to re-run. The cross assertions below are the fence
-// against exactly that, and they are the reason each predicate is driven with
-// BOTH sentinels rather than only its own.
+// to correct, as an unhealable checkpoint condition. The predicate is therefore
+// driven with BOTH sentinels, and must match only the snapshot's.
 package graphstore
 
 import (
@@ -22,9 +20,9 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 )
 
-// TestFieldLengthPredicates drives each predicate with the sentinel it must
-// match, the sentinel it must NOT match, and the neighbouring refusals
-// SPEC/GRAPH.md § Field Length Limits, rule 10, keeps outside the class.
+// TestFieldLengthPredicates drives the checkpoint predicate with the sentinel it
+// must match, the commit sentinel it must NOT match, and the neighbouring
+// refusals SPEC/GRAPH.md § Field Length Limits, rule 10, keeps outside the class.
 func TestFieldLengthPredicates(t *testing.T) {
 	// The shapes the errors really arrive in: the guards format their own
 	// message and the layer above wraps it (cypher/exectx.go and cypher/api.go
@@ -37,12 +35,11 @@ func TestFieldLengthPredicates(t *testing.T) {
 	cases := []struct {
 		err            error
 		name           string
-		wantCommit     bool
 		wantCheckpoint bool
 	}{
-		{name: "the log's refusal", err: commitRefusal, wantCommit: true},
+		{name: "the log's refusal", err: commitRefusal},
 		{name: "the snapshot's refusal", err: checkpointRefusal, wantCheckpoint: true},
-		{name: "the bare log sentinel", err: txn.ErrFieldTooLong, wantCommit: true},
+		{name: "the bare log sentinel", err: txn.ErrFieldTooLong},
 		{name: "the bare snapshot sentinel", err: snapshot.ErrFieldTooLong, wantCheckpoint: true},
 		{
 			name: "an over-large assembled frame",
@@ -64,18 +61,15 @@ func TestFieldLengthPredicates(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := CommitRefusedFieldTooLong(c.err); got != c.wantCommit {
-				t.Errorf("CommitRefusedFieldTooLong(%v) = %v, want %v", c.err, got, c.wantCommit)
-			}
 			if got := CheckpointRefusedFieldTooLong(c.err); got != c.wantCheckpoint {
 				t.Errorf("CheckpointRefusedFieldTooLong(%v) = %v, want %v", c.err, got, c.wantCheckpoint)
 			}
 		})
 	}
 
-	// The two sentinels are distinct values, which is the whole reason both
-	// predicates exist. If a future engine collapsed them into one, every caller
-	// of these predicates would start reporting both conditions as one, and this
+	// The two sentinels are distinct values, which is what lets the predicate
+	// tell them apart. If a future engine collapsed them into one, a commit
+	// refusal would be reported as an unhealable checkpoint condition, and this
 	// is where that would be caught.
 	if errors.Is(txn.ErrFieldTooLong, snapshot.ErrFieldTooLong) ||
 		errors.Is(snapshot.ErrFieldTooLong, txn.ErrFieldTooLong) {

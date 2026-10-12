@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -349,8 +348,8 @@ const maxOpenTxPerPrincipal = maxConnections
 // [inFlightCheckpoint] at all: no ticker, no goroutine, no periodic wake-up. That
 // is what a test of the fold's EFFECTS wants — nothing the server does on its own
 // can change the store under the assertion — and it is what a test of the log
-// itself uses to hold the write-ahead log still, since a fold that truncated the
-// log mid-assertion would remove the very bytes the assertion is about. The
+// itself uses to hold the write-ahead log still, since a fold mid-assertion would
+// move the very covered position the assertion is about. The
 // shutdown checkpoint is unaffected by it.
 type checkpointCadence struct {
 	maxAge   time.Duration
@@ -395,8 +394,8 @@ type checkpointCadence struct {
 // The cost of a shorter cadence is the fold itself, paid once per window in which
 // anything was written: a serialisation of the whole graph and a rewrite of the
 // whole snapshot, proportional to the live graph and not to what changed. It does
-// not stall writers — only the capture and the prefix truncation hold the commit
-// lock, both O(1) in the graph, while the serialisation and the disk write run
+// not stall writers — only the capture holds the commit lock, and the discarding
+// of whole folded segments takes none, while the serialisation and the disk write run
 // with the lock released (rmp task #370) — so it is paid in I/O and CPU rather
 // than in latency. A knowledge graph is written in bursts, at a commit, so a
 // shorter window buys little recovery bound between bursts and turns one burst
@@ -614,12 +613,14 @@ func Run(opts Options) error {
 		return err
 	}
 
-	// Step 6. Open the store and construct the engine, through the one lifecycle
+	// Step 6. Back the store up when it is still in the single-file format, then
+	// open it and construct the engine, through the one lifecycle
 	// internal/graphstore owns. A failure here closes the listener — which
 	// unlinks the socket — so a caller waiting on the handshake sees the
 	// connection dropped and fails, rather than falling back onto a lock this
-	// process was about to hold (SPEC/GRAPH.md § Server Startup).
-	st, err := hold.Open()
+	// process was about to hold (SPEC/GRAPH.md § Server Startup; § Graph Store
+	// Format Migration, rules 1, 5, 7 and 9).
+	st, err := openMigrating(hold)
 	if err != nil {
 		_ = ln.Close() //nolint:errcheck // the store never opened; the close error cannot be acted on
 		return err
@@ -685,6 +686,88 @@ func Run(opts Options) error {
 	}
 
 	return serve(srv, ln, st, opts.SocketPath, sigCh)
+}
+
+// backupClock is the clock a store backup is named by. It is a variable so a
+// test can fix the instant a backup's name carries; production never reassigns
+// it.
+var backupClock = time.Now
+
+// openMigrating is step 6 of SPEC/GRAPH.md § Server Startup: it backs the store
+// up when it is still in the single-file write-ahead-log format, opens it inside
+// the hold, and removes the backup once the engine's conversion has succeeded.
+//
+// It spends the hold either way, as [graphstore.Hold.Open] does. On success the
+// returned Store owns the hold; on failure the hold is released and the error is
+// the line the start ends with.
+//
+// # The order, and what each failure leaves
+//
+//   - A store that owes no backup — never in the single-file format, already
+//     converted, or not yet holding a store — is opened as on every start, and
+//     nothing in this function writes a record (rules 1 and 2).
+//   - A backup that fails ends the start BEFORE the store is opened, so the
+//     engine converts nothing and graph/ is byte for byte what the server found,
+//     write.lock aside (rule 7).
+//   - An open that fails after the backup, and an open after which the engine's
+//     inspection still finds no control file, keep the backup and report its path
+//     at WARN before the open-or-recovery line (rule 9).
+//   - A conversion that succeeded removes the backup it took, and only that one,
+//     and reports the removal at INFO; a removal that fails is reported at WARN
+//     naming what remains, and the server starts all the same (rule 9).
+//
+// Every record is queued here, before the socket is announced, and the caller
+// flushes the queue before the announcement or the error line (rule 10).
+func openMigrating(hold *graphstore.Hold) (*graphstore.Store, error) {
+	due, err := graphstore.NeedsBackup(hold.Dir())
+	if err != nil {
+		hold.Release()
+		return nil, err
+	}
+	if !due {
+		return hold.Open()
+	}
+
+	backup, err := graphstore.TakeBackup(hold.Dir(), backupClock())
+	if err != nil {
+		hold.Release()
+		return nil, err
+	}
+	logger.Info("graph store backed up before its conversion from the single-file write-ahead-log format",
+		slog.String("backup", backup.Path()))
+
+	st, err := hold.Open()
+	if err != nil {
+		logBackupKept(backup)
+		return nil, err
+	}
+	converted, err := graphstore.Converted(hold.Dir())
+	if err == nil && !converted {
+		err = fmt.Errorf("%w: graph store unavailable: the write-ahead log has no control file after the open, "+
+			"so the store was not converted", utils.ErrGraphStore)
+	}
+	if err != nil {
+		logBackupKept(backup)
+		_ = st.Close() //nolint:errcheck // the start is failing on the conversion; the close releases the hold whatever it reports
+		return nil, err
+	}
+
+	if remaining, err := backup.Remove(); err != nil {
+		logger.Warn("graph store converted, but its backup could not be removed; remove it by hand",
+			slog.String("backup", remaining), slog.String("err", err.Error()))
+	} else {
+		logger.Info("graph store converted; the backup taken before the conversion was removed",
+			slog.String("backup", backup.Path()))
+	}
+	return st, nil
+}
+
+// logBackupKept reports a backup kept because the conversion it protected did
+// not succeed (SPEC/GRAPH.md § Graph Store Format Migration, rule 9).
+func logBackupKept(backup *graphstore.Backup) {
+	logger.Warn("graph store open failed after its backup; the backup is kept, and the store may already "+
+		"have been partly converted by the engine",
+		slog.String("backup", backup.Path()))
 }
 
 // lockRefusal words an exhausted wait for the graph store lock in the terms the
@@ -835,9 +918,10 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 // # The gate, and why it is the store's and not this package's
 //
 // Every fold passes through graphstore.Store.CheckpointIfAppended, which folds
-// only when the write-ahead log holds bytes no fold has covered — including a
-// tail the store already held when it was opened — and records the point the
-// fold captured as the mark the next call compares against. SPEC/GRAPH.md
+// only when the write-ahead log holds a durable record no fold has covered —
+// including records the store already held when it was opened — and records a
+// position the fold is proven to have covered as the mark the next call compares
+// against. SPEC/GRAPH.md
 // § Durability and Checkpointing in a Long-Lived Process, rules 4 and 5, require
 // ONE comparison and ONE mark for both folds, so neither fold carries a copy of
 // the rule; this type is how both reach the single realisation of it.
@@ -847,27 +931,20 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 // Until rmp task #380 an ungated fold was believed to cost nothing but a wasted
 // write. It costs a permanent one. A statement the budget cuts while it is
 // writing is rolled back, and the rollback restores the LOGICAL graph and not the
-// PHYSICAL one: the key mapper keeps the interned key of every node the statement
-// created and the tombstone set keeps a tombstone for each. An ungated fold
-// writes that residue to disk, where nothing removes it. Measured end to end
+// PHYSICAL one: the node identifiers the statement reserved for the nodes it
+// created stay reserved, and the engine's storage keeps a place for each. An
+// ungated fold writes that residue to disk, where nothing removes it. Measured end to end
 // against this server: ONE cut `MATCH (a),(b),(c) CREATE ()` over a store of 80
 // KB holding 600 nodes left the store at 134 MB — mapper.bin 80.2 MB,
 // tombstones.bin 28.3 MB — and a later `MATCH (n) RETURN count(*)` over the same
 // 600 nodes then cost 1.48 s and 670 MB against 0.01 s and 21.6 MB on a clean
 // store. The control isolates it: one cut READ over the same store left it at 80
-// KB. A cut statement appends nothing, so the gate owes no fold on its account,
-// and the residue reaches the disk only inside a fold a genuine write made owed —
-// a fold that would have captured the same graph with or without it (rule 8).
-//
-// # What the fold reports to the gate
-//
-// The gate needs to know whether the fold cut the prefix it captured, because
-// that decides the mark (see graphstore.Store.CheckpointIfAppended). The engine's
-// checkpointer does not return it, and its statistics do: WALTruncBytes is the
-// lifetime total of the prefixes it has cut, so the difference across one
-// request is what THAT fold cut. The difference is exact because nothing else
-// asks this checkpointer to fold: its own loop has no cadence (see [build]), and
-// every request is made under this type's mutex.
+// KB. A cut statement commits nothing, so the gate owes no fold on its account.
+// At the pinned engine that is all the gate can do: the statement leaves the
+// engine's reservations of node identifiers in the log, they become durable at
+// the log's next synchronisation, and the next fold that runs for any reason
+// carries the residue into the snapshot. Groadmap accepts that as the engine's
+// behaviour; it changes no element of the graph (rule 8).
 //
 // # Why the mutex
 //
@@ -914,26 +991,9 @@ func (g *foldGate) foldIfOwed() (bool, error) {
 func (g *foldGate) fold() (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.st.CheckpointIfAppended(func() (int64, error) {
-		before := g.cp.Stats().WALTruncBytes
-		err := g.cp.TriggerCtx(context.Background())
-		return truncatedSince(before, g.cp.Stats().WALTruncBytes), err
+	return g.st.CheckpointIfAppended(func() error {
+		return g.cp.TriggerCtx(context.Background())
 	})
-}
-
-// truncatedSince is the number of log bytes the checkpointer cut between two
-// readings of its lifetime WALTruncBytes counter, as the signed length the gate
-// takes. A counter that did not advance — or, impossibly, went backwards — cut
-// nothing.
-func truncatedSince(before, after uint64) int64 {
-	if after <= before {
-		return 0
-	}
-	delta := after - before
-	if delta > math.MaxInt64 {
-		return math.MaxInt64
-	}
-	return int64(delta)
 }
 
 // shutdownCloser is what the engine's server closes once its connections have

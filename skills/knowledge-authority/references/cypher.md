@@ -99,14 +99,17 @@ kg "MATCH (p:Package {path:'cmd/worker'})
 ```
 
 Both choices are load-bearing; do not "simplify" either away (SKILL.md § Silent
-write hazards). A `MERGE` that matched, on a pair already joined by more than one
-relationship in that direction — `PART_OF` beside `TESTS` is enough — binds a
-relationship of the pair that may be another one, and its `SET` lands there,
-`{"ok":true}`. And the re-binding `MATCH` is **outgoing**, from the stored source:
-a property **removal** through an undirected or incoming pattern is dropped with
-`{"ok":true}` and no `counters`. Verify an edge write with `e.<prop>` or
-`properties(e)`, never with `RETURN e`, whose projected map can carry another
-relationship's properties.
+write hazards). They are the forms that are correct on every graph engine: on a
+pair already joined by more than one relationship in that direction — `PART_OF`
+beside `TESTS` is enough — an rmp build on the older engine (GoGraph v0.15.0 or
+earlier, every release up to 1.18.0) binds a relationship of the pair that may be
+another one to a matched `MERGE`, and its `SET` lands there, `{"ok":true}`; and on
+that engine a property **removal** through an undirected or incoming pattern is
+dropped with `{"ok":true}` and no `counters`, so the re-binding `MATCH` is
+**outgoing**, from the stored source. A GoGraph v0.16.0 build directs both to the
+relationship the statement bound. Verify an edge write with `e.<prop>` or
+`properties(e)`, never with `RETURN e`, whose projected map could carry another
+relationship's properties on the older engine.
 
 ### Verify every write — the two oracles
 

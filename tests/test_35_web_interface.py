@@ -73,7 +73,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import REPO_ROOT, GroadmapTestBase, commit_flags_for
+from tests.base_test import (
+    REPO_ROOT, GroadmapTestBase, commit_flags_for, write_ahead_log_fingerprint,
+)
 
 ROADMAP = "platform"
 
@@ -5098,7 +5100,7 @@ class TestWebInterface:
         proc, port = self._start(["--port", "0"])
 
         graph_dir = Path(self.home) / ".roadmaps" / ROADMAP / "graph"
-        wal_before = (graph_dir / "wal").stat().st_size
+        log_before = write_ahead_log_fingerprint(graph_dir)
 
         # CREATE: executed, committed, and found by a separate client process
         # afterwards.
@@ -5114,12 +5116,12 @@ class TestWebInterface:
             f"this criterion exists against; got {result!r}")
 
         # The commit reached the write-ahead log, which is where a committed
-        # change is durable before it is acknowledged.
-        wal_after_write = (graph_dir / "wal").stat().st_size
-        assert wal_after_write > wal_before, (
-            f"AC47: the committed write must have been appended to the "
-            f"write-ahead log; it is {wal_after_write} bytes and was "
-            f"{wal_before} before the request")
+        # change is durable before it is acknowledged. The log is read as its
+        # files' content: its single-file `wal` is a fixed stub beside the
+        # segments, so no one file's size says whether it grew.
+        assert write_ahead_log_fingerprint(graph_dir) != log_before, (
+            "AC47: the committed write must have been appended to the "
+            "write-ahead log; no file of the log changed across the request")
 
         # SET: the property change is committed and visible afterwards.
         status, _, body = self._req(port, self._graph_data(
@@ -5210,9 +5212,10 @@ class TestWebInterface:
 
     # The spellings AC166 names, each paired with the member `rmp graph client`
     # publishes for its prefix: `plan` for EXPLAIN, `profile` for PROFILE. A
-    # PROFILE of a write is left out because the engine refuses it wherever it
-    # runs, so the client could not confirm its premise; its EXPLAIN executes
-    # nothing and can.
+    # PROFILE of a write is left out because confirming its premise through the
+    # client would perform the write: the engine executes a PROFILE of a write and
+    # applies it, so the fixture would change under the cases that follow. Its
+    # EXPLAIN executes nothing and can be confirmed.
     _PLAN_PREFIX_CASES = (
         ("EXPLAIN MATCH (n) RETURN n", "plan"),
         ("PROFILE MATCH (n) RETURN n", "profile"),

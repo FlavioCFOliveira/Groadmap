@@ -34,8 +34,9 @@
 //
 // # What the "durable before acknowledged" assertion here does and does not prove
 //
-// After each acknowledged commit the parent reads the write-ahead log's size from
-// outside the server's process and requires it to have grown. That proves the
+// After each acknowledged commit the parent reads the write-ahead log's end
+// position from outside the server's process, through the engine's read-only
+// inspection of the files on disk, and requires it to have grown. That proves the
 // transaction's frames left the writer's user-space buffer and reached the FILE
 // before the acknowledgement crossed the socket — which is exactly what a
 // removed commit synchronisation breaks, because the frames then sit in a 64 KiB
@@ -75,6 +76,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/bolt/proto"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 )
 
 // serverStartDeadline bounds the wait for a child server to answer the
@@ -132,6 +134,19 @@ func graphRoot(t *testing.T) string {
 func startServerProcess(t *testing.T, root, tag string) *serverProcess {
 	t.Helper()
 
+	p := launchServerProcess(t, root, tag)
+	p.waitUntilServed(t)
+	p.requireAnnounced(t)
+	return p
+}
+
+// launchServerProcess starts the child server over root's graph directory and
+// socket and returns at once, without waiting for it to serve: a test of a start
+// that must FAIL, or of what the start wrote before it announced the socket,
+// needs the process before it answers.
+func launchServerProcess(t *testing.T, root, tag string) *serverProcess {
+	t.Helper()
+
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("locating the test binary to re-execute: %v", err)
@@ -167,9 +182,6 @@ func startServerProcess(t *testing.T, root, tag string) *serverProcess {
 		t.Fatalf("starting the child server: %v", err)
 	}
 	t.Cleanup(func() { p.abandon() })
-
-	p.waitUntilServed(t)
-	p.requireAnnounced(t)
 	return p
 }
 
@@ -281,9 +293,6 @@ func (p *serverProcess) capturedStderr(t *testing.T) string {
 	return string(readFile(t, p.stderr))
 }
 
-// walPath is the write-ahead log inside this server's graph directory.
-func (p *serverProcess) walPath() string { return filepath.Join(p.graphDir, "wal") }
-
 // readFile reads a whole file, failing the test rather than the caller.
 func readFile(t *testing.T, path string) []byte {
 	t.Helper()
@@ -293,19 +302,6 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return b
-}
-
-// walSize is the write-ahead log's size on disk, read from OUTSIDE the server's
-// process. That is the point of it: it observes what the file holds, not what the
-// server believes it wrote.
-func walSize(t *testing.T, path string) int64 {
-	t.Helper()
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	return info.Size()
 }
 
 // mustSend runs statement against the server at socket and requires it to
@@ -375,8 +371,8 @@ func TestKilledServer_LosesNoCommitItAcknowledged(t *testing.T) {
 
 	// The store is new, so nothing has been appended and nothing folded. If this
 	// is ever non-zero the growth assertions below are measuring the wrong thing.
-	if size := walSize(t, server.walPath()); size != 0 {
-		t.Fatalf("the write-ahead log of a freshly opened store is %d bytes, want 0", size)
+	if end := logEnd(t, server.graphDir); end != 0 {
+		t.Fatalf("the write-ahead log of a freshly opened store ends at position %d, want 0", end)
 	}
 
 	const commits = 12
@@ -386,27 +382,24 @@ func TestKilledServer_LosesNoCommitItAcknowledged(t *testing.T) {
 	for _, key := range keys {
 		mustSend(t, server.socket, fmt.Sprintf("CREATE (c:Commit {key:'%s'})", key))
 
-		size := walSize(t, server.walPath())
-		if size <= previous {
-			t.Fatalf("the write-ahead log holds %d bytes after the commit of %q was "+
-				"ACKNOWLEDGED, and held %d before it. An acknowledged commit must already be "+
+		end := logEnd(t, server.graphDir)
+		if end <= previous {
+			t.Fatalf("the write-ahead log on disk ends at position %d after the commit of %q was "+
+				"ACKNOWLEDGED, and ended at %d before it. An acknowledged commit must already be "+
 				"on disk when the client is told it succeeded (SPEC/GRAPH.md § Durability and "+
-				"Checkpointing in a Long-Lived Process, rule 1); a log that did not grow means "+
-				"the frames are still in the writer's buffer. A log that SHRANK would mean a "+
-				"checkpoint folded it mid-test, which its cadence makes impossible inside this "+
-				"test's runtime and which would need this assertion rewritten rather than relaxed",
-				size, key, previous)
+				"Checkpointing in a Long-Lived Process, rule 1); a log whose end did not move means "+
+				"the records are still in the writer's buffer. Positions only grow, so no fold can "+
+				"move this end backwards", end, key, previous)
 		}
-		previous = size
+		previous = end
 	}
 
-	beforeKill := readFile(t, server.walPath())
+	beforeKill := logFingerprint(t, server.graphDir)
 	server.killAndWait(t)
 
-	if after := readFile(t, server.walPath()); !bytes.Equal(after, beforeKill) {
-		t.Errorf("the write-ahead log changed across the kill: %d bytes before, %d after. "+
-			"Nothing may write to it once the process holding it is gone",
-			len(beforeKill), len(after))
+	if diff := describeLogDiff(beforeKill, logFingerprint(t, server.graphDir)); diff != "" {
+		t.Errorf("the write-ahead log changed across the kill:\n%s\nNothing may write to it once "+
+			"the process holding it is gone", diff)
 	}
 	if _, err := os.Lstat(server.socket); err != nil {
 		t.Fatalf("the killed server's socket file is gone (%v), so the relaunch below would "+
@@ -508,9 +501,9 @@ func TestSignalledServer_DrainsAnOpenTransaction(t *testing.T) {
 
 	// Read the log before the process exits, so what is compared afterwards is
 	// what the shutdown folded rather than what it found.
-	walBeforeShutdown := walSize(t, server.walPath())
-	if walBeforeShutdown == 0 {
-		t.Fatalf("the write-ahead log is empty after a COMMIT the server acknowledged; the "+
+	endBeforeShutdown := logEnd(t, server.graphDir)
+	if endBeforeShutdown == 0 {
+		t.Fatalf("the write-ahead log holds no record after a COMMIT the server acknowledged; the "+
 			"commit reached no disk (SPEC/GRAPH.md § Durability and Checkpointing in a "+
 			"Long-Lived Process, rule 1). Server stderr:\n%s", server.capturedStderr(t))
 	}
@@ -526,19 +519,17 @@ func TestSignalledServer_DrainsAnOpenTransaction(t *testing.T) {
 		t.Errorf("the socket file is still at %s after a clean shutdown (%v)", server.socket, err)
 	}
 
-	// Step 4: the log was folded into the snapshot and truncated. This is the
-	// assertion a shutdown that skipped its checkpoint fails, and the only one
-	// that can distinguish it: no committed data is lost either way.
-	if after := walSize(t, server.walPath()); after != 0 {
-		t.Errorf("the write-ahead log holds %d bytes after the shutdown and held %d before it. "+
-			"The shutdown MUST checkpoint and truncate (SPEC/GRAPH.md § Server Shutdown and "+
-			"the Drain, step 4), so that the log the next open replays is short and the "+
-			"snapshot on disk is current", after, walBeforeShutdown)
-	}
-	manifest := filepath.Join(server.graphDir, "snapshot", "manifest.json")
-	if _, err := os.Stat(manifest); err != nil {
-		t.Errorf("no snapshot manifest at %s after the shutdown (%v), so the truncation above "+
-			"folded the log into nothing", manifest, err)
+	// Step 4: the log was folded into the snapshot. This is the assertion a
+	// shutdown that skipped its checkpoint fails, and the only one that can
+	// distinguish it: no committed data is lost either way. It is read in log
+	// positions, because a fold discards only whole segments and a log this short
+	// keeps its one segment (SPEC/GRAPH.md § Synchronous Checkpoint on Write,
+	// step 3).
+	requireLogFolded(t, server.graphDir, "after the shutdown")
+	if covered := testenv.InspectWAL(t, server.graphDir).Covered(); covered < endBeforeShutdown {
+		t.Errorf("the shutdown fold covers the log up to position %d, short of the %d the drained "+
+			"COMMIT reached (SPEC/GRAPH.md § Server Shutdown and the Drain, step 4)",
+			covered, endBeforeShutdown)
 	}
 
 	// And the commit the drain saved is in the graph a fresh process opens.

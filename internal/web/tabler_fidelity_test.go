@@ -167,8 +167,8 @@ func TestShell_CarriesNoFooterAnywhere(t *testing.T) {
 // The tests below are the regression guards for the admin-shell fidelity rules
 // in SPEC/WEB.md § UI Framework. Each one is checked against the Tabler sources
 // of the vendored release — the version banner in
-// static/vendor/tabler/tabler.min.css reads 1.6.0, and the sources cited are
-// those of the @tabler/core@1.6.0 tag of the Tabler repository — and each
+// static/vendor/tabler/tabler.min.css reads 1.6.1, and the sources cited are
+// those of the @tabler/core@1.6.1 tag of the Tabler repository — and each
 // asserts both the shape Tabler uses and the absence of the shape it replaced,
 // so a divergence cannot come back unnoticed.
 
@@ -420,7 +420,7 @@ func TestTablerFidelity_SingleTogglerAndSingleBrand(t *testing.T) {
 }
 
 // TestTablerFidelity_SidebarCollapseIsNavLandmark asserts the sidebar collapse
-// is the labelled <nav> element Tabler v1.6.0 renders
+// is the labelled <nav> element Tabler v1.6.1 renders
 // (shared/components/navbar/Sidebar.astro: `<nav class="collapse
 // navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`), not a bare div.
 func TestTablerFidelity_SidebarCollapseIsNavLandmark(t *testing.T) {
@@ -751,7 +751,7 @@ func isClassNameByte(b byte) bool {
 }
 
 // TestTablerFidelity_PageBodyIsTheMainLandmark asserts the page body is the
-// <main class="page-body"> landmark Tabler v1.6.0's built shell renders
+// <main class="page-body"> landmark Tabler v1.6.1's built shell renders
 // (shared/layouts/DefaultLayout.astro: `<main id="content" class="page-body">`),
 // and that exactly one exists per page.
 //
@@ -1103,7 +1103,7 @@ var headerOpenTagRe = regexp.MustCompile(`<header\b[^>]*\bclass="([^"]*)"`)
 // SPEC/WEB.md § UI Framework, rule 12, and Acceptance Criterion 74: the top
 // <header> carries no class beginning with navbar-expand.
 //
-// Tabler v1.6.0 treats a horizontal navbar that expands at a breakpoint as the
+// Tabler v1.6.1 treats a horizontal navbar that expands at a breakpoint as the
 // page's primary navigation: while <html> carries no data-bs-navbar-position
 // attribute, its `.page:has(> [class*=navbar-expand]:not(.navbar-vertical))
 // >.navbar-vertical` rule hides the vertical sidebar and a companion rule sets

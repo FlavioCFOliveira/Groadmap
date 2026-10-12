@@ -1,39 +1,33 @@
 package commands
 
-// Tests for the relationship-removal hazard published as SPEC/GRAPH.md § What
-// Groadmap Does Not Check, item 4, and asserted by acceptance criterion 38's
-// third and sixth bullets.
+// Tests for the relationship writes recorded in SPEC/GRAPH.md § What Groadmap
+// Does Not Check, item 4, and asserted by acceptance criterion 38's third and
+// sixth bullets.
 //
-// The engine removes a relationship property by its endpoint PAIR, and it takes
-// that pair from the columns the expansion emitted. Those columns carry the
-// relationship the way the pattern walked it, not the way storage holds it, so a
-// `REMOVE e.k` over a relationship reached against the stored arrow is addressed
-// as a pair that holds no relationship. Nothing is removed, no error is raised,
-// the transaction still commits, and no write counter is published, because a
-// removal is counted only where it is applied.
+// An earlier pinned engine removed a relationship property by the endpoint pair
+// the expansion emitted, which carries the relationship the way the PATTERN
+// walked it rather than the way storage holds it, so a `REMOVE e.k` through a
+// pattern walking against the stored arrow was dropped — silently, with no
+// counter. The pinned engine removes the property from every relationship the
+// pattern bound, whichever way the pattern walked it, and counts each removal.
+// The item is kept because it is a boundary an engine change can move back, and
+// mitigation 3 of § Dependency Maturity Risk requires it re-measured in BOTH
+// directions: a removal through an incoming pattern, and through an undirected
+// one anchored on either endpoint, reaches every relationship the pattern bound;
+// an assignment through the same patterns still persists; a DELETE over them
+// still removes every relationship they matched; and the relationships a
+// statement did not bind keep every property they held.
 //
-// THE ASSIGNMENT FORMS ARE NOT AFFECTED, AND THAT IS HALF OF WHAT IS ASSERTED.
-// The engine turns the pair into the stored orientation before an assignment and
-// does not before a removal, so `SET e.k = …` reaches the relationship the
-// pattern bound whichever way the pattern walked it. That boundary is the part of
-// item 4 an engine upgrade is most likely to move, in either direction, so both
-// sides of it are asserted here: an assignment through an incoming and through an
-// undirected pattern persists, and a removal through an incoming pattern is
-// dropped while the same removal through an outgoing pattern lands
-// (SPEC/GRAPH.md § Dependency Maturity Risk, mitigation 3).
+// A removal's reach was once decided by the DATA rather than by the statement,
+// so the fixture fixes the stored orientation of every relationship it measures,
+// and every assertion reads each relationship back through the outgoing pattern
+// that matches how storage holds it.
 //
-// How much of a removal survives is decided by the DATA rather than by the
-// statement, so the fixture fixes the stored orientation of every relationship it
-// measures — one stored INTO the anchor and one stored OUT of it — and every
-// assertion reads each relationship back through the outgoing pattern that
-// matches how storage holds it.
-//
-// Groadmap used to REFUSE the statements this hazard concerns. It no longer
-// does: it hands the engine whatever it is given and holds no opinion about the
+// Groadmap hands the engine whatever it is given and holds no opinion about the
 // patterns a statement binds. The tests below therefore assert the specified
-// OUTCOME rather than a refusal. That direction is deliberate: an absence of
-// checking cannot be tested, and an outcome can, so a check reintroduced here
-// fails these tests instead of passing them.
+// OUTCOME rather than a refusal: an absence of checking cannot be tested, and an
+// outcome can, so a check reintroduced here fails these tests instead of passing
+// them.
 
 import (
 	"encoding/json"
@@ -55,7 +49,9 @@ type storedEdge struct {
 	outgoing string
 }
 
-// The two relationships of the fixture, one on each side of the Test node.
+// The relationships of the fixture: one on each side of the Test node, and a
+// third joining the Test and CodeFile nodes in the direction opposite to the
+// second, so that pair is joined in BOTH directions.
 var (
 	verifiedByEdge = storedEdge{
 		name:     "the VERIFIED_BY relationship stored spec -> test",
@@ -65,6 +61,10 @@ var (
 		name:     "the EXERCISES relationship stored test -> code",
 		outgoing: "MATCH (v:Test {key:'" + relWriteTestKey + "'})-[e:EXERCISES]->(c:CodeFile)",
 	}
+	coveredByEdge = storedEdge{
+		name:     "the COVERED_BY relationship stored code -> test",
+		outgoing: "MATCH (c:CodeFile {key:'" + relWriteCodeKey + "'})-[e:COVERED_BY]->(v:Test)",
+	}
 )
 
 // relWriteStale is the reason every failure below names: each assertion is a
@@ -72,12 +72,16 @@ var (
 const relWriteStale = "the engine's behaviour has moved and SPEC/GRAPH.md § What Groadmap Does Not Check, " +
 	"item 4, and acceptance criterion 38 no longer describe it; both must be corrected"
 
+// relWriteEdges is every relationship of the fixture.
+var relWriteEdges = []storedEdge{verifiedByEdge, exercisesEdge, coveredByEdge}
+
 // seedProvenanceEdge creates the fixture the direction tests share: a Spec node,
 // a Test node and a CodeFile node, a VERIFIED_BY relationship stored
-// spec -> test, and an EXERCISES relationship stored test -> code. The Test node
-// is the anchor, so one of its relationships is stored arriving at it and the
-// other leaving it, and a property that reads back proves the write reached
-// storage rather than a phantom pair.
+// spec -> test, an EXERCISES relationship stored test -> code, and a COVERED_BY
+// relationship stored code -> test. The Test node is the anchor, so its
+// relationships are stored both arriving at it and leaving it, the Test and
+// CodeFile pair is joined in both directions, and a property that reads back
+// proves the write reached storage rather than a phantom pair.
 func seedProvenanceEdge(t *testing.T, roadmap string) {
 	t.Helper()
 	for _, seed := range []string{
@@ -87,6 +91,8 @@ func seedProvenanceEdge(t *testing.T, roadmap string) {
 			"MERGE (s)-[:VERIFIED_BY]->(v)",
 		"MATCH (v:Test {key:'" + relWriteTestKey + "'}), (c:CodeFile {key:'" + relWriteCodeKey + "'}) " +
 			"MERGE (v)-[:EXERCISES]->(c)",
+		"MATCH (v:Test {key:'" + relWriteTestKey + "'}), (c:CodeFile {key:'" + relWriteCodeKey + "'}) " +
+			"MERGE (c)-[:COVERED_BY]->(v)",
 	} {
 		if err := runGraphClient([]string{"-r", roadmap, "--query", seed}); err != nil {
 			t.Fatalf("seed %q: %v", seed, err)
@@ -152,14 +158,27 @@ func requireEdgePropertyAbsent(t *testing.T, roadmap string, edge storedEdge, ke
 	}
 }
 
+// stampEvery assigns key = value on every relationship of the fixture through
+// the outgoing pattern that holds it, so a removal that follows starts from a
+// known state.
+func stampEvery(t *testing.T, roadmap, key, value string) {
+	t.Helper()
+	for _, edge := range relWriteEdges {
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
+			edge.outgoing + " SET e." + key + " = '" + value + "'"}); err != nil {
+			t.Fatalf("stamping %s on %s: %v", key, edge.name, err)
+		}
+	}
+}
+
 // TestGraphUpdate_RelationshipWriteDirection is the core case: the relationships
 // on both sides of one node, written and then removed through each pattern
-// orientation. Every assignment persists and reads back; the removal through the
-// incoming pattern reports success, publishes no counters and removes nothing,
-// and the same removal through an outgoing pattern removes the property.
+// orientation. Every assignment persists and reads back; every removal reaches
+// exactly the relationships its pattern bound, publishes a counter for each, and
+// leaves every other relationship's property in place.
 //
-// The subtests run in order and build on each other: the assignments set the
-// value the removals then act on.
+// The assignment subtests run in order and build on each other; each removal
+// subtest stamps the fixture afresh first.
 func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 	const roadmap = "graph-relwrite-direction"
 	defer servedRoadmap(t, roadmap)()
@@ -190,19 +209,19 @@ func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 
 	// -- Target node, incoming: acceptance criterion 38's third bullet ----------
 	t.Run("from the target node, incoming, persists on every relationship it bound", func(t *testing.T) {
+		stampEvery(t, roadmap, "last_commit", "commit-ccc333")
 		out := graphClientJSON(t, roadmap,
 			"MATCH (v:Test {key:'"+relWriteTestKey+"'})<-[e]-(s) SET e.last_commit = 'commit-ddd444'")
 		if ok, _ := out["ok"].(bool); !ok {
 			t.Fatalf("the incoming assignment must report success; got %v", out)
 		}
 		requireEdgeProperty(t, roadmap, verifiedByEdge, "last_commit", "commit-ddd444",
-			"an assignment through an incoming pattern must persist (item 4: the assignment "+
-				"forms are not affected)")
-		// The incoming pattern bound only the relationship arriving at the anchor,
-		// so the one leaving it is untouched — which is what makes the assertion
-		// above about the relationship the pattern bound rather than about every
-		// relationship of the node.
-		requireEdgePropertyAbsent(t, roadmap, exercisesEdge, "last_commit",
+			"an assignment through an incoming pattern must persist")
+		requireEdgeProperty(t, roadmap, coveredByEdge, "last_commit", "commit-ddd444",
+			"an assignment through an incoming pattern must persist on every relationship it bound")
+		// The incoming pattern bound only the relationships arriving at the
+		// anchor, so the one leaving it is untouched.
+		requireEdgeProperty(t, roadmap, exercisesEdge, "last_commit", "commit-ccc333",
 			"an incoming pattern binds no relationship leaving the anchor")
 	})
 
@@ -213,39 +232,90 @@ func TestGraphUpdate_RelationshipWriteDirection(t *testing.T) {
 		if ok, _ := out["ok"].(bool); !ok {
 			t.Fatalf("the undirected assignment must report success; got %v", out)
 		}
-		requireEdgeProperty(t, roadmap, verifiedByEdge, "last_commit", "commit-eee555",
-			"an undirected assignment must reach the relationship stored arriving at the anchor")
-		requireEdgeProperty(t, roadmap, exercisesEdge, "last_commit", "commit-eee555",
-			"an undirected assignment must reach the relationship stored leaving the anchor")
+		for _, edge := range relWriteEdges {
+			requireEdgeProperty(t, roadmap, edge, "last_commit", "commit-eee555",
+				"an undirected assignment must reach every relationship incident to the anchor")
+		}
 	})
 
 	// -- Target node, incoming removal: acceptance criterion 38's sixth bullet ---
-	t.Run("from the target node, incoming, a removal reports success, publishes no counters and removes nothing", func(t *testing.T) {
+	t.Run("from the target node, incoming, a removal reaches every relationship it bound", func(t *testing.T) {
+		stampEvery(t, roadmap, "last_commit", "commit-fff666")
 		out := graphClientJSON(t, roadmap,
 			"MATCH (v:Test {key:'"+relWriteTestKey+"'})<-[e]-(s) REMOVE e.last_commit")
-		if ok, _ := out["ok"].(bool); !ok {
-			t.Fatalf("the statement must EXECUTE and report success: Groadmap does not inspect "+
-				"the patterns a statement binds (SPEC/GRAPH.md § What Groadmap Does Not Check, "+
-				"item 4); got %v", out)
-		}
-		assertNoCounters(t, out,
-			"a removal dropped because the pattern walked against the stored arrow")
-		requireEdgeProperty(t, roadmap, verifiedByEdge, "last_commit", "commit-eee555",
-			"a removal through an incoming pattern is expected to remove NOTHING")
-		requireEdgeProperty(t, roadmap, exercisesEdge, "last_commit", "commit-eee555",
-			"an incoming pattern binds no relationship leaving the anchor")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 2},
+			"a removal through an incoming pattern that bound two relationships")
+		requireEdgePropertyAbsent(t, roadmap, verifiedByEdge, "last_commit",
+			"a removal through an incoming pattern must remove the property")
+		requireEdgePropertyAbsent(t, roadmap, coveredByEdge, "last_commit",
+			"a removal through an incoming pattern must remove the property from every relationship it bound")
+		requireEdgeProperty(t, roadmap, exercisesEdge, "last_commit", "commit-fff666",
+			"a relationship pointing away from the anchor is not bound by an incoming pattern")
 	})
 
-	// -- The same removal, outgoing: the reach the hazard does not cost ----------
+	// -- The same removal, outgoing: the form that held under both engines -------
 	t.Run("from the target node, outgoing, a removal removes the property", func(t *testing.T) {
+		stampEvery(t, roadmap, "last_commit", "commit-ggg777")
 		out := graphClientJSON(t, roadmap,
 			"MATCH (s)-[e]->(v:Test {key:'"+relWriteTestKey+"'}) REMOVE e.last_commit")
-		assertCounters(t, out, map[string]int64{"propertiesWritten": 1},
-			"a removal through an outgoing pattern, which lands")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 2},
+			"a removal through an outgoing pattern arriving at the anchor")
 		requireEdgePropertyAbsent(t, roadmap, verifiedByEdge, "last_commit",
 			"a removal through an outgoing pattern must remove the property")
-		requireEdgeProperty(t, roadmap, exercisesEdge, "last_commit", "commit-eee555",
+		requireEdgePropertyAbsent(t, roadmap, coveredByEdge, "last_commit",
+			"a removal through an outgoing pattern must remove the property")
+		requireEdgeProperty(t, roadmap, exercisesEdge, "last_commit", "commit-ggg777",
 			"a pattern arriving at the anchor binds no relationship leaving it")
+	})
+
+	// -- Undirected removals, anchored on either endpoint -------------------------
+	t.Run("undirected, anchored on the test node, a removal reaches every incident relationship", func(t *testing.T) {
+		stampEvery(t, roadmap, "last_commit", "commit-hhh888")
+		out := graphClientJSON(t, roadmap,
+			"MATCH (v:Test {key:'"+relWriteTestKey+"'})-[e]-(x) REMOVE e.last_commit")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 3},
+			"an undirected removal anchored on the test node")
+		for _, edge := range relWriteEdges {
+			requireEdgePropertyAbsent(t, roadmap, edge, "last_commit",
+				"an undirected removal must reach every relationship it bound, whichever way each is stored")
+		}
+	})
+	t.Run("undirected, anchored on the code file, a removal reaches both relationships of the pair", func(t *testing.T) {
+		stampEvery(t, roadmap, "last_commit", "commit-iii999")
+		out := graphClientJSON(t, roadmap,
+			"MATCH (c:CodeFile {key:'"+relWriteCodeKey+"'})-[e]-(x) REMOVE e.last_commit")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 2},
+			"an undirected removal anchored on the other endpoint")
+		requireEdgePropertyAbsent(t, roadmap, exercisesEdge, "last_commit",
+			"an undirected removal walking against the stored arrow must still land")
+		requireEdgePropertyAbsent(t, roadmap, coveredByEdge, "last_commit",
+			"an undirected removal must reach every relationship it bound")
+		requireEdgeProperty(t, roadmap, verifiedByEdge, "last_commit", "commit-iii999",
+			"a relationship not incident to the anchor keeps its property")
+	})
+
+	// -- A pair joined in both directions, with and without a WHERE -------------
+	t.Run("over a pair joined in both directions, a WHERE selecting one leg removes from it alone", func(t *testing.T) {
+		stampEvery(t, roadmap, "stamp", "reviewed")
+		out := graphClientJSON(t, roadmap,
+			"MATCH (n)-[e]-(m {key:'"+relWriteCodeKey+"'}) WHERE startNode(e).key = '"+relWriteCodeKey+"' REMOVE e.stamp")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 1},
+			"a removal behind a WHERE that selects one relationship of the pair")
+		requireEdgePropertyAbsent(t, roadmap, coveredByEdge, "stamp",
+			"the relationship the WHERE selected must lose the property")
+		requireEdgeProperty(t, roadmap, exercisesEdge, "stamp", "reviewed",
+			"the relationship the WHERE did not select keeps its property")
+	})
+	t.Run("over a pair joined in both directions, a removal reaches both legs", func(t *testing.T) {
+		stampEvery(t, roadmap, "stamp", "reviewed-again")
+		out := graphClientJSON(t, roadmap,
+			"MATCH (v:Test {key:'"+relWriteTestKey+"'})-[e]-(c:CodeFile {key:'"+relWriteCodeKey+"'}) REMOVE e.stamp")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 2},
+			"a removal over a pair joined in both directions")
+		requireEdgePropertyAbsent(t, roadmap, exercisesEdge, "stamp", "the outgoing leg must lose the property")
+		requireEdgePropertyAbsent(t, roadmap, coveredByEdge, "stamp", "the incoming leg must lose the property")
+		requireEdgeProperty(t, roadmap, verifiedByEdge, "stamp", "reviewed-again",
+			"a relationship outside the pair keeps its property")
 	})
 }
 
@@ -262,7 +332,7 @@ func TestGraphDelete_UndirectedBareDeleteRemovesTheEdge(t *testing.T) {
 		"MATCH (v:Test {key:'" + relWriteTestKey + "'})-[e]-(x) DELETE e"}); err != nil {
 		t.Fatalf("undirected delete failed: %v", err)
 	}
-	for _, edge := range []storedEdge{verifiedByEdge, exercisesEdge} {
+	for _, edge := range relWriteEdges {
 		stdout, _ := captureStdStreams(t, func() {
 			if err := runGraphClient([]string{"-r", roadmap, "--query",
 				edge.outgoing + " RETURN e"}); err != nil {

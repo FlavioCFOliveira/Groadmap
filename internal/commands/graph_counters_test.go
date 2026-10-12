@@ -374,8 +374,9 @@ func TestGraphCounters_AWriteWithAReturnCarriesThemBesideItsRows(t *testing.T) {
 	}
 }
 
-// TestGraphCounters_APrefixedStatementPublishesNone closes the mutual exclusion
-// of rule 5 from the side this project controls.
+// TestGraphCounters_APrefixedStatementPublishesNone is rule 5's first half, and
+// its control: `counters` never appears beside `plan`, and a PROFILE of a
+// statement that changed nothing carries none.
 //
 // An EXPLAIN executes nothing, so it has no applied effect to count — and the
 // assertion is worth making because the statement it prefixes IS a write, which
@@ -401,37 +402,65 @@ func TestGraphCounters_APrefixedStatementPublishesNone(t *testing.T) {
 	}
 }
 
-// TestGraphCounters_TheEngineRefusesAProfileOfAWrite is the other half of rule
-// 5's mutual exclusion, and it is an assertion about the ENGINE rather than
-// about this code: neither surface has to arrange the exclusion, because a
-// PROFILE of a writing statement never produces a result at all.
+// TestGraphCounters_AProfileOfAWritePerformsItOnceAndPublishesBoth is SPEC/GRAPH.md
+// acceptance criterion 86, and the other half of rule 5 of
+// SPEC/DATA_FORMATS.md § Graph Query Counters: a PROFILE of a writing statement
+// executes it, applies its writes exactly once, and publishes its `profile` tree
+// and then its `counters`, carrying what the same statement publishes without the
+// prefix.
 //
-// It is pinned here because the specification rests on it. Were the engine to
-// start executing such a statement, `counters` and `profile` could appear in one
-// object and rule 5's guarantee to consumers would be silently false.
-func TestGraphCounters_TheEngineRefusesAProfileOfAWrite(t *testing.T) {
+// The count read afterwards is the part that cannot be dropped: a criterion that
+// read only the output passes an engine that measured the write in one run and
+// applied it in another (SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE
+// Prefixes, rule 4). An earlier pinned engine refused the statement instead.
+func TestGraphCounters_AProfileOfAWritePerformsItOnceAndPublishesBoth(t *testing.T) {
 	const roadmap = "graph-counters-profile-write"
 	defer servedRoadmap(t, roadmap)()
 
-	var err error
-	_, _ = captureStdStreams(t, func() {
-		err = runGraphClient([]string{"-r", roadmap, "--query", "PROFILE CREATE (:Widget {serial:'X'})"})
-	})
-	if err == nil {
-		t.Fatal("the engine refuses a PROFILE of a writing statement rather than perform a " +
-			"write a caller asked only to have measured; if it stopped refusing, " +
-			"`counters` and `profile` could appear together and " +
-			"SPEC/DATA_FORMATS.md § Graph Query Counters rule 5 would be false")
+	raw := graphClientRaw(t, roadmap, "PROFILE CREATE (w:Widget {serial:'P-1'}) RETURN w.serial")
+	var out map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &out); err != nil {
+		t.Fatalf("stdout is not a JSON object: %v\nstdout=%q", err, raw)
+	}
+	if cols, _ := out["columns"].([]any); len(cols) != 1 || cols[0] != "w.serial" {
+		t.Errorf("`columns` = %v, want [\"w.serial\"]", out["columns"])
+	}
+	rows, _ := out["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("`rows` = %v, want the one row [\"P-1\"]", out["rows"])
+	}
+	if row, _ := rows[0].([]any); len(row) != 1 || row[0] != "P-1" {
+		t.Errorf("the row is %v, want [\"P-1\"]", rows[0])
+	}
+	if _, measured := out["profile"].(map[string]any); !measured {
+		t.Errorf("a PROFILE must publish a `profile` object.\ngot: %v", out)
+	}
+	if _, planned := out["plan"]; planned {
+		t.Errorf("a PROFILE publishes no `plan` key.\ngot: %v", out)
+	}
+	assertCounters(t, out, map[string]int64{"nodesCreated": 1, "propertiesWritten": 1, "labelsAdded": 1},
+		"a PROFILE of a CREATE")
+	if strings.Index(raw, `"profile"`) > strings.Index(raw, `"counters"`) {
+		t.Errorf("`counters` must be written after `profile` (SPEC/DATA_FORMATS.md § Graph Query "+
+			"Counters, rule 3).\ngot: %s", raw)
 	}
 
-	// And nothing was written, which is what makes the refusal a refusal.
-	count := graphClientJSON(t, roadmap, "MATCH (w:Widget) RETURN count(w)")
-	rows, _ := count["rows"].([]any)
-	if len(rows) != 1 {
-		t.Fatalf("count query returned no row: %v", count)
+	// The write was applied once, not once to be measured and once more.
+	count := graphQueryRows(t, roadmap, "MATCH (w:Widget {serial:'P-1'}) RETURN count(w)")
+	if len(count) != 1 || count[0][0] != float64(1) {
+		t.Errorf("the graph holds %v Widget P-1 nodes after the PROFILE, want exactly 1", count)
 	}
-	first, _ := rows[0].([]any)
-	if len(first) != 1 || first[0].(float64) != 0 {
-		t.Errorf("a refused PROFILE must have written nothing; got %v", first)
+
+	// A profiled write that declares no column.
+	set := graphClientJSON(t, roadmap, "PROFILE MATCH (w:Widget {serial:'P-1'}) SET w.batch = 3")
+	if cols, ok := set["columns"].([]any); !ok || len(cols) != 0 {
+		t.Errorf("`columns` = %v, want an empty array", set["columns"])
 	}
+	if rows, ok := set["rows"].([]any); !ok || len(rows) != 0 {
+		t.Errorf("`rows` = %v, want an empty array", set["rows"])
+	}
+	if _, measured := set["profile"].(map[string]any); !measured {
+		t.Errorf("a PROFILE must publish a `profile` object.\ngot: %v", set)
+	}
+	assertCounters(t, set, map[string]int64{"propertiesWritten": 1}, "a PROFILE of a SET")
 }

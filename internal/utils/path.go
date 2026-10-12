@@ -165,7 +165,7 @@ func EnsureDataDir() error {
 	}
 
 	// Ensure permissions are set correctly (umask may have affected creation)
-	if err := os.Chmod(dataDir, DataDirPerm); err != nil {
+	if err := os.Chmod(dataDir, DataDirPerm); err != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
 		return dirIOError(fmt.Errorf("setting permissions on data directory: %w", err))
 	}
 
@@ -369,7 +369,7 @@ func ensureRoadmapDir(name string, create bool) error {
 	}
 
 	// Ensure permissions are set correctly (umask may have affected creation).
-	if err := os.Chmod(dir, DataDirPerm); err != nil {
+	if err := os.Chmod(dir, DataDirPerm); err != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
 		return dirIOError(fmt.Errorf("setting permissions on roadmap directory: %w", err))
 	}
 
@@ -394,7 +394,7 @@ func secureExistingDir(dir, name string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%w: roadmap %q not found", ErrNotFound, name)
 	}
-	if err := os.Chmod(dir, DataDirPerm); err != nil {
+	if err := os.Chmod(dir, DataDirPerm); err != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
 		return dirIOError(fmt.Errorf("setting permissions on directory %s: %w", dir, err))
 	}
 	if err := VerifyPermissions(dir, DataDirPerm); err != nil {

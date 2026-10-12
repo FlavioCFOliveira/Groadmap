@@ -76,6 +76,21 @@ const conflictCode = "Neo.TransientError.Transaction.Outdated"
 // the client: a TYPED failure on an intact connection, not a disconnect.
 const timeoutCode = "Neo.ClientError.Transaction.TransactionTimedOut"
 
+// overLongNameCode and overLongFieldCode are the engine's two codes for a field
+// the statement writes that is too long for a durable format: a name — a label,
+// a relationship type, a property key or a schema identifier — longer than the
+// engine's token limit, and any other field a durable format cannot carry (SPEC/GRAPH.md § Field Length Limits, rule 3).
+//
+// They are the whole of the match, and the specification forbids widening it.
+// The argument-error code an earlier engine gave this refusal is also the code it
+// gives a numeric argument out of range, so matching it would report refusals
+// that are not this condition; and matching the forwarded diagnostic's text would
+// fail silently the moment the engine rewords it (rule 13).
+const (
+	overLongNameCode  = "Neo.ClientError.Schema.TokenLengthError"
+	overLongFieldCode = "Neo.ClientError.Data.DataUnsupportedByStoreFormat"
+)
+
 // userAgent identifies this client in the HELLO metadata. The server logs it and
 // nothing branches on it.
 const userAgent = "rmp-graph-client/1.0"
@@ -144,6 +159,15 @@ const (
 	// each: the budget line names a valid statement against a healthy store.
 	FailureBudget
 
+	// FailureFieldTooLong is the engine refusing a field the statement writes as
+	// too long for its durable format, recognised by the two failure codes the
+	// engine's server gives that refusal and by nothing else. Nothing was
+	// written. It is kept apart from FailureStatement because SPEC/COMMANDS.md
+	// publishes a line of its own for it, whose remedy — shorten the field the
+	// engine names — is not the remedy for a statement that failed to parse
+	// (SPEC/GRAPH.md § Field Length Limits, rules 2, 3 and 13).
+	FailureFieldTooLong
+
 	// FailureMapping is a value the server returned that cannot be represented in
 	// the published result shape. It fails the statement rather than substituting
 	// a placeholder, so that a caller never reads a result that is quietly not
@@ -183,6 +207,8 @@ func (e *SendError) Error() string {
 		return "serialisation conflict on every attempt: " + e.Code + ": " + e.Diagnostic
 	case FailureBudget:
 		return "statement cut by the server's time budget: " + e.Diagnostic
+	case FailureFieldTooLong:
+		return "field too long for the store's durable format: " + e.Code + ": " + e.Diagnostic
 	case FailureMapping:
 		return "cannot represent a value the server returned: " + e.Diagnostic
 	default:
@@ -646,6 +672,14 @@ func (s *session) responseFailure(ctx context.Context, response any) error {
 			// under a kind and a published line of its own
 			// (SPEC/GRAPH.md § Server Resolution, rule 8).
 			retriable: ctx.Err() == nil,
+		}
+	case overLongNameCode, overLongFieldCode:
+		// The engine refused the field before the statement changed anything and
+		// rolled the transaction back, so nothing was written; its diagnostic,
+		// which names the field kind and both figures, is forwarded unchanged.
+		return &SendError{
+			Kind: FailureFieldTooLong, Socket: s.socket,
+			Code: failure.Code, Diagnostic: failure.Message,
 		}
 	default:
 		return &SendError{

@@ -722,9 +722,10 @@ rmp graph client -r myproject --query "PROFILE MATCH (s:Spec) RETURN s.key"
 The two members are never both present, so an estimate can never be read as a
 measurement: `EXPLAIN` carries the planner's `estimatedRows`, `PROFILE` carries the
 measured `rows`, `timeNs` and `dbHits`. An `EXPLAIN` executes nothing, so it never
-carries the `counters` a real write reports. A `PROFILE` of a **writing** statement is
-refused, because profiling it would mean committing it, and neither prefix is accepted
-on a schema statement.
+carries the `counters` a real write reports. A `PROFILE` of a **writing** statement
+performs the write, once, and carries its `counters` after the `profile`, so `PROFILE`
+is not a way to inspect a write safely — use `EXPLAIN` for that. Neither prefix is
+accepted on a schema statement.
 
 Two presence rules decide what a `profile` figure means, and both are read wrongly at
 first sight: an **absent** `dbHits` means nobody counted that operator's storage
@@ -745,17 +746,11 @@ log's figure, and 1 GiB is the number to write under.**
 
 The two bounds fail differently, and that is the part worth knowing:
 
-- **Too long for the log** and the commit is refused. Nothing is written (with one
-  exception, a failed statement that had created a relationship between two nodes already
-  joined in that direction; see
-  [Known Limitations](DOCS/commands/graph.md#known-limitations)), the store stays usable,
-  and the invocation exits 1. A line of its own is specified for this class so that
-  "shorten a value" can be told from "correct your syntax", but at the pinned engine it is
-  not reachable: every statement crosses a server, and the engine's Bolt server forwards
-  this refusal under a code it also gives to every other argument error. What you read is
-  the general `graph query failed: ` line ending in the engine's own diagnostic, which
-  names the field kind and both figures; only that diagnostic's wording, which is not a
-  contract, tells this failure apart from any other.
+- **Too long for the log** and the statement is refused. Nothing is written, the store
+  stays usable, and the invocation exits 1 with a line of its own, so that "shorten a
+  value" can be told from "correct your syntax":
+  `Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>`.
+  The engine's diagnostic at the end names the field kind and both figures.
 - **Short enough to commit and too long to fold** — a property value between 1 GiB and
   4 GiB — and the write succeeds and exits 0, and then **every checkpoint of that graph
   fails from that moment on**, at every due instant of the server's cadence and at
@@ -781,7 +776,9 @@ rmp graph client -r myproject --query "MATCH (n:Spec) RETURN n.key"
 
 Starting a server is also what **creates** a roadmap's graph: against a roadmap that has never had one, `serve` creates `~/.roadmaps/<name>/graph/` and serves it empty. A `serve` that is refused creates nothing.
 
-**One server per roadmap.** The store's lock is the interlock: a second `rmp graph serve` for the same roadmap cannot take it, exits 1, and leaves the first server's socket untouched. Stopping a server with `Ctrl+C` drains the work in flight, checkpoints if the log has grown, releases the lock and removes the socket, and exits 0. While it runs, the server folds the write-ahead log on a cadence, but only when the log has grown since the last fold, so an idle server writes nothing to the store; a log tail left by a killed server is folded at the first due instant. A failed fold fails no write: it is reported on the server's stderr and retried at the next due instant.
+**A store in the earlier on-disk format is backed up before it is converted.** The graph engine converts a store whose write-ahead log is still in the single-file format one way, the first time it opens it. `serve` copies such a store to `~/.roadmaps/<name>/graph-backup-<T>/` (`<T>` the UTC instant, `YYYYMMDDTHHMMSSZ`) before opening it, and removes the copy once the conversion has succeeded, reporting both on stderr. A backup that cannot be completed stops the start with exit code 1 and leaves the store unconverted. A build pinned to an earlier engine cannot open a converted store, and after a successful conversion there is no way back. See [DOCS/commands/graph.md](DOCS/commands/graph.md#a-store-in-the-earlier-format-is-backed-up-before-it-is-converted).
+
+**One server per roadmap.** The store's lock is the interlock: a second `rmp graph serve` for the same roadmap cannot take it, exits 1, and leaves the first server's socket untouched. Stopping a server with `Ctrl+C` drains the work in flight, checkpoints if the log has grown, releases the lock and removes the socket, and exits 0. While it runs, the server folds the write-ahead log on a cadence, but only when the log has grown since the last fold, so an idle server writes nothing to the store; records a killed server left unfolded are folded at the first due instant. A failed fold fails no write: it is reported on the server's stderr and retried at the next due instant.
 
 **Access control is the filesystem and nothing else.** The socket is mode `0600` inside a roadmap home that is `0700`, and `serve` re-establishes `0700` on `~/.roadmaps/` and the roadmap home each time it starts (a directory it cannot fix fails the start with exit code 1). On Linux, macOS, FreeBSD and OpenBSD the socket is never connectable under a wider mode at any instant, whatever the umask: it is bound in a private staging directory and then linked into place. On Windows the mode only toggles read-only, and access is the directory's access-control list. There is no authentication and no transport security (the server prints a warning for each at startup), and any caller that can open the socket can read, write, delete and change the schema of that roadmap's graph.
 

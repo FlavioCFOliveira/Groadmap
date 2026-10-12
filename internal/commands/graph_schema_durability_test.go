@@ -45,7 +45,6 @@ package commands
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
@@ -53,6 +52,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 )
 
 // statementsThroughAServer runs every statement through `rmp graph client`
@@ -83,17 +83,25 @@ func statementsThroughAServer(t *testing.T, roadmap string, statements ...string
 
 // requireFoldedLog is the non-vacuity assertion every test here needs.
 //
-// The shutdown checkpoint truncates the write-ahead log, so after it the log
-// cannot be what carries a definition; anything recovered afterwards came from
-// the snapshot. Without this assertion a change that stopped truncating would
-// turn every assertion that follows into a statement about the log tail, and
-// nothing would say so.
+// The shutdown checkpoint records in the log's control file the position its
+// snapshot covers, and recovery replays only the records at or beyond that
+// position, taking the schema below it from the snapshot alone when the control
+// file records that very checkpoint. So once the covered position reaches the
+// log's end, the log cannot be what carries a definition, and anything recovered
+// afterwards came from the snapshot. Without this assertion a change that stopped
+// folding would turn every assertion that follows into a statement about the log
+// tail, and nothing would say so. It reads the log through the engine's own
+// inspection, in positions, because a fold discards only whole segments and a log
+// this short keeps its one segment (SPEC/GRAPH.md § Synchronous Checkpoint on
+// Write, step 3).
 func requireFoldedLog(t *testing.T, graphDir string) {
 	t.Helper()
-	if size := fileSize(t, filepath.Join(graphDir, "wal")); size != 0 {
-		t.Fatalf("the write-ahead log holds %d bytes after the server stopped; it was expected to be "+
-			"folded and truncated, so what recovery finds below would no longer prove the SNAPSHOT "+
-			"carries the schema (SPEC/GRAPH.md § Server Shutdown and the Drain, steps 4 and 5)", size)
+	state := testenv.InspectWAL(t, graphDir)
+	if !state.HasControl || state.Covered() < state.End || state.End == 0 {
+		t.Fatalf("the log's control file records position %d as covered and the log ends at %d after "+
+			"the server stopped; it was expected to be folded up to its end, so what recovery finds "+
+			"below would no longer prove the SNAPSHOT carries the schema (SPEC/GRAPH.md § Server "+
+			"Shutdown and the Drain, steps 4 and 5)", state.Covered(), state.End)
 	}
 }
 

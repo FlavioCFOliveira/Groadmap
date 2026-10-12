@@ -463,6 +463,16 @@ func TestGraphServerFailure_MapsEveryClientFailureOntoAPublishedLine(t *testing.
 			},
 			want: errorLine(graphWriteConflict()),
 		},
+		{
+			name:     "a field too long for a durable format carries a line of its own",
+			sentinel: utils.ErrGraphEngine,
+			err: &graphclient.SendError{
+				Kind: graphclient.FailureFieldTooLong, Socket: socket,
+				Code:       "Neo.ClientError.Schema.TokenLengthError",
+				Diagnostic: "cypher: node label is 65536 bytes, maximum 65535",
+			},
+			want: errorLine(graphFieldTooLong("cypher: node label is 65536 bytes, maximum 65535")),
+		},
 	}
 
 	for _, c := range cases {

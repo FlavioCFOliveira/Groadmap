@@ -27,7 +27,6 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphjson"
-	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
 	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -61,9 +60,10 @@ type graphQueryResult struct {
 	// and an EXPLAIN both are. It is written LAST because the member is additive:
 	// columns and rows keep their meanings and their positions, so an existing
 	// parser needs no change (SPEC/DATA_FORMATS.md § Graph Query Counters,
-	// rule 3). It never appears beside plan or profile, and neither surface has
-	// to arrange that: an EXPLAIN applies nothing and the engine refuses a
-	// PROFILE of a writing statement (rule 5).
+	// rule 3). It never appears beside plan, because an EXPLAIN applies
+	// nothing, and it appears beside profile exactly when the profiled statement
+	// changed the graph, because a PROFILE executes the statement and applies its
+	// writes once; neither surface has to arrange either (rule 5).
 	Counters *graphjson.Counters `json:"counters,omitempty"`
 }
 
@@ -592,34 +592,6 @@ func serializePath(v expr.Value) any {
 // introduces no new exit CODE, and may not (SPEC/GRAPH.md § Constraints, rule 5;
 // § Schema Failure Classes, rule 6). Only the message differs.
 //
-// **A field the engine refuses as too long for the write-ahead log is the third
-// message, and it is the only one of the three that ends in the engine's own
-// text.** The other two are wholly rmp's, because rmp knows the whole of what
-// they report; this one cannot be, because the caller must be told WHICH of the
-// statement's fields is at fault and by how much, and only the engine knows that.
-// So rmp writes the class, the fact that nothing was written and the action to
-// take, and then hands over: the engine's diagnostic follows unchanged,
-// untrimmed and LAST, which is where every other line carrying an engine or
-// operating-system diagnostic puts it and what lets a test assert the whole of
-// rmp's half and none of the engine's. Both halves therefore say the field is
-// too long, and that echo is deliberate — trimming it would mean parsing it, and
-// a match on the engine's wording fails silently at the next version bump
-// (SPEC/GRAPH.md § Field Length Limits, rules 3 and 4).
-//
-// The class exists because without it the two conditions were separated only by
-// that diagnostic tail, which SPEC/GRAPH.md § Error Handling and Exit Codes,
-// rule 2, deliberately declines to specify and which a caller therefore cannot
-// lawfully match: a caller reading "graph query failed: " had to parse English to
-// learn whether to correct the statement's syntax or to shorten one of its
-// values. That is the same defect, and the same remedy, as the statement time
-// budget above.
-//
-// The RECOGNITION is graphstore's, not this function's, and it is a sentinel
-// rather than a string match. Two neighbouring refusals — an over-long node key
-// and an over-large assembled log frame — are genuine length refusals that this
-// class MUST NOT absorb, and matching the sentinel and nothing else is what keeps
-// them on the ordinary line (SPEC/GRAPH.md § Field Length Limits, rule 10).
-//
 // **All three arrival points are classified, and the walk is the one that
 // matters.** The engine streams a disconnected pattern's tuples as the result is
 // iterated, so a Cartesian product's cost is paid during result.Next() and the
@@ -644,30 +616,42 @@ func serializePath(v expr.Value) any {
 // therefore gets a truthful message, and in production it renders "5s" and
 // matches the line SPEC/COMMANDS.md § Graph Management publishes character for
 // character.
+//
+// A field the engine refuses as too long for its durable format is not this
+// function's to recognise: it arrives classified by the failure code the engine's
+// server gives it, and [graphFieldTooLong] words it (SPEC/GRAPH.md § Field Length
+// Limits, rules 3 and 13).
 func graphStatementError(budget time.Duration, stage string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%w: graph query exceeded the %s statement time budget; nothing was "+
 			"written. Narrow the statement — add a label, an indexed property filter, or a "+
 			"LIMIT — or split it into smaller statements.", utils.ErrGraphEngine, budget)
 	}
-	// THIS BRANCH CANNOT FIRE AT THE PINNED ENGINE, AND IT IS KEPT DELIBERATELY.
-	// It is not dead code to tidy away. A statement now reaches a graph only
-	// through a server, and the sentinel does not cross the connection: the
-	// server forwards the engine's diagnostic under a client-error code it also
-	// gives to every other argument the engine refuses, so nothing on this side
-	// can tell this refusal from the others without matching the engine's
-	// wording, which SPEC/GRAPH.md § Field Length Limits, rule 3, forbids. The
-	// condition therefore arrives through the ordinary parse/execution line
-	// below, ending in that diagnostic. The sentinel and the exit code are the
-	// same either way; only the message differs. Rule 13 of that section is
-	// canonical for the limitation and for the engine-side change that ends it —
-	// a failure the client can tell apart from every other argument error — after
-	// which this branch produces the line again with no change here. Deleting it
-	// would leave SPEC/COMMANDS.md § Client Error Cases publishing a line that
-	// nothing in the product can produce.
-	if graphstore.CommitRefusedFieldTooLong(err) {
-		return fmt.Errorf("%w: graph field too long; nothing was written. Shorten the field the "+
-			"engine names: %v", utils.ErrGraphEngine, err)
-	}
 	return fmt.Errorf("%w: %s: %v", utils.ErrGraphEngine, stage, err)
+}
+
+// graphFieldTooLong words a statement the engine refused because a field it
+// writes is too long for a durable format, given the engine's diagnostic.
+//
+// rmp writes the class, the fact that nothing was written and the action to
+// take, and then hands over: the engine's diagnostic follows unchanged,
+// untrimmed and LAST, which is where every other line carrying an engine
+// diagnostic puts it and what lets a test assert the whole of rmp's half and
+// none of the engine's. Both halves therefore say the field is too long, and
+// that echo is deliberate — trimming it would mean parsing it, and a match on the
+// engine's wording fails silently at the next version bump (SPEC/GRAPH.md
+// § Field Length Limits, rules 3 and 4).
+//
+// The class exists because without it the condition was separated from an
+// ordinary parse or execution failure only by that diagnostic tail, which a
+// caller cannot lawfully match: the two demand different remedies — correct the
+// statement's syntax, or shorten one of its values (rule 2).
+//
+// The RECOGNITION is the shared Bolt client's, by the two failure codes the
+// engine's server assigns this refusal and by nothing else; two neighbouring
+// length refusals — an over-long node key and an over-large assembled log frame —
+// carry neither code, and so stay on the ordinary line (rule 10).
+func graphFieldTooLong(diagnostic string) error {
+	return fmt.Errorf("%w: graph field too long; nothing was written. Shorten the field the "+
+		"engine names: %s", utils.ErrGraphEngine, diagnostic)
 }

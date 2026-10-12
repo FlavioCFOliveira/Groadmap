@@ -151,7 +151,10 @@ not exist return `{"ok":true}` with no counters (measured at 1.18.0).
 ### `EXPLAIN` / `PROFILE`
 
 `EXPLAIN` runs nothing and reports the plan the engine would run; `PROFILE` runs
-the statement and reports what the run measured. Plan nodes carry `operator`,
+the statement and reports what the run measured. **A `PROFILE` of a writing
+statement performs the write** — once, committed, with its `counters` after the
+`profile` member — so it is no way to inspect a write safely; use `EXPLAIN` for
+that. Plan nodes carry `operator`,
 optional `detail`, `estimatedRows` and `estimatedRowsSource`; a profile adds
 `rows`, `timeNs` and `dbHits` per operator.
 
@@ -242,7 +245,7 @@ Issue the two statements as two invocations.
 | Code | Meaning in the graph context |
 |---|---|
 | 0 | Success |
-| 1 | **`serve`:** the store could not be created/opened/recovered, its lock could not be taken, or the socket could not be bound (including a path too long). **`client`:** no server listening; a Cypher parse or execution error; a statement cancelled for exceeding the 5s budget (which wrote nothing). **Either:** a server unreachable through the socket. |
+| 1 | **`serve`:** the store could not be created/opened/recovered, a store in the single-file log format could not be backed up before its conversion, its lock could not be taken, or the socket could not be bound (including a path too long). **`client`:** no server listening; a Cypher parse or execution error; a statement cancelled for exceeding the 5s budget (which wrote nothing). **Either:** a server unreachable through the socket. |
 | 2 | No query supplied (no `-q`, empty stdin); `--socket` with an empty value; a positional argument was given; an unrecognised flag; a flag given twice |
 | 3 | No roadmap selected (`-r` missing) |
 | 4 | Roadmap not found |
@@ -251,12 +254,33 @@ Issue the two statements as two invocations.
 
 ## Storage & side effects
 
-- The graph lives at `~/.roadmaps/<name>/graph/` (`wal`, `snapshot/`,
-  `wal.lock`, `write.lock`), created on first `serve` with mode 0700.
+- The graph lives at `~/.roadmaps/<name>/graph/`, created on first `serve` with
+  mode 0700. It holds `write.lock` (rmp's store lock) and the engine's own files:
+  `wal.control` (the write-ahead log's control file), `wal.d/` (the log's
+  segments), `wal` (a one-record stub, or a sealed single-file log awaiting its
+  first fold), `wal.lock` (the log writer's lock), and `snapshot/` (present after
+  the first write). The listing is not exhaustive, and every format inside
+  `graph/` but `write.lock` belongs to the engine.
+- **A one-way format conversion, with a temporary backup.** A store written by an
+  rmp build whose graph engine kept the log as a single file (no `wal.control`)
+  is converted to the segmented log the first time a newer `serve` opens it. Before
+  that open, `serve` copies the store to
+  `~/.roadmaps/<name>/graph-backup-<T>/` (`<T>` is a UTC instant,
+  `YYYYMMDDTHHMMSSZ`) and reports the path on stderr. Once the conversion
+  succeeds, the same start removes the backup and says so; after that no `rmp`
+  command can return the store to the older format, and an older build refuses
+  it. When the conversion or the open fails, the backup is **kept**, its path is
+  reported, and `serve` exits 1; a backup that cannot be completed leaves the
+  store unconverted and `serve` exits 1 with
+  `graph store backup failed; the store was not migrated: <detail>`. A
+  `graph-backup-<T>/` left behind is never read or removed by a later `rmp`
+  command — removing it, or restoring it by hand for an older build, is the
+  operator's decision. A `graph-backup-<T>.partial/` is an incomplete copy, never
+  a backup.
 - The roadmap's SQLite `project.db` is **never** touched by graph commands.
 - `serve` binds `~/.roadmaps/<name>/graph.sock` (mode 0600) and removes it on
-  shutdown; it writes to the store's `wal` and `snapshot/` on behalf of the
-  statements clients send.
+  shutdown; it writes to the store's write-ahead log and `snapshot/` on behalf of
+  the statements clients send.
 - `client` opens no store, takes no lock, and creates no directory.
 - Writes are durable independently of the server's lifetime: each is committed
   before its acknowledgement returns, and shutdown checkpoints. While no server

@@ -433,6 +433,12 @@ func graphServerFailure(socket string, err error) error {
 		// truthful one: the server's typed failure reports a statement its own
 		// deadline cut.
 		return graphStatementError(budget, "graph query failed", context.DeadlineExceeded)
+	case graphclient.FailureFieldTooLong:
+		// The published field-length line, selected by the failure code the
+		// engine's server gives the refusal, as the conflict and the budget lines
+		// are selected by theirs (SPEC/GRAPH.md § Field Length Limits, rules 3
+		// and 13).
+		return graphFieldTooLong(sendErr.Diagnostic)
 	default:
 		// A statement the engine refused and a value the mapping could not
 		// represent land on the SAME published line, and deliberately: both are

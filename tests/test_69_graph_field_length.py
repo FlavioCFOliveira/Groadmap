@@ -28,78 +28,40 @@ the COMMIT half and only the commit half:
     (each surface's choice between the two conditions). This module states that
     division rather than implying an end-to-end check exists where there is none.
 
-## WHAT THIS MODULE LOST WHEN `rmp graph execute` WAS WITHDRAWN
+## HOW THE CLASS REACHES THE CALLER
 
-The statement now runs in a `rmp graph serve` process and its failure crosses a
-protocol to reach the caller. **The published field-length line does not cross
-it: the engine's diagnostic does, and the class does not.**
+The statement runs in a `rmp graph serve` process and its failure crosses a
+protocol to reach the caller. The pinned engine's server gives the refusal a
+failure code of its own -- one for an over-long label, relationship type or
+property key, one for any other field a durable format cannot carry -- and
+forwards the engine's diagnostic unchanged, which names the field kind and both
+figures. The client selects the published field-length line by those two codes
+and by nothing else (SPEC/GRAPH.md "Field Length Limits", rules 3 and 13), so the
+line is `rmp`'s class, the fact that nothing was written and the remedy, ending
+in the engine's diagnostic.
 
-MEASURED against the pinned engine, through a running server: a 70000-byte label
-comes back as the parse/execution line, ending in the engine's own diagnostic --
-which names the field kind and both figures -- exactly as an ordinary parse
-failure and an ordinary execution failure end in theirs. The engine's Bolt
-server files the refusal under a client-error code it also gives to every other
-argument the engine refuses, so nothing on this side can tell the refusal from
-those without matching the engine's wording (SPEC/GRAPH.md "Field Length
-Limits", rule 13).
+## What is covered here, end to end against ./bin/rmp
 
-Two consequences, both stated rather than worked around:
-
-  1. **The published line has no producer.** SPEC/GRAPH.md "Field Length Limits",
-     rules 2 to 5, and SPEC/COMMANDS.md still publish it; nothing writes it while
-     the only route to a graph is a server that does not carry the class.
-     Recovering the class by matching the engine's diagnostic is exactly what
-     rule 3 forbids, and so is reading anything else out of that diagnostic here.
-
-  2. **The MAXIMUM is not derived here.** This module used to provoke one refusal,
-     read the engine's own maximum out of the published line, and drive exactly
-     that maximum and exactly one byte more -- which is the derivation criterion
-     68 requires by name. The line that carried the figure as rmp's is gone from
-     this surface, and the figure now arrives only inside the engine's wording.
-
-## What is still covered here, and what moved
-
-Still here, end to end against ./bin/rmp:
-
-  * that a field grossly over the engine's bound is REFUSED, on both field kinds
-    a Cypher statement can drive into the guard, with exit code 1, nothing on
-    stdout, and the parse/execution line followed by the engine's diagnostic --
-    neither the published field-length line nor the generic text naming only a
-    session;
-  * that a shorter field of the same kinds is ACCEPTED and found, so the refusal
-    discriminates by LENGTH rather than merely disliking long fields;
-  * that the refused statement leaves nothing behind -- not even the well-formed
-    element it created before the over-long field -- and that the store stays
-    usable afterwards (criterion 69);
+  * that a field one byte over the engine's maximum is REFUSED, on both field
+    kinds a Cypher statement can drive into the guard, with exit code 1, nothing
+    on stdout, and the published field-length line ending in the engine's
+    diagnostic; and that the same two kinds at exactly the maximum are ACCEPTED
+    and found by a following MATCH (criterion 68). The maximum is read from the
+    refusal line itself, never written down here;
   * that a genuine syntax error still writes the parse/execution line, which is
     the direction an implementation that routed every engine failure to one line
     would fail;
+  * that the refused statement leaves nothing behind -- not even the well-formed
+    element it created before the over-long field -- and that the store stays
+    usable afterwards (criterion 69);
   * that the healthy path stays silent (criterion 71).
 
-Moved, because it is no longer observable from a command line without reading
-the engine's wording:
-
-  * the exact bound, and the boundary either side of it. Both are measured by
-    internal/commands' TestGraphClient_FieldTooLongAgainstTheRealEngine, which
-    opens the store IN PROCESS to provoke the refusal -- the one place the
-    engine's sentinel survives -- reads the maximum from the engine's own
-    message, and then drives `rmp graph client` at exactly that maximum and
-    exactly one byte more against a running server. That test also asserts,
-    live, that the engine still wraps store/txn.ErrFieldTooLong, which no
-    fabricated case can check.
-
-Not covered anywhere, and said plainly: the published field-length line itself is
-no longer produced by any surface a user can reach. A caller who writes an
-over-long label reads the engine's diagnostic, which says which field and by how
-much, and is not told the class in words this project publishes.
-
-## Why the two lengths below are not the bound
+## Why no length below is the bound
 
 The limits are the ENGINE's, and a test pinned to 65535 would confirm a stale
-figure instead of failing on it. Neither length below is written down as the
-bound: they are PROBES, one grossly over any plausible bound and one comfortably
-under, and what they bracket is that the refusal is a function of length. The
-bound itself is measured, not assumed, by the Go test named above.
+figure instead of failing on it. The one literal length below is a PROBE grossly
+over any plausible bound; every other length is derived from the maximum the
+refusal reports.
 """
 
 import json
@@ -119,31 +81,18 @@ SPEC_COMMANDS = REPO_ROOT / "SPEC" / "COMMANDS.md"
 
 # rmp's own half of the line SPEC/COMMANDS.md "Graph Management" publishes for a
 # field the engine refuses, WITH the "Error: " prefix as the user reads it.
-#
-# Nothing produces it any more (see the module docstring). It is kept here for
-# the assertions below that are ABOUT its absence: that the specification still
-# publishes it, and that no invocation writes it. If a future engine gives the
-# refusal a class the client can tell apart, those fail and this module is the
-# place that says so.
 PUBLISHED_HEAD = ("Error: graph engine error: graph field too long; nothing was written. "
                   "Shorten the field the engine names: ")
 
-# The line every engine failure now writes, this class included.
+# The line every other engine failure writes, a syntax error included.
 PARSE_HEAD = "Error: graph engine error: graph query failed: "
 
-# The one fragment of the generic text the engine's Bolt server substitutes for a
-# failure it classifies as its own fault, which names nothing but a session. It is
-# used ONLY to assert that the refusal does NOT arrive as that text; nothing here
-# recognises a failure by it.
-SESSION_ONLY_TEXT = "(session: "
-
-# Two PROBES, and neither is the bound. The first is grossly over any plausible
-# bound and its only job is to be over it; the second is comfortably under the
-# smallest bound the engine has ever had for these two field kinds and its only
-# job is to be under it. What they bracket is that the refusal discriminates by
-# length. See the module docstring for where the bound itself is measured.
+# A PROBE grossly over any plausible bound: its only job is to be over it, so the
+# refusal it provokes can report the maximum every other length is derived from.
 PROVOKING_LENGTH = 70000
-ACCEPTED_LENGTH = 60000
+
+# The figure the engine's diagnostic reports as the maximum in force.
+MAXIMUM = re.compile(r"maximum (\d+)")
 
 EXIT_OK = 0
 EXIT_ENGINE = 1
@@ -190,39 +139,36 @@ class _GraphFixture:
         return roadmap
 
     def assert_refused(self, roadmap, query, kind):
-        """The statement is refused with exit 1 and the ordinary
-        parse-or-execution line followed by the engine's diagnostic, and it
-        writes nothing to stdout.
+        """The statement is refused with exit 1 and the published field-length
+        line, which ends in the engine's diagnostic, and it writes nothing to
+        stdout. Returns that line.
 
-        Neither the published field-length line nor the generic text naming only
-        a session may appear. The diagnostic itself is required to be there and
-        is not matched: it names the field kind and the figures in the engine's
-        own words, which rule 3 of SPEC/GRAPH.md "Field Length Limits" forbids
-        this project to rely on. `kind` names the field kind for the failure
-        messages only, for the same reason.
+        The diagnostic is required to be there and is read only for the maximum
+        it reports; its wording is the engine's, which rule 3 of SPEC/GRAPH.md
+        "Field Length Limits" forbids this project to match. `kind` names the
+        field kind for the failure messages only.
         """
         rc, out, err = self.graph(roadmap, query)
-        assert rc == EXIT_ENGINE, (
-            f"a {kind} of {PROVOKING_LENGTH} bytes was accepted: exit {rc} out={out!r}"
-        )
+        assert rc == EXIT_ENGINE, f"an over-long {kind} was accepted: exit {rc} out={out!r}"
         assert out == "", f"a refused statement wrote to stdout: {out!r}"
         line = err.splitlines()[0]
-        assert line.startswith(PARSE_HEAD), (
-            f"an over-long {kind} does not write the parse/execution line\n"
-            f"  expected prefix: {PARSE_HEAD!r}\n  captured: {line!r}"
+        assert line.startswith(PUBLISHED_HEAD), (
+            f"an over-long {kind} does not write the published field-length line\n"
+            f"  expected prefix: {PUBLISHED_HEAD!r}\n  captured: {line!r}"
         )
-        assert line[len(PARSE_HEAD):].strip(), (
-            f"an over-long {kind} carries no engine diagnostic after the prefix: {line!r}"
-        )
-        assert PUBLISHED_HEAD not in err, (
-            f"an over-long {kind} wrote the published field-length line, which nothing on "
-            f"this surface can select at the pinned engine: {err!r}"
-        )
-        assert SESSION_ONLY_TEXT not in err, (
-            f"an over-long {kind} arrived as the generic text naming only a session rather "
-            f"than as the engine's diagnostic: {err!r}"
+        assert line[len(PUBLISHED_HEAD):].strip(), (
+            f"an over-long {kind} carries no engine diagnostic after rmp's half: {line!r}"
         )
         return line
+
+    def maximum_of(self, line, kind):
+        """The maximum the refusal line reports, read from the engine's half."""
+        found = MAXIMUM.search(line[len(PUBLISHED_HEAD):])
+        assert found, (
+            f"the refusal of an over-long {kind} reports no maximum, so a caller could not "
+            f"learn what to shorten to: {line!r}"
+        )
+        return int(found.group(1))
 
 
 class TestFieldLengthRefusal(_GraphFixture):
@@ -232,113 +178,78 @@ class TestFieldLengthRefusal(_GraphFixture):
     store stays usable.
     """
 
-    def test_the_published_line_is_still_published(self):
-        """The specification still publishes the field-length line, and no
-        invocation produces it.
-
-        Both halves are asserted, and the pair is the point. The line is a
-        published contract SPEC/COMMANDS.md carries, so a reword must fail
-        somewhere; and nothing writes it, because the engine's Bolt server does
-        not carry the class that would select it. An implementation that started
-        producing it again would fail the second half, which is the signal that
-        this module's whole account of what it lost has changed.
-        """
+    def test_the_published_line_is_what_the_refusal_writes(self):
+        """The specification publishes the field-length line, and an over-long
+        field writes it: both halves, so a reword on either side fails here."""
         spec = SPEC_COMMANDS.read_text(encoding="utf-8")
         assert PUBLISHED_HEAD in spec, (
             f"SPEC/COMMANDS.md no longer publishes {PUBLISHED_HEAD!r}; this module and "
             f"tests/test_55_error_string_parity.py both need updating together"
         )
-
         roadmap = self.served(
             "telemetry-ingest",
             "CREATE (:Component {key:'ingest-gateway', language:'go'})",
         )
-        _rc, _out, err = self.graph(roadmap, f"CREATE (n:`{'L' * PROVOKING_LENGTH}`)")
-        assert PUBLISHED_HEAD not in err, (
-            f"an over-long label now writes the published field-length line:\n{err!r}\n"
-            f"That is an IMPROVEMENT and not a failure -- it means the refusal's class "
-            f"reaches the caller again -- but this module, "
-            f"tests/test_55_error_string_parity.py's exemption for the same line, and "
-            f"internal/commands/graph_fieldlength_test.go all describe a surface on "
-            f"which it does not, and all three must be brought back into line."
-        )
+        self.assert_refused(roadmap, f"CREATE (n:`{'L' * PROVOKING_LENGTH}`)", "label")
 
-    def test_a_field_over_the_engines_bound_is_refused_on_both_field_kinds(self):
-        """Criterion 68, the refusing half. Both field kinds a Cypher statement
-        can drive into the log's guard -- a label and a property key -- are
-        refused.
+    def test_one_byte_over_the_maximum_is_refused_and_the_maximum_is_accepted(self):
+        """Criterion 68. Both field kinds a Cypher statement can drive into the
+        guard -- a label and a property key -- are refused one byte over the
+        maximum the refusal reports, and accepted at exactly that maximum, with
+        their elements found by a following MATCH.
 
         (A schema identifier cannot reach this guard at all: the engine's Cypher
-        parser bounds an index or constraint name far below the log's prefix and
-        refuses it there, as an ordinary engine refusal. SPEC/GRAPH.md
-        "Field Length Limits", rule 11, states that, and it is why this test
-        drives two kinds and not three.)
+        parser bounds an index or constraint name far below the limit and refuses
+        it there, as an ordinary engine refusal. SPEC/GRAPH.md "Field Length
+        Limits", rule 11, states that, and it is why this test drives two kinds
+        and not three.)
         """
         roadmap = self.served(
             "telemetry-ingest",
             "CREATE (:Component {key:'ingest-gateway', language:'go'})",
         )
 
-        self.assert_refused(
-            roadmap, f"CREATE (n:`{'L' * PROVOKING_LENGTH}`)", "label",
-        )
-        self.assert_refused(
-            roadmap,
-            "CREATE (n:AlertRule {`" + "k" * PROVOKING_LENGTH + "`: 'critical'})",
-            "property key",
-        )
+        label_max = self.maximum_of(
+            self.assert_refused(roadmap, f"CREATE (n:`{'L' * PROVOKING_LENGTH}`)", "label"),
+            "label")
+        key_max = self.maximum_of(
+            self.assert_refused(
+                roadmap, "CREATE (n:AlertRule {`" + "k" * PROVOKING_LENGTH + "`: 'critical'})",
+                "property key"),
+            "property key")
 
-    def test_a_shorter_field_of_the_same_kinds_is_accepted_and_found(self):
-        """Criterion 68, the accepting half. The refusal is a function of LENGTH
-        and not of "a long field": the same two kinds, at a length comfortably
-        inside the engine's bound, are committed and a following MATCH finds the
-        elements they created.
-
-        It used to drive exactly the maximum, one byte under the refusal above,
-        because the maximum could be read out of the refusal's own message. It
-        cannot be now (see the module docstring); the boundary at that precision
-        is measured by internal/commands' TestGraphClient_FieldTooLongAgainstTheRealEngine
-        instead, and what remains here is the bracket.
-        """
-        roadmap = self.served(
-            "telemetry-ingest",
-            "CREATE (:Component {key:'ingest-gateway', language:'go'})",
-        )
+        self.assert_refused(roadmap, f"CREATE (n:`{'L' * (label_max + 1)}`)", "label")
+        self.assert_refused(
+            roadmap, "CREATE (n:AlertRule {`" + "k" * (key_max + 1) + "`: 'critical'})",
+            "property key")
 
         rc, _out, err = self.graph(
-            roadmap,
-            f"CREATE (n:UnderTheBound:`{'L' * ACCEPTED_LENGTH}` {{key:'label-under-bound'}})")
-        assert rc == EXIT_OK, f"a label of {ACCEPTED_LENGTH} bytes was refused: {err!r}"
+            roadmap, f"CREATE (n:AtTheBound:`{'L' * label_max}` {{key:'label-at-bound'}})")
+        assert rc == EXIT_OK, f"a label of exactly {label_max} bytes was refused: {err!r}"
         assert err == "", f"an accepted write wrote to stderr: {err!r}"
 
         rc, _out, err = self.graph(
-            roadmap,
-            "CREATE (n:KeyUnderTheBound {`" + "k" * ACCEPTED_LENGTH + "`: 'key-under-bound'})")
-        assert rc == EXIT_OK, f"a property key of {ACCEPTED_LENGTH} bytes was refused: {err!r}"
+            roadmap, "CREATE (n:KeyAtTheBound {`" + "k" * key_max + "`: 'key-at-bound'})")
+        assert rc == EXIT_OK, f"a property key of exactly {key_max} bytes was refused: {err!r}"
         assert err == "", f"an accepted write wrote to stderr: {err!r}"
 
-        rc, out, err = self.graph(
-            roadmap, "MATCH (n:UnderTheBound) RETURN count(n) AS labels")
-        assert rc == EXIT_OK, f"counting the under-the-bound label failed: {err!r}"
+        rc, out, err = self.graph(roadmap, "MATCH (n:AtTheBound) RETURN count(n) AS labels")
+        assert rc == EXIT_OK, f"counting the label at the bound failed: {err!r}"
         assert json.loads(out)["rows"] == [[1]], (
-            f"the element carrying a {ACCEPTED_LENGTH}-byte label was not found: {out!r}"
+            f"the element carrying a {label_max}-byte label was not found: {out!r}"
         )
-
-        rc, out, err = self.graph(
-            roadmap, "MATCH (n:KeyUnderTheBound) RETURN count(n) AS keys")
-        assert rc == EXIT_OK, f"counting the under-the-bound property key failed: {err!r}"
+        rc, out, err = self.graph(roadmap, "MATCH (n:KeyAtTheBound) RETURN count(n) AS keys")
+        assert rc == EXIT_OK, f"counting the property key at the bound failed: {err!r}"
         assert json.loads(out)["rows"] == [[1]], (
-            f"the element carrying a {ACCEPTED_LENGTH}-byte property key was not found: {out!r}"
+            f"the element carrying a {key_max}-byte property key was not found: {out!r}"
         )
 
     def test_a_syntax_error_still_writes_the_parse_or_execution_line(self):
         """Criterion 68's other direction. An implementation that routed every
-        engine failure to a field-length line would pass every check above; this
-        is the check it fails.
-
-        It also requires the engine's OWN diagnostic to be present, which
-        establishes that the protocol carries one for an ordinary failure, as the
-        module docstring measures it does for the field-length refusal.
+        engine failure to the field-length line would pass every check above;
+        this is the check it fails. It also requires the engine's OWN diagnostic
+        to be present, which establishes that the protocol carries one for an
+        ordinary failure.
         """
         roadmap = self.served(
             "telemetry-ingest",
@@ -351,8 +262,7 @@ class TestFieldLengthRefusal(_GraphFixture):
             f"a syntax error no longer writes the parse/execution line: {line!r}"
         )
         assert "parse" in line, (
-            f"the engine's own parse diagnostic no longer crosses the protocol: {line!r}. "
-            f"This module's account of what the served path carries is stale."
+            f"the engine's own parse diagnostic no longer crosses the protocol: {line!r}"
         )
         assert "graph field too long" not in line, (
             f"a syntax error was reported as a field-length refusal: {line!r}"

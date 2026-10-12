@@ -49,7 +49,7 @@ jobs:
 
       # Reporting, not a gate: its failure must not fail the job.
       - name: Upload coverage
-        uses: codecov/codecov-action@v7.0.0
+        uses: codecov/codecov-action@v7.1.1
         with:
           files: ./coverage.out
           fail_ci_if_error: false
@@ -60,7 +60,7 @@ jobs:
       # in the release workflow and in a local `make check`. A failure to
       # install fails the job: the gate is never skipped.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.1-0.20261012130337-71577268350e
 
       - name: Run gosec
         run: gosec -exclude-dir=.claude/worktrees ./...

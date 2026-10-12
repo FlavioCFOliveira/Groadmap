@@ -1,50 +1,46 @@
 package commands
 
-// Tests for the relationship-identity hazard published as SPEC/GRAPH.md § What
-// Groadmap Does Not Check, item 8, asserted in both directions as mitigation 3 of
+// Tests for the relationship-identity behaviour recorded in SPEC/GRAPH.md § What
+// Groadmap Does Not Check, item 8, for rule 9 of § Error Handling and Exit Codes,
+// and for acceptance criterion 87, asserted in both directions as mitigation 3 of
 // § Dependency Maturity Risk requires.
 //
 // Item 8 has two conditions, and how the binding was made decides which applies.
 //
 // A `MERGE` whose relationship pattern joins two nodes the statement has already
-// bound, and which MATCHES an existing relationship rather than creating one,
-// does not reliably bind that relationship where more than one relationship joins
-// the pair in the pattern's direction: every row it emits binds the identifier of
-// one relationship of the pair — the same one whichever relationship matched — so
-// a write through the binding lands on that relationship.
+// bound, over a pair that several relationships join in the pattern's direction,
+// matches EVERY one of them and emits one row per relationship, each binding a
+// different one: a write, a removal and a DELETE through the binding reach every
+// matched relationship and no other, and a MERGE whose inline property map one of
+// them satisfies creates nothing.
 //
 // A relationship bound by `CREATE`, or by a `MERGE` that created it, takes every
-// assignment and removal on itself; but on a pair a relationship already joined in
-// that direction, `DELETE e` does not reach it: the statement deletes one of the
-// pair's pre-existing relationships and keeps the one it created, and the write
-// counters report one created and one deleted either way.
+// assignment, removal and deletion on itself, on a pair a relationship already
+// joins in that direction as on any other, and the pair's pre-existing
+// relationships keep every property they held.
 //
-// No error is raised and every statement reports success. Both sides are
-// asserted, because an assertion of the losing side alone is satisfied by an
-// engine whose working side has regressed to match it: a relationship bound by
-// MATCH takes every write, removal and deletion on itself; a created binding's
-// deletion reaches its own relationship on a pair no other relationship joins in
-// that direction; and re-binding the created relationship with MATCH before the
-// DELETE deletes it on any pair.
-//
-// Every joined fixture joins its pair by two relationships of DIFFERENT types in
-// one direction. The type is what makes "the relationship the MERGE matched" and
-// "the relationship the CREATE made" facts rather than guesses. Which
-// relationship of the pair the engine binds or deletes instead is not specified,
-// so it is not asserted; what is asserted is what the specification states.
+// An earlier pinned engine got both wrong, silently — one relationship of the
+// pair took every row of a matching MERGE, and a created binding's DELETE removed
+// a pre-existing relationship instead — and rule 9 of § Error Handling and Exit
+// Codes records the third: a failed statement that had created a relationship on
+// a joined pair left one of the pair's relationships replaced. Each is a boundary
+// an engine change can move back, so each is asserted here on the read-back and
+// not on the exit code.
 //
 // Every read-back uses an outgoing MATCH, which SPEC/GRAPH.md § What Groadmap
 // Does Not Check, item 5, states is resolved correctly whatever the data.
 
 import (
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 )
 
 // mergeBindingStale is the reason every failure below names.
 const mergeBindingStale = "the engine's behaviour has moved and SPEC/GRAPH.md § What Groadmap Does Not " +
-	"Check, item 8, no longer describes it; the item and mitigation 3 must be corrected"
+	"Check, item 8, and acceptance criterion 87 no longer describe it; the item and mitigation 3 must be corrected"
 
 // seedParallelPair creates a Spec node and a Test node joined, spec -> test, by a
 // VERIFIED_BY relationship and a COVERS relationship, each carrying an `id` that
@@ -179,17 +175,17 @@ func requireOnlyRemoval(t *testing.T, pair map[string]map[string]any, owner, key
 	}
 }
 
-// TestGraphMerge_AMatchedBindingOnAParallelPairActsOnAnotherRelationship is the
-// hazard side: a write through a relationship bound by a MERGE that matched one of
-// several relationships joining the pair in one direction reaches a relationship
-// other than the one matched.
+// TestGraphMerge_AMatchedBindingActsOnTheRelationshipItMatched is item 8's first
+// condition at the pair its earlier form named: a pair joined by several
+// relationships in one direction, each MERGE naming one of them by type. Each
+// write lands on the relationship its MERGE matched and on no other — the
+// reverse of the earlier engine, which bound one relationship of the pair to
+// every row whichever one matched.
 //
 // Two statements are run, one per relationship type, and each through a
 // different write form — a trailing `SET` and `ON MATCH SET`, both of which item 8
-// names. Neither creates a relationship, so each matched the one relationship of
-// its type; and both writes land on one relationship, so one of them landed on a
-// relationship its MERGE did not match.
-func TestGraphMerge_AMatchedBindingOnAParallelPairActsOnAnotherRelationship(t *testing.T) {
+// names. Neither creates a relationship.
+func TestGraphMerge_AMatchedBindingActsOnTheRelationshipItMatched(t *testing.T) {
 	const roadmap = "graph-merge-matched-binding"
 	defer servedRoadmap(t, roadmap)()
 	const specKey, testKey = "release-checklist", "test_release_checklist.py"
@@ -201,48 +197,16 @@ func TestGraphMerge_AMatchedBindingOnAParallelPairActsOnAnotherRelationship(t *t
 		match + "MERGE (a)-[e:VERIFIED_BY]->(b) ON MATCH SET e.merged_via_on_match = 'commit-7f3a2c1'",
 	} {
 		out := graphClientJSON(t, roadmap, statement)
-		if ok, _ := out["ok"].(bool); !ok {
-			t.Fatalf("the statement must report success: %q gave %v", statement, out)
-		}
-		counters, _ := countersOfOutput(t, out)
-		if _, created := counters["relationshipsCreated"]; created {
-			t.Fatalf("the MERGE was meant to MATCH an existing relationship and created one: %q gave %v",
-				statement, out)
-		}
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 1},
+			"a MERGE that matched exactly one relationship of its type and wrote one property to it")
 	}
 
 	pair := pairRelationships(t, roadmap, specKey, testKey)
 	requirePairTypes(t, pair, "COVERS", "VERIFIED_BY")
-
-	carriers := func(key string) []string {
-		var found []string
-		for relType, props := range pair {
-			if _, present := props[key]; present {
-				found = append(found, relType)
-			}
-		}
-		slices.Sort(found)
-		return found
-	}
-	viaSet, viaOnMatch := carriers("merged_via_set"), carriers("merged_via_on_match")
-	if len(viaSet) != 1 || len(viaOnMatch) != 1 {
-		t.Fatalf("each write must land on exactly one relationship; merged_via_set is on %v and "+
-			"merged_via_on_match on %v: %s", viaSet, viaOnMatch, mergeBindingStale)
-	}
-	if viaSet[0] != viaOnMatch[0] {
-		t.Fatalf("each MERGE wrote to its own relationship (merged_via_set on %s, merged_via_on_match "+
-			"on %s): a matched MERGE on a pair joined by several relationships in one direction is "+
-			"specified to bind the SAME relationship whichever one matched: %s",
-			viaSet[0], viaOnMatch[0], mergeBindingStale)
-	}
-	// Both writes are on one relationship, so the MERGE whose type is not that
-	// relationship's wrote to a relationship it did not match.
-	misdirected := "the COVERS MERGE"
-	if viaSet[0] == "COVERS" {
-		misdirected = "the VERIFIED_BY MERGE"
-	}
-	t.Logf("both writes landed on the %s relationship; %s wrote to a relationship it did not match",
-		viaSet[0], misdirected)
+	requireOnlyCarrier(t, pair, "COVERS", "merged_via_set", "commit-7f3a2c1",
+		"a SET through a MERGE that matched the COVERS relationship")
+	requireOnlyCarrier(t, pair, "VERIFIED_BY", "merged_via_on_match", "commit-7f3a2c1",
+		"an ON MATCH SET through a MERGE that matched the VERIFIED_BY relationship")
 }
 
 // TestGraphMerge_BindingsThatDidNotMatchActOnTheirOwnRelationship is the sound
@@ -252,11 +216,9 @@ func TestGraphMerge_AMatchedBindingOnAParallelPairActsOnAnotherRelationship(t *t
 // that relationship and no other; and a created relationship re-bound with MATCH
 // before the DELETE is the one deleted. A DELETE through a created binding
 // reaches its own relationship on a pair no relationship joins, and on a pair
-// joined only in the other direction. No case asserts that a DELETE through a
-// created binding is sound on a pair already joined in its direction: item 8
-// states that it is not, and
-// TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesAnOlderRelationship
-// asserts that.
+// joined only in the other direction; on a pair already joined in its direction,
+// TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesWhatItCreated
+// asserts the same.
 //
 // Each case runs against a pair of its own, so no case depends on what another
 // left behind.
@@ -432,14 +394,14 @@ var createdBindingDeletions = []struct{ name, label, clause string }{
 	{"the DELETE of a MERGE that created", "merge", "MERGE (a)-[e:DOCUMENTS]->(b) DELETE e"},
 }
 
-// TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesAnOlderRelationship
-// is the hazard side of item 8's second condition: on a pair a relationship
-// already joined in the clause's direction, a DELETE through a relationship bound
-// by CREATE — directly or across a WITH — or by a MERGE that created it keeps the
-// created relationship and deletes one of the pair's pre-existing ones, and the
-// counters report one created and one deleted, exactly as they would for the
-// right deletion.
-func TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesAnOlderRelationship(t *testing.T) {
+// TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesWhatItCreated is item
+// 8's second condition: on a pair a relationship already joins in the clause's
+// direction, a DELETE through a relationship bound by CREATE — directly or across
+// a WITH — or by a MERGE that created it deletes the created relationship, and
+// every pre-existing relationship of the pair survives with every property it
+// held. The earlier engine deleted a pre-existing relationship instead and kept
+// the created one, with the same counters.
+func TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesWhatItCreated(t *testing.T) {
 	const roadmap = "graph-create-joined-delete"
 	defer servedRoadmap(t, roadmap)()
 
@@ -453,31 +415,12 @@ func TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesAnOlderRelationsh
 			assertCounters(t, out, createdAndDeleted, deletion.name+" on a joined pair")
 
 			pair := pairRelationships(t, roadmap, specKey, testKey)
-			if len(pair) != 2 {
-				t.Fatalf("the pair holds %v after the statement; want the created DOCUMENTS "+
-					"relationship and one of the two it held before: %s",
-					slices.Sorted(maps.Keys(pair)), mergeBindingStale)
-			}
-			if _, kept := pair["DOCUMENTS"]; !kept {
-				t.Fatalf("%s deleted the relationship it created, and the pair holds %v: a "+
-					"created binding's DELETE on a joined pair is specified to keep it: %s",
-					deletion.name, slices.Sorted(maps.Keys(pair)), mergeBindingStale)
-			}
-			survivors := 0
+			requirePairTypes(t, pair, "COVERS", "VERIFIED_BY")
 			for relType, id := range seededIDs {
-				props, present := pair[relType]
-				if !present {
-					continue
+				if got := pair[relType]["id"]; got != id {
+					t.Errorf("the pre-existing %s relationship carries id = %v after %s, want %v: %s",
+						relType, got, deletion.name, id, mergeBindingStale)
 				}
-				survivors++
-				if props["id"] != id {
-					t.Errorf("the surviving %s relationship carries id = %v, want %v: %s",
-						relType, props["id"], id, mergeBindingStale)
-				}
-			}
-			if survivors != 1 {
-				t.Errorf("%d of the pair's two pre-existing relationships survived; exactly one is "+
-					"specified to be deleted in place of the created one: %s", survivors, mergeBindingStale)
 			}
 			if reverse := pairReverseRelationships(t, roadmap, specKey, testKey); len(reverse) != 0 {
 				t.Errorf("%s left %v joining the pair the other way: %s",
@@ -485,4 +428,172 @@ func TestGraphCreate_ACreatedBindingsDeleteOnAJoinedPairRemovesAnOlderRelationsh
 			}
 		})
 	}
+}
+
+// parallelTypeFixture is criterion 87's fixture: a Spec node and a Test node
+// joined, spec -> test, by two relationships of ONE type told apart by a property
+// n of 1 and 2. A pair joined by two relationships of different types cannot
+// exercise a MERGE that matches more than one, because a typed MERGE then
+// matches one.
+func parallelTypeFixture(t *testing.T, roadmap, label string) (specKey, testKey string) {
+	t.Helper()
+	specKey, testKey = pairKeys("parallel-" + label)
+	seedPair(t, roadmap, specKey, testKey, "CREATE (a)-[:TRACES {n:1}]->(b), (a)-[:TRACES {n:2}]->(b)")
+	return specKey, testKey
+}
+
+// tracesByN reads every relationship stored spec -> test on the pair as its type
+// and properties, keyed by its n.
+func tracesByN(t *testing.T, roadmap, specKey, testKey string) map[float64]map[string]any {
+	t.Helper()
+	rows := graphQueryRows(t, roadmap, "MATCH (a:Spec {key:'"+specKey+"'})-[e]->(b:Test {key:'"+testKey+"'}) "+
+		"RETURN type(e), properties(e)")
+	byN := map[float64]map[string]any{}
+	for _, row := range rows {
+		props, ok := row[1].(map[string]any)
+		if !ok {
+			t.Fatalf("properties(e) is %T, want an object: %v", row[1], row)
+		}
+		n, _ := props["n"].(float64)
+		if row[0] != "TRACES" {
+			t.Errorf("the pair holds a %v relationship, want TRACES only: %v: %s", row[0], rows, mergeBindingStale)
+		}
+		if _, repeated := byN[n]; repeated {
+			t.Fatalf("the pair holds two relationships with n = %v: %v", n, rows)
+		}
+		byN[n] = props
+	}
+	return byN
+}
+
+// requireTraces fails the test unless the pair holds exactly the TRACES
+// relationships whose n are wantN.
+func requireTraces(t *testing.T, got map[float64]map[string]any, why string, wantN ...float64) {
+	t.Helper()
+	keys := slices.Sorted(maps.Keys(got))
+	slices.Sort(wantN)
+	if !slices.Equal(keys, wantN) {
+		t.Fatalf("%s: the pair holds TRACES relationships with n = %v, want %v: %s", why, keys, wantN, mergeBindingStale)
+	}
+}
+
+// TestGraphParallelPair_EveryBehaviourIsAssertedOnTheReadBack is acceptance
+// criterion 87: the relationship and property-value behaviours an earlier engine
+// got wrong, each run on a fresh copy of the fixture and asserted on what a
+// following read returns.
+func TestGraphParallelPair_EveryBehaviourIsAssertedOnTheReadBack(t *testing.T) {
+	const roadmap = "graph-parallel-pair"
+	defer servedRoadmap(t, roadmap)()
+
+	t.Run("a MERGE over the bound pair binds each relationship once", func(t *testing.T) {
+		specKey, testKey := parallelTypeFixture(t, roadmap, "merge-rows")
+		rows := graphQueryRows(t, roadmap, pairMatch(specKey, testKey)+"MERGE (a)-[e:TRACES]->(b) RETURN e.n")
+		got := make([]float64, 0, len(rows))
+		for _, row := range rows {
+			n, _ := row[0].(float64)
+			got = append(got, n)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, []float64{1, 2}) {
+			t.Fatalf("the MERGE returned e.n = %v, want one row naming 1 and one naming 2: %s", got, mergeBindingStale)
+		}
+	})
+
+	t.Run("a SET through the MERGE reaches both relationships once", func(t *testing.T) {
+		specKey, testKey := parallelTypeFixture(t, roadmap, "merge-set")
+		out := graphClientJSON(t, roadmap, pairMatch(specKey, testKey)+"MERGE (a)-[e:TRACES]->(b) SET e.x = 1")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 2}, "a SET through a MERGE that matched two")
+		traces := tracesByN(t, roadmap, specKey, testKey)
+		requireTraces(t, traces, "after the SET", 1, 2)
+		for n, props := range traces {
+			if props["x"] != float64(1) {
+				t.Errorf("the relationship with n = %v carries x = %v, want 1: %s", n, props["x"], mergeBindingStale)
+			}
+		}
+	})
+
+	t.Run("a REMOVE and a DELETE through the MERGE reach every matched relationship and no other", func(t *testing.T) {
+		specKey, testKey := parallelTypeFixture(t, roadmap, "merge-remove-delete")
+		if err := runGraphClient([]string{"-r", roadmap, "--query", pairMatch(specKey, testKey) +
+			"CREATE (a)-[:CITES {n:3}]->(b)"}); err != nil {
+			t.Fatalf("adding the relationship the MERGE must not reach: %v", err)
+		}
+		out := graphClientJSON(t, roadmap, pairMatch(specKey, testKey)+"MERGE (a)-[e:TRACES]->(b) REMOVE e.n")
+		assertCounters(t, out, map[string]int64{"propertiesWritten": 2}, "a REMOVE through a MERGE that matched two")
+		rows := graphQueryRows(t, roadmap, "MATCH (a:Spec {key:'"+specKey+"'})-[e]->(b:Test {key:'"+testKey+"'}) "+
+			"RETURN type(e), e.n")
+		for _, row := range rows {
+			switch {
+			case row[0] == "TRACES" && row[1] != nil:
+				t.Errorf("a matched TRACES relationship still carries n = %v: %s", row[1], mergeBindingStale)
+			case row[0] == "CITES" && row[1] != float64(3):
+				t.Errorf("the CITES relationship the MERGE did not match carries n = %v, want 3: %s", row[1], mergeBindingStale)
+			}
+		}
+
+		out = graphClientJSON(t, roadmap, pairMatch(specKey, testKey)+"MERGE (a)-[e:TRACES]->(b) DELETE e")
+		assertCounters(t, out, map[string]int64{"relationshipsDeleted": 2}, "a DELETE through a MERGE that matched two")
+		rows = graphQueryRows(t, roadmap, "MATCH (a:Spec {key:'"+specKey+"'})-[e]->(b:Test {key:'"+testKey+"'}) "+
+			"RETURN type(e), e.n")
+		if len(rows) != 1 || rows[0][0] != "CITES" || rows[0][1] != float64(3) {
+			t.Errorf("after the DELETE the pair holds %v, want only the CITES relationship with n = 3: %s",
+				rows, mergeBindingStale)
+		}
+	})
+
+	t.Run("a MERGE whose inline map one relationship satisfies creates nothing", func(t *testing.T) {
+		specKey, testKey := parallelTypeFixture(t, roadmap, "merge-map")
+		out := graphClientJSON(t, roadmap, pairMatch(specKey, testKey)+"MERGE (a)-[e:TRACES {n:2}]->(b)")
+		assertNoCounters(t, out, "a MERGE whose inline map an existing relationship satisfies")
+		requireTraces(t, tracesByN(t, roadmap, specKey, testKey), "after the MERGE", 1, 2)
+	})
+
+	t.Run("a CREATE-bound DELETE on the joined pair deletes what it created", func(t *testing.T) {
+		specKey, testKey := parallelTypeFixture(t, roadmap, "create-delete")
+		out := graphClientJSON(t, roadmap, pairMatch(specKey, testKey)+"CREATE (a)-[e:TRACES {n:9}]->(b) DELETE e")
+		assertCounters(t, out, map[string]int64{"relationshipsCreated": 1, "relationshipsDeleted": 1, "propertiesWritten": 1},
+			"a CREATE-bound DELETE on the joined pair")
+		requireTraces(t, tracesByN(t, roadmap, specKey, testKey), "after the CREATE-bound DELETE", 1, 2)
+	})
+
+	t.Run("a failed statement that had created a relationship leaves the pair as it found it", func(t *testing.T) {
+		specKey, testKey := parallelTypeFixture(t, roadmap, "failed-create")
+		var err error
+		captureStdStreams(t, func() {
+			err = runGraphClient([]string{"-r", roadmap, "--query",
+				pairMatch(specKey, testKey) + "CREATE (a)-[:U]->(b) WITH a RETURN 1/0"})
+		})
+		if err == nil || !strings.HasPrefix(err.Error(), "graph engine error: graph query failed: ") {
+			t.Fatalf("the failing statement reported %v, want the parse-or-execution line", err)
+		}
+		traces := tracesByN(t, roadmap, specKey, testKey)
+		requireTraces(t, traces, "after the failed statement", 1, 2)
+		for n, props := range traces {
+			if len(props) != 1 {
+				t.Errorf("the relationship with n = %v carries %v, want exactly its n: rule 9 of "+
+					"§ Error Handling and Exit Codes: %s", n, props, mergeBindingStale)
+			}
+		}
+	})
+
+	t.Run("a list holding null is refused and the value held before is unchanged", func(t *testing.T) {
+		specKey, _ := parallelTypeFixture(t, roadmap, "null-list")
+		if err := runGraphClient([]string{"-r", roadmap, "--query",
+			"MATCH (x {key:'" + specKey + "'}) SET x.k = [7, 8]"}); err != nil {
+			t.Fatalf("setting the value the refusal must leave in place: %v", err)
+		}
+		var err error
+		captureStdStreams(t, func() {
+			err = runGraphClient([]string{"-r", roadmap, "--query",
+				"MATCH (x {key:'" + specKey + "'}) SET x.k = [1, null, 2]"})
+		})
+		if err == nil || !strings.HasPrefix(err.Error(), "graph engine error: graph query failed: ") {
+			t.Fatalf("SET x.k = [1, null, 2] reported %v, want the parse-or-execution line", err)
+		}
+		rows := graphQueryRows(t, roadmap, "MATCH (x {key:'"+specKey+"'}) RETURN x.k")
+		if len(rows) != 1 || fmt.Sprint(rows[0][0]) != "[7 8]" {
+			t.Errorf("x.k reads back %v after the refusal, want the [7, 8] it held: SPEC/GRAPH.md § What "+
+				"Groadmap Does Not Check, item 9: %s", rows, mergeBindingStale)
+		}
+	})
 }
