@@ -1144,11 +1144,10 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 // order, the grouping pass below preserves it, and sort.SliceStable keeps the
 // relative order of every pair its comparison calls equal — which is exactly the
 // pair the tiebreaker speaks about. Reading the position into the comparison would
-// not merely be redundant, it would be unsound: sprint_tasks.position carries no
-// uniqueness constraint (SPEC/DATABASE.md § `sprint_tasks` Table (1:N
-// Relationship), whose DDL constrains sprint_id and task_id and leaves position
-// free), so two member tasks may share one, and stability is what keeps such a
-// pair in the order the read gave it.
+// therefore be redundant: sprint_tasks.position is unique within a sprint (the
+// UNIQUE index idx_sprint_tasks_order over (sprint_id, position); SPEC/DATABASE.md
+// § Position Uniqueness Within a Sprint), so the read already delivers the members
+// in a total order, and stability is what carries that order through the sort.
 //
 // THE ORDERING COSTS NO READ. It is an in-memory reorder of the rows the page has
 // already read: no query per column, no query per card, and no second read of any
