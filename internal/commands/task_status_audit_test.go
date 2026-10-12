@@ -38,6 +38,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -776,6 +777,21 @@ func entriesWithOperation(raw []map[string]json.RawMessage, op models.AuditOpera
 		}
 	}
 	return out
+}
+
+// taskIDsInIDOrder returns the ids of tasks in ascending id order, which is the
+// order the tasks were created in. A fixture that reads its seeded tasks back
+// through ListTasks must not take their ids in listing order: the listing is
+// ordered by priority DESC, created_at ASC (SPEC/DATABASE.md § Main SQL Queries,
+// "List All"), tasks seeded in-process share one millisecond and one priority,
+// and the order of such a tie is unspecified (rmp task #608).
+func taskIDsInIDOrder(tasks []models.Task) []int {
+	ids := make([]int, 0, len(tasks))
+	for i := range tasks {
+		ids = append(ids, tasks[i].ID)
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 // ---------------------------------------------------------------------------

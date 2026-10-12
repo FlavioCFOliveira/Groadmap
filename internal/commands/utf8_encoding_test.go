@@ -165,8 +165,14 @@ func TestMalformedValueIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	// And the fields a refused EDIT would have overwritten are still what they
 	// were: `task edit` and `sprint update` refuse in the argument-validation
 	// phase, before the database is opened at all.
-	task := tasksBefore[0]
-	after := listTasksForUTF8(t, database)[0]
+	//
+	// The edited task is selected by its id, never by its position: the
+	// fixture's two tasks share a priority and, seeded in-process, often one
+	// created_at millisecond, and the listing leaves the order of such a tie
+	// unspecified (SPEC/DATABASE.md § Main SQL Queries, "List All"; rmp task
+	// #608). Task 1 is the one every refused `task edit` above targets.
+	task := taskWithID(t, tasksBefore, 1)
+	after := taskWithID(t, listTasksForUTF8(t, database), 1)
 	if after.Title != task.Title || after.FunctionalRequirements != task.FunctionalRequirements {
 		t.Errorf("a refused `task edit` modified the task:\n before: %q / %q\n after:  %q / %q",
 			task.Title, task.FunctionalRequirements, after.Title, after.FunctionalRequirements)
@@ -334,6 +340,19 @@ func listTasksForUTF8(t *testing.T, database *db.DB) []models.Task {
 		t.Fatalf("listing tasks: %v", err)
 	}
 	return tasks
+}
+
+// taskWithID returns the task of tasks carrying id, failing when there is none.
+func taskWithID(t *testing.T, tasks []models.Task, id int) models.Task {
+	t.Helper()
+
+	for i := range tasks {
+		if tasks[i].ID == id {
+			return tasks[i]
+		}
+	}
+	t.Fatalf("the listing holds no task %d: %d tasks listed", id, len(tasks))
+	return models.Task{}
 }
 
 func listSprintsForUTF8(t *testing.T, database *db.DB) []models.Sprint {
