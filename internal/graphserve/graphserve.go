@@ -613,8 +613,8 @@ func Run(opts Options) error {
 		return err
 	}
 
-	// Step 6. Back the store up when it is still in the single-file format, then
-	// open it and construct the engine, through the one lifecycle
+	// Step 6. Bring graph/ to owner-only modes, back the store up when it is
+	// still in the single-file format, then open it and construct the engine, through the one lifecycle
 	// internal/graphstore owns. A failure here closes the listener — which
 	// unlinks the socket — so a caller waiting on the handshake sees the
 	// connection dropped and fails, rather than falling back onto a lock this
@@ -703,6 +703,10 @@ var backupClock = time.Now
 //
 // # The order, and what each failure leaves
 //
+//   - On a platform with POSIX file modes the step begins with
+//     [graphstore.SecureModes]: an entry of graph/ that cannot be brought to its
+//     mode ends the start before the backup and the open, so graph/ is left as
+//     the server found it, write.lock and any mode already narrowed aside.
 //   - A store that owes no backup — never in the single-file format, already
 //     converted, or not yet holding a store — is opened as on every start, and
 //     nothing in this function writes a record (rules 1 and 2).
@@ -719,6 +723,17 @@ var backupClock = time.Now
 // Every record is queued here, before the socket is announced, and the caller
 // flushes the queue before the announcement or the error line (rule 10).
 func openMigrating(hold *graphstore.Hold) (*graphstore.Store, error) {
+	// The step begins by bringing graph/ and every entry below it to 0700 and
+	// 0600, under the lock and before the backup and the open: the umask covers
+	// only what this process creates, and a store can carry a wider entry that
+	// it did not create (SPEC/GRAPH.md § Persistence Layout, rule 4). An entry
+	// that cannot be made private ends the start as a store that cannot be
+	// opened, with nothing backed up and nothing converted.
+	if err := graphstore.SecureModes(hold.Dir()); err != nil {
+		hold.Release()
+		return nil, err
+	}
+
 	due, err := graphstore.NeedsBackup(hold.Dir())
 	if err != nil {
 		hold.Release()

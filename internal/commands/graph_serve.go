@@ -175,6 +175,15 @@ func announceServeSocket(socket string) error {
 // advisory lock the server takes at step 2 lives inside the directory this call
 // makes.
 func runGraphServe(args []string) error {
+	// The process umask is narrowed to 0077 before anything else, so every
+	// entry this process and its engine create from here on — the graph
+	// directory, the lock, the socket, every entry of the store at every step
+	// and while it serves — is owner-only from the instant it exists. It writes
+	// nothing to disk, so a server that cannot start still touches nothing; it
+	// is a no-op on Windows (SPEC/GRAPH.md § Server Startup, step 1;
+	// § Persistence Layout, rule 4).
+	graphserve.RestrictUmask()
+
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
 		return err

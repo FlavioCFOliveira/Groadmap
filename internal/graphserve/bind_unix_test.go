@@ -27,6 +27,15 @@
 //   - a connection through the path that succeeds right after the file was seen
 //     there under any other mode.
 //
+// And one thing must always be seen: once each bind has returned, the listener
+// accepts a connection made through the path, so a bind that stayed narrow by
+// never becoming reachable there does not pass.
+//
+// The bind is driven directly, in this process, under a umask the test sets to
+// 0000 itself, as the criterion requires: `rmp graph serve` narrows its own
+// umask to 0077 before it binds (SPEC/GRAPH.md § Persistence Layout, rule 4), and
+// a check run through it would pass whatever the bind does.
+//
 // On the old code the first is seen within a handful of binds: the file appears
 // at 0777 and is narrowed microseconds later. On the staged bind the file only
 // ever appears at the path already at 0600.
@@ -34,6 +43,7 @@ package graphserve
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -43,6 +53,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 )
@@ -153,6 +164,7 @@ func TestBind_TheSocketIsNeverConnectableUnderAWiderMode(t *testing.T) {
 		}()
 	}
 
+	var unaccepted []string
 	for i := 0; i < binds; i++ {
 		ln, err := bind(path)
 		if err != nil {
@@ -160,10 +172,23 @@ func TestBind_TheSocketIsNeverConnectableUnderAWiderMode(t *testing.T) {
 			wg.Wait()
 			t.Fatalf("bind %d of %d failed: %v", i+1, binds, err)
 		}
+		// Once the bind has returned, the listener accepts a connection made
+		// through the target path. Without this the criterion passes a bind
+		// that never becomes reachable at the path, which no watcher can
+		// tell from one that is narrow.
+		if err := acceptThroughPath(ln, path); err != nil && len(unaccepted) < 10 {
+			unaccepted = append(unaccepted, fmt.Sprintf("bind %d: %v", i+1, err))
+		}
 		_ = ln.Close() //nolint:errcheck // the wrapper's Close reports no error by construction
 	}
 	close(stop)
 	wg.Wait()
+
+	if len(unaccepted) > 0 {
+		t.Errorf("after the bind returned, the listener did not accept a connection made through the "+
+			"target path (first %d shown):\n  %s\n(SPEC/GRAPH.md acceptance criterion 79)",
+			len(unaccepted), strings.Join(unaccepted, "\n  "))
+	}
 
 	if len(seen.violations) > 0 {
 		t.Errorf("under a umask of 0000, in a mode-1777 directory, the socket was observable at "+
@@ -192,6 +217,31 @@ func TestBind_TheSocketIsNeverConnectableUnderAWiderMode(t *testing.T) {
 	}
 	t.Logf("%d binds; the path was seen at 0600 %d times and connected through %d times",
 		binds, seen.narrow.Load(), seen.connected.Load())
+}
+
+// acceptThroughPath connects to path and accepts a connection on ln, bounded so
+// a listener that is not reachable at the path fails instead of hanging. The
+// connection accepted may be one a dialing goroutine queued first: any of them
+// was made through the target path, which is what the criterion requires.
+func acceptThroughPath(ln *serverListener, path string) error {
+	conn, err := net.DialTimeout("unix", path, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("connecting through %s: %w", path, err)
+	}
+	defer conn.Close() //nolint:errcheck // the connection's only purpose was to be accepted
+
+	raw, ok := ln.Listener.(*net.UnixListener)
+	if !ok {
+		return fmt.Errorf("the bound listener is a %T, not a *net.UnixListener", ln.Listener)
+	}
+	if err := raw.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	accepted, err := raw.Accept()
+	if err != nil {
+		return fmt.Errorf("accepting: %w", err)
+	}
+	return accepted.Close()
 }
 
 // TestBind_LeavesAFileAtThePathExactlyAsItWas pins the property the staged bind
