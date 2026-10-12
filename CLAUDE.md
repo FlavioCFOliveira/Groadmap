@@ -333,16 +333,17 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 | **security-review** | skill | Security review of pending changes | Trigger before merging security-sensitive changes. |
 | **code-review** | skill | Pull request review | Code review on PRs. |
 | **simplify** | skill | Review changes for reuse/quality and fix issues | Post-implementation cleanup. |
-| **gitflow** | skill | Executes EVERY git write: commit, branch, merge, tag, push | Executor only. Rule 3 governs WHAT may be done and prevails over gitflow practice. Reads stay direct. |
+| **gitflow** | skill | Executes EVERY git write: sprint branch, task-close commit, sprint-close merge, tag, push | Applies the gitflow model and its push policy; Rule 3 adds the project's constraints and prevails. Reads stay direct. |
 
 ### Mandatory Skills
 
 You MUST use these Claude Code skills for the following needs:
 
 - **`gitflow`** — EVERY git write command is executed through the `gitflow`
-  skill, following the good practices of that branch-management methodology for
-  this project's git repository. Those practices govern HOW a git write is
-  carried out; Section 6, Rule 3 governs WHAT may be done and PREVAILS over them.
+  skill, which applies the gitflow branching model to this project's git
+  repository: one branch per sprint, one commit per task close, a `--no-ff` merge
+  into `develop` at sprint close, and its push policy. Section 6, Rule 3 adds the
+  project's constraints and PREVAILS where the two differ.
 - **`roadmap-manager`** — operating the project's own roadmap (`groadmap`) goes
   through the `roadmap-manager` skill: the coordination and management of its
   tasks, sprints, and comments, and EVERY `rmp *` operation on it, with the
@@ -432,7 +433,10 @@ each task.
 
 ### Task Execution
 
-Task execution is the natural continuation of planning (the next step). Always
+Task execution is the natural continuation of planning (the next step). **A task
+is executed ONLY inside the OPEN sprint and on that sprint's git branch** (Rule 3,
+Sprint Context); work requested outside a sprint is first planned into one. When
+a sprint is opened, its branch is created through the `gitflow` skill. Always
 use `rmp` to determine:
 1. Whether there is an open, not-yet-completed task to continue.
 2. Which task is next, and whether other pending tasks MUST be taken with it —
@@ -445,8 +449,9 @@ use `rmp` to determine:
 5. Always validate that the acceptance criteria are observed before closing a
    task.
 6. Ensure the task is closed with a short summary of what was done.
-7. After closing the task and before moving to the next one, commit through the
-   `gitflow` skill (Rule 3), explaining what was done.
+7. Commit the task's work on the sprint branch through the `gitflow` skill
+   (Rule 3), explaining what was done; the commit's hash closes the task in
+   `rmp` (`--commit-close`), and the skill pushes the sprint branch.
 8. Update the Knowledge Graph.
 
 Whenever possible, adapt the model and the model's effort level to the
@@ -532,7 +537,7 @@ your ability to understand the project is preserved.
 | ANY coordination or management of the `groadmap` roadmap (tasks, sprints, comments); ANY `rmp *` operation on it except `rmp graph *` | `roadmap-manager` — not `./bin/rmp` run for development or testing (Section 3, Mandatory Skills) |
 | ANY project knowledge (structure, components, files) or KG work (`rmp graph *`) | `knowledge-authority` (exclusive) |
 | Code implementation, refactor, performance | `go-developer` |
-| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill, following gitflow good practices; Rule 3 prevails — see Rule 3 |
+| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill, applying the gitflow model; Rule 3 prevails — see Rule 3 |
 | Git reads (`status`, `log`, `diff`, `show`) | Bash (`git`) directly |
 | Releases / version bump | `release-manager` |
 | Testing | `exhaustive-qa-engineer` |
@@ -552,8 +557,11 @@ your ability to understand the project is preserved.
 5. `"$GOLANGCI_LINT" run <changed packages>` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
 
 **The full sweep is reserved for three moments, and no others**: closing a
-sprint, pushing, and a specific request from the user. A release qualifies
-through the push that ships it; nothing else does. At those moments, run both:
+sprint (before the sprint branch is merged into `develop` and `develop` is
+pushed), pushing to `main` or pushing a tag, and a specific request from the
+user. A release qualifies through the push that ships it. The automatic push of
+the sprint branch at a task close is NOT one of these moments: it is preceded by
+the scoped gates above only. At those moments, run both:
 
 ```bash
 make check                    # every gate, whole project
@@ -570,38 +578,51 @@ practices of the gitflow branch-management methodology (Section 3, Mandatory
 Skills). Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`) stays
 direct, through Bash.
 
-The skill EXECUTES; it does not authorise. The gitflow good practices govern HOW
-a git write is carried out; the standards below govern WHAT may be done, and
-where the two differ, the standards below PREVAIL. The skill performs the
-operation it is given, and it NEVER creates a branch, a merge, or a push that the
-user did not ask for: no branch per sprint or per task, and no branch at all
-unless the user asks for one.
+The skill EXECUTES the gitflow branching model as its own instructions define
+it: the sprint branch, the task-close commit, the sprint-close merge, and the
+push policy. The standards below add the project's constraints; where the two
+differ, the standards below PREVAIL.
+
+#### Sprint Context
+
+**Every task is developed inside a sprint, and every sprint inside its own git
+branch.** There is no development outside that context — ad hoc work included.
+
+- **In `rmp`:** a task is executed ONLY while it is a member of the OPEN sprint.
+  Work requested outside any sprint is first recorded as a task and brought into
+  an OPEN sprint through the `roadmap-manager` skill (Section 3, Task/Sprint
+  Creation Flow), with the user's confirmation, BEFORE any work starts.
+- **In git:** each sprint has exactly ONE branch, `feature/<sprint-id>-<slug>`,
+  created from an up-to-date `develop` when the sprint is opened. Every task of
+  the sprint is committed there. No branch per task.
+- **Task close:** one commit on the sprint branch, in the format of Commit
+  Standards below with `Refs #<task-id>`. The skill verifies, against `rmp`,
+  that the current branch is the OPEN sprint's branch; on a mismatch it blocks
+  the commit and the work STOPS until the user decides.
+- **Sprint close:** after the full sweep (Rule 2), `develop` is merged into the
+  sprint branch, conflicts are resolved (real conflicts go to the user), and the
+  sprint branch is merged into `develop` with `--no-ff`. The sprint branch is
+  deleted ONLY with the user's explicit confirmation.
 
 #### Branching
 
-**NEVER create a git branch unless the user explicitly asks for one.**
-
-Commit directly to the current branch — normally `develop`, the integration
-branch where sprint work is committed. This is the default and it is not
-negotiable: it overrides any general-purpose agent-harness convention that says
-to open a branch before committing, or to avoid committing to the default
-branch. In this project, that convention does NOT apply.
-
-**Sprint work is NEVER committed to `main`.** When the current branch is `main`
-outside a release or hotfix flow the user asked for, STOP the work and ASK the
-user how to proceed.
-
-- Do NOT create a branch per task, per sprint, or per unit of work.
-- Do NOT create a branch merely because the current branch is `develop` or
-  `main`.
-- Create a branch ONLY when the user asks for one, in that user's own words.
-- The same applies to merges: do not open a branch and merge it back to
-  simulate compliance. That produces a pointless merge commit and is the very
-  behaviour this rule forbids.
+- **Nothing is committed directly to `develop` or `main`.** `develop` receives
+  work only through the sprint-close merge or the back-merge of `main`.
+- **Sprint work is NEVER committed to `main`.** When the current branch is
+  `main` outside a release or hotfix flow the user asked for, STOP the work and
+  ASK the user how to proceed.
+- No branch other than the sprint branch is created unless the user asks for
+  one, in that user's own words.
 - Release and hotfix flows — merging into the production branch `main`, tagging,
   and merging back into `develop` — run ONLY when the user asks for them.
 
-Pushing remains subject to the existing rule: push only when the user asks.
+#### Pushing
+
+The `gitflow` push policy applies:
+- **Automatic:** a new sprint branch (`git push -u`), each task-close commit,
+  and `develop` after the sprint-close merge or the back-merge of `main`.
+- **Confirm first:** every push to `main` and every tag push.
+- Every push is a fast-forward. Never `--force` or `--force-with-lease`.
 
 #### Commit Standards
 
@@ -672,9 +693,13 @@ global Claude Code configuration.
 | Running `./bin/rmp` as a subject of development or testing (E2E tests, development subagents, measurements) | Outside `roadmap-manager`, against throwaway roadmaps in an isolated `HOME` (Section 3, Mandatory Skills) |
 | Need a project fact (structure, components, files, where something lives) | `knowledge-authority` — query the KG BEFORE reading files |
 | ANY Knowledge Graph management (`rmp graph *`), including the update after a commit | `knowledge-authority`, EXCLUSIVELY |
-| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill; Rule 3 still governs WHAT may be done — confirm destructive ops with the user |
+| Git WRITES (commit, branch, merge, tag, push) | `gitflow` skill; Rule 3 adds the project's constraints — confirm destructive ops with the user |
 | Git reads (`status`, `log`, `diff`, `show`) | Bash (`git`) directly |
-| Committing work | `gitflow` skill, to the CURRENT branch — normally `develop`, NEVER `main` for sprint work. NEVER create a branch unless the user asked; release and hotfix flows ONLY on user request — see Rule 3 |
+| Work requested outside any sprint | Record it as a task and bring it into the OPEN sprint through `roadmap-manager`, with the user's confirmation, BEFORE any work (Rule 3, Sprint Context) |
+| Sprint opened | `gitflow` skill creates `feature/<sprint-id>-<slug>` from `develop` and pushes it (Rule 3) |
+| Committing work | `gitflow` skill, on the OPEN sprint's branch, one commit per task close, pushed automatically. NEVER directly on `develop` or `main`; release and hotfix flows ONLY on user request — see Rule 3 |
+| Sprint closed | Full sweep, then `gitflow` merges `develop` into the sprint branch and the sprint branch into `develop` (`--no-ff`) and pushes `develop`; branch deletion ONLY with the user's confirmation (Rule 3) |
+| Push to `main` or a tag push | Confirm with the user first (Rule 3, Pushing) |
 | Current branch is `main`, outside a release or hotfix flow the user asked for | STOP and ASK the user how to proceed (Rule 3, Branching) |
 | Release / version bump | `release-manager` |
 | Tests needed | `exhaustive-qa-engineer` |
@@ -693,7 +718,7 @@ global Claude Code configuration.
 | Evaluating tasks, in `rmp` or requested ad hoc | Assess their technical and functional proximity and the convergence of their objectives; where the proximity is verifiable or the objectives are complementary, combine them into ONE development effort, keeping the tasks separate (Section 0, Work Synergy and Work Convergence; Section 4) — by default, without being asked |
 | Carrying out any piece of work (code and tests, documentation, anything else) | Seek its internal synergies: do it all at once or, when the scope is very large, in blocks each handled as a whole (Section 0, Work Synergy) |
 | Implementing a task | Iterate: analyse, write ALL the code in bulk, test ONLY those changes (Section 0, Iterate) |
-| Choosing the test scope | Judge the extent each change requires; full sweep ONLY on sprint close, push, or user request (Rule 2) |
+| Choosing the test scope | Judge the extent each change requires; full sweep ONLY on sprint close, push to `main` or a tag, or user request (Rule 2) |
 | Developing several tasks in one pass | ONE specialised subagent for the whole group; analyse, build, and test it as a single task (Section 4) |
 | Pre-existing bug found | Report it and ASK the user how to proceed; NEVER fix it proactively |
 | Bug fixed (any) | Add regression test(s) in the SAME cycle so it cannot reappear |
@@ -738,7 +763,8 @@ global Claude Code configuration.
 - Aggregating tasks in a way that lowers the quality of the delivery, merging the
   records of grouped tasks, or recording synergy or convergence as an `rmp` task
 - Running the whole test suite where the change calls for a scoped one (the full
-  sweep is for the three moments in Rule 2: sprint close, push, user request)
+  sweep is for the three moments in Rule 2: sprint close, push to `main` or a
+  tag, user request)
 - Doing more than was asked, or extending scope the user did not request
 - Inventing tasks: recording or doing work that was not explicitly requested
 - Operations that do not serve the task's success — re-running checks already
@@ -756,9 +782,12 @@ global Claude Code configuration.
   or comments, or running any `rmp *` operation on it other than `rmp graph *` —
   outside the `roadmap-manager` skill
 - Committing without updating the Knowledge Graph
-- Creating a git branch, or running a release or hotfix flow, that the user did
-  not ask for (including a branch per task or per sprint, or branching just
-  because the current branch is `develop` or `main`)
+- Developing a task outside the OPEN sprint or outside that sprint's git branch,
+  or committing directly to `develop` (Rule 3, Sprint Context)
+- Creating a branch other than the sprint branch, or running a release or
+  hotfix flow, that the user did not ask for (including a branch per task)
+- Pushing to `main` or pushing a tag without the user's confirmation, or any
+  forced push
 - Committing sprint work to `main`, or continuing work on `main` outside a
   release or hotfix flow the user asked for (Rule 3, Branching)
 - Performing a git WRITE outside the `gitflow` skill (reads stay direct)
