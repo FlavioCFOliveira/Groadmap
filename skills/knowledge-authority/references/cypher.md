@@ -219,7 +219,7 @@ kg "SHOW CONSTRAINTS"
 
 # Index: single-property, node-only, hash -> EQUALITY ONLY
 kg "CREATE INDEX spec_path IF NOT EXISTS FOR (n:Spec) ON (n.path)"
-kg "DROP INDEX spec_path IF EXISTS"      # ignore indexesRemoved; confirm with SHOW
+kg "DROP INDEX spec_path IF EXISTS"      # indexesRemoved: 1 when one was dropped; no counters when none existed
 
 # Constraint: IS UNIQUE and IS NOT NULL are the only two kinds
 kg "CREATE CONSTRAINT spec_path_uniq IF NOT EXISTS FOR (n:Spec) REQUIRE n.path IS UNIQUE"

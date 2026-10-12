@@ -178,7 +178,7 @@ with exit 1**, most of them with a message naming what is not supported.
 |---|---|
 | `CREATE INDEX <n> FOR (x:L) ON (x.p)` | **supported** → `indexesAdded: 1` |
 | `CREATE INDEX <n> IF NOT EXISTS FOR …` | supported; no-op returns `{"ok":true}` with no counters |
-| `DROP INDEX <n>` / `DROP INDEX <n> IF EXISTS` | supported (but see the lying counter above) |
+| `DROP INDEX <n>` / `DROP INDEX <n> IF EXISTS` | **supported** → `indexesRemoved: 1`; `IF EXISTS` on an absent index returns `{"ok":true}` with no counters |
 | `SHOW INDEXES` | supported → columns `name, state, type, entityType, labelsOrTypes, properties` |
 | `… OPTIONS {indexType:'btree'}` | accepted → `type: btree`, but the planner used it for neither equality nor range (label scan) |
 | composite `ON (x.a, x.b)` | **rejected**, exit 1 — "composite indexes (multiple properties) are not supported" |
