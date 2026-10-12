@@ -108,6 +108,26 @@ func TestMemoryReleaser_ReleasesWhatAStatementLeftBehind(t *testing.T) {
 
 // TestMemoryReleaser_ConcurrentEndsDoNotStack: statements that end together
 // produce no concurrent collections, and none of them is lost.
+//
+// # Why the settle passes are part of the releaser under test (rmp task #602)
+//
+// The releaser reads the heap right after a release and keeps that reading as
+// its baseline. Ends that arrive concurrently race that reading: a statement
+// whose growth lands between the release and the reading, and whose end is
+// signalled after it, has its memory counted INTO the baseline, so the gate its
+// own end is measured against no longer sees it. Under -count=200 this left
+// 26 runs failing, with baselines of 1028 to 1348 MiB over a live heap of 4 MiB:
+// the fake heap here is independent of the process heap, so nothing from an
+// earlier iteration can reach it, and the residue is the race alone.
+//
+// Production never builds a releaser without its settle passes
+// (newMemoryReleaser), and those passes are what return exactly this memory:
+// every release schedules them, and each one releases unconditionally. The
+// test built the releaser without them, so it asserted a guarantee the
+// configuration production runs gives through a mechanism the test had removed.
+// The passes run here by hand, after every statement has ended, so the run is
+// deterministic, and they are inside the no-stacking assertion as well: a pass
+// that ran beside a statement-end collection would be counted.
 func TestMemoryReleaser_ConcurrentEndsDoNotStack(t *testing.T) {
 	var mu sync.Mutex
 	held, releases := uint64(0), 0
@@ -124,6 +144,14 @@ func TestMemoryReleaser_ConcurrentEndsDoNotStack(t *testing.T) {
 		inFlight--
 		mu.Unlock()
 	}
+	// Scheduling happens under the releaser's own lock, so the slice needs no
+	// lock of its own while the statements run; it is read after they finish.
+	var timers []*fakeTimer
+	r.afterFunc = func(d time.Duration, f func()) stopper {
+		ft := &fakeTimer{delay: d, fn: f}
+		timers = append(timers, ft)
+		return ft
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
@@ -137,15 +165,32 @@ func TestMemoryReleaser_ConcurrentEndsDoNotStack(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if maxInFlight != 1 {
-		t.Errorf("%d collections ran at once, want 1", maxInFlight)
-	}
 	if releases == 0 {
 		t.Fatal("no release ran")
 	}
+
+	// Every settle pass still scheduled when the last statement ended, and
+	// every pass those schedule in turn, runs now — in the order the timers
+	// would fire them.
+	pending := 0
+	for i := 0; i < len(timers); i++ {
+		if timers[i].stopped {
+			continue
+		}
+		pending++
+		timers[i].fn()
+	}
+	if pending == 0 {
+		t.Fatal("a release ran and scheduled no settle pass")
+	}
+
+	if maxInFlight != 1 {
+		t.Errorf("%d collections ran at once, want 1", maxInFlight)
+	}
 	// Whatever was owed when the last statement ended has been returned.
 	if held > 4<<20 {
-		t.Errorf("%d bytes still held after every statement ended, want the live heap", held)
+		t.Errorf("%d bytes still held after every statement ended and its settle passes ran, "+
+			"want the live heap", held)
 	}
 }
 
