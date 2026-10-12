@@ -124,6 +124,16 @@ def _run(cli_path, args, env_overrides=None):
     return r.returncode, stdout, stderr
 
 
+def _audit_by_id(test, audit_list):
+    """Return the `audit list` entries sorted by id.
+
+    `audit list` orders by performed_at only, so entries sharing a timestamp
+    may come back in either order; a snapshot sorted by id compares the same
+    set of entries regardless of that order.
+    """
+    return sorted(test.run_cmd_json(audit_list), key=lambda e: e["id"])
+
+
 # ===========================================================================
 # A. Banner invariants
 # ===========================================================================
@@ -518,7 +528,7 @@ class TestEmpiricalExitCodes:
         task_get = ["task", "get", "-r", self.roadmap, str(task_id)]
         audit_list = ["audit", "list", "-r", self.roadmap]
         task_before = self.test.run_cmd(task_get)[1]
-        audit_before = self.test.run_cmd(audit_list)[1]
+        audit_before = _audit_by_id(self.test, audit_list)
 
         code, out, err = _run(self.cli, ["task", "edit", "-r", self.roadmap, str(task_id)], env)
         assert code == 0, (
@@ -528,7 +538,7 @@ class TestEmpiricalExitCodes:
         assert out == "", f"task edit with no field must write nothing to stdout; got {out!r}"
         assert err == "", f"task edit with no field must write nothing to stderr; got {err!r}"
         assert self.test.run_cmd(task_get)[1] == task_before, "task edit with no field changed the task"
-        assert self.test.run_cmd(audit_list)[1] == audit_before, (
+        assert _audit_by_id(self.test, audit_list) == audit_before, (
             "task edit with no field wrote to the audit log")
 
         # The two snapshots can see a change: an edit that supplies one field
@@ -536,7 +546,7 @@ class TestEmpiricalExitCodes:
         # that never differ.
         self.test.run_cmd(["task", "edit", "-r", self.roadmap, str(task_id), "-p", "2"])
         assert self.test.run_cmd(task_get)[1] != task_before, "the task snapshot missed a real edit"
-        assert self.test.run_cmd(audit_list)[1] != audit_before, "the audit snapshot missed a real edit"
+        assert _audit_by_id(self.test, audit_list) != audit_before, "the audit snapshot missed a real edit"
 
         stated = "supplying no field at all changes nothing, and is accepted only when the named task exists"
         code, help_out, help_err = _run(self.cli, ["task", "edit", "--help"], env)
@@ -585,7 +595,7 @@ class TestEmpiricalExitCodes:
         )
         missing = task_id + 500
         audit_list = ["audit", "list", "-r", self.roadmap]
-        audit_before = self.test.run_cmd(audit_list)[1]
+        audit_before = _audit_by_id(self.test, audit_list)
         args = ["task", "edit", "-r", self.roadmap, str(missing)]
 
         code, out, err = _run(self.cli, args, env)
@@ -593,7 +603,7 @@ class TestEmpiricalExitCodes:
         assert code == 4, f"{args} must exit 4 (SPEC/COMMANDS.md § Edit Task); got {code}, stderr={err!r}"
         assert err.splitlines()[:1] == [want], f"{args}: stderr must open with {want!r}; got {err!r}"
         assert out == "", f"{args} must write nothing to stdout; got {out!r}"
-        assert self.test.run_cmd(audit_list)[1] == audit_before, f"{args} wrote to the audit log"
+        assert _audit_by_id(self.test, audit_list) == audit_before, f"{args} wrote to the audit log"
 
         field_code, _, field_err = _run(self.cli, args + ["-p", "3"], env)
         assert (field_code, field_err.splitlines()[:1]) == (4, [want]), (
@@ -603,7 +613,7 @@ class TestEmpiricalExitCodes:
         # an entry, so its equality above is not a comparison of outputs that
         # never differ.
         self.test.run_cmd(["task", "edit", "-r", self.roadmap, str(task_id), "-p", "3"])
-        assert self.test.run_cmd(audit_list)[1] != audit_before, "the audit snapshot missed a real edit"
+        assert _audit_by_id(self.test, audit_list) != audit_before, "the audit snapshot missed a real edit"
         print("✓ task edit with no field for a missing task → exit 4, the field path's line, nothing written")
 
     def test_task_edit_with_no_field_refuses_a_missing_roadmap_exit_4(self):

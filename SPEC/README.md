@@ -107,7 +107,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Business rules are enforced by application code; the schema uses no triggers | `DATABASE.md § Business Rules Are Enforced by Application Code` |
 | System design / modules | `ARCHITECTURE.md` |
 | Data directory layout | `ARCHITECTURE.md § Directory Structure` |
-| File and directory permissions (`0700`, `0600`, enforcement, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
+| File and directory permissions (`0700`, `0600`, enforcement, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement`; for the graph store's entries, `GRAPH.md § Persistence Layout`, rule 4 |
 | Filesystem safety (no symlink following, CWE-59) | `ARCHITECTURE.md § Security Guarantees` |
 | Filesystem layout migration (per-roadmap directories) | `ARCHITECTURE.md § Filesystem Layout Migration` |
 | Knowledge-graph store format migration (detection of the single-file write-ahead-log format, the backup taken before the engine's one-way conversion, its location, name, modes and failure, its removal once the conversion succeeds, and the manual restore available only while a backup is kept) | `GRAPH.md § Graph Store Format Migration` |
@@ -196,7 +196,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
 | Help tokens, token positions, and the flag values that never ask for help | `HELP.md § Help tokens` |
 | The exit codes a subcommand help lists, their agreement with the subcommand's contract entry, and the gate that holds it | `HELP.md § Agreement with the contract` |
-| Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
+| Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement`; for the graph store's entries (`0700` directories, `0600` files, the server's umask, the repair before the open), `GRAPH.md § Persistence Layout`, rule 4 |
 | Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
 | Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |
 | Published field names in validation messages (field to published name, and when a message names the flag instead) | `COMMANDS.md § Published Field Names in Validation Messages` |
@@ -236,7 +236,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
 | Knowledge graph feature, persistence layout, multi-layer conventions | `GRAPH.md` |
 | Web interface (server behaviour, routes, pages, security model) | `WEB.md` |
-| Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
+| Graph store directory (`graph/` subdir) and the modes of every entry in it | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
 | Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Query plan JSON (the recursive plan node, and which of its figures an `EXPLAIN` and a `PROFILE` each publish) | `DATA_FORMATS.md § Graph Plan Node` |
 | Write counters JSON (the eleven published keys, the rule that omits a zero, and the rule that omits the whole block for a statement that changed nothing) | `DATA_FORMATS.md § Graph Query Counters` |
@@ -288,7 +288,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Per-roadmap home directory: `~/.roadmaps/<name>/` with permissions `0700`. The directory name is the roadmap name and is the container for all files the application uses for that roadmap.
 - Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600`, created with mode `0600` from the outset (no umask-derived window) and re-applied and re-verified every time `rmp` opens the database. A database that cannot be brought to `0600` fails the command. The SQLite sidecars `project.db-wal` and `project.db-shm` live alongside and use the same `0600` permissions, restricted opportunistically rather than as a hard guarantee. See `ARCHITECTURE.md § Open-Time Permission Enforcement`.
 - Neither the data directory, nor any roadmap home directory, nor `project.db` or any of its `-wal`, `-shm` and `-journal` companions may be a symbolic link; `rmp` refuses to follow a symlink when creating, opening, or migrating a roadmap directory or database (CWE-59). See `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Security Guarantees`.
-- Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created by `rmp graph serve` on first use. See `GRAPH.md § Persistence Layout`.
+- Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created by `rmp graph serve` on first use. Every directory below it is `0700` and every file below it `0600`, from creation, under the umask `0077` the server sets, and repaired before the store is opened. See `GRAPH.md § Persistence Layout`, rule 4.
 - Per-roadmap graph server socket: `~/.roadmaps/<name>/graph.sock` with permissions `0600`, present only while `rmp graph serve` is running for that roadmap. See `GRAPH.md § Socket Path and Permissions`.
 - Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.
 

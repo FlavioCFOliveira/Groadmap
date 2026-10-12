@@ -122,11 +122,7 @@ func createAtomicityTasks(t *testing.T, database *db.DB, roadmap string) []int {
 		t.Fatalf("seeded 3 tasks, found %d", len(tasks))
 	}
 
-	ids := make([]int, 0, len(tasks))
-	for i := range tasks {
-		ids = append(ids, tasks[i].ID)
-	}
-	return ids
+	return taskIDsInIDOrder(tasks)
 }
 
 // createAtomicitySprint seeds one PENDING sprint through `sprint create` and

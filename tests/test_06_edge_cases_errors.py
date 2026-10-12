@@ -509,7 +509,9 @@ class TestEdgeCasesErrors:
 
         # No phantom audit rows: the log reads back exactly as it did before.
         audit_after = self.test.run_cmd_json(["audit", "list", "-r", roadmap])
-        assert audit_after == audit_before, (
+        # Compared by id: `audit list` orders by performed_at only, so rows
+        # sharing a timestamp may come back in either order.
+        assert sorted(audit_after, key=lambda e: e["id"]) == sorted(audit_before, key=lambda e: e["id"]), (
             f"the refused batch changed the audit log; a fail-fast refusal writes no audit "
             f"entry.\n  before: {audit_before!r}\n  after:  {audit_after!r}")
 

@@ -852,8 +852,97 @@ Rules:
    transaction, because the snapshot is produced by the checkpoint and the
    checkpoint has never run. Such a directory holds `write.lock`, and it holds that
    only once a statement has actually opened the store.
-4. The graph directory uses permissions `0700`, consistent with the roadmap home
-   directory and the data directory (see `ARCHITECTURE.md § Directory Structure`).
+4. **The graph directory and every directory below it have mode `0700`, and
+   every file below it has mode `0600`, from the instant each is created.** The
+   graph directory is `0700`, consistent with the roadmap home directory and the
+   data directory (see `ARCHITECTURE.md § Directory Structure`), and the rule
+   reaches every entry below it at any depth: `write.lock`, every entry the engine
+   creates — the write-ahead log's segment directory, its segments, the
+   single-file log or its stub, the control file, the engine's own lock file,
+   `snapshot/` and everything in it — and every directory a checkpoint creates,
+   fills, renames or removes while it runs, the staging directory it writes a
+   snapshot into before renaming it to `snapshot/` among them. This rule is the
+   canonical statement of the modes of the graph store;
+   `ARCHITECTURE.md § Open-Time Permission Enforcement` is canonical for the
+   roadmap database and does not govern `graph/`.
+
+   **Why Groadmap enforces the modes and not the engine.** The engine chooses the
+   mode of every entry it creates. It creates its files owner-only, but it creates
+   some of its directories — the snapshot directory, the staging directory a
+   checkpoint publishes as `snapshot/`, and the index directory inside a snapshot
+   — at permission bits that only the process umask narrows, so under a common
+   umask they are readable and traversable by the user's group. The two outer
+   fences, the graph directory and the roadmap home, both `0700`, keep every
+   other account out of such a directory whatever its own mode is; the modes of
+   this rule are the fence that still holds where an outer one has been lost, as
+   the `0600` on `project.db` is for the roadmap database. Groadmap adapts to the
+   engine's choice rather than depending on a change to it.
+
+   **The modes hold at creation, through the server's umask.** On a platform with
+   POSIX file modes, `rmp graph serve` sets its process umask to `0077` before it
+   creates anything ([Server Startup](#server-startup), step 1) and keeps it for
+   the life of the process. Every mode the engine asks for is then narrowed by the
+   kernel in the same system call that creates the entry, so a directory below
+   `graph/` is `0700` or narrower, and a file `0600` or narrower, from its first
+   instant, with no interval in which it is wider. The umask is the mechanism
+   because it is the only one that covers an entry the engine creates between two
+   checkpoints, or inside a checkpoint before it publishes, as fully as one
+   present when the server starts: a new write-ahead-log segment, a checkpoint's
+   staging directory and the files written into it, the `snapshot/` it becomes,
+   and every entry the conversion of
+   [Graph Store Format Migration](#graph-store-format-migration) creates. A pass
+   that changed modes after the store is opened and after each checkpoint does
+   **not** meet this rule: it leaves every entry the engine creates at the
+   engine's mode from its creation until the pass reaches it, and a checkpoint
+   creates and fills its staging directory before it publishes it.
+
+   **The umask is process-wide, and that is acceptable for this process.** It
+   narrows everything `rmp graph serve` creates, not only the engine's entries,
+   and every one of those is owner-only by its own rule: the graph directory and
+   `write.lock` (this rule), the socket and the staging directory it is bound in
+   ([Socket Path and Permissions](#socket-path-and-permissions), rules 3 and 8),
+   and a format-migration backup
+   ([Graph Store Format Migration](#graph-store-format-migration), rule 4). The
+   server writes no other file; its diagnostics go to stderr. The umask therefore
+   narrows nothing the server is required to create at a wider mode, and it
+   replaces none of those rules: each of them still sets its own mode explicitly,
+   so each holds under any umask the server is started with. An entry that a
+   later rule requires the server to create at a mode wider than owner-only
+   contradicts this rule, which must be changed first.
+
+   **An entry that is already wider is repaired before the store is opened.** The
+   umask governs only what the server creates. A store can carry a wider entry
+   that it did not create — one written by a build of `rmp` that predates this
+   rule, by an engine before a format conversion, or restored by hand from a
+   backup or an archive — and the engine replaces such an entry, if at all, only
+   when a later checkpoint rewrites it. Therefore, on a platform with POSIX file
+   modes, `rmp graph serve` walks `graph/`, the directory itself included, after
+   it holds the store's exclusive lock and before the backup and the open
+   ([Server Startup](#server-startup), step 6), and brings every directory to
+   `0700` and every regular file to `0600`:
+   - it reads each entry's mode first, and changes nothing on an entry already at
+     its mode;
+   - it never follows a symbolic link, and it changes the mode of no entry that
+     is neither a directory nor a regular file; such an entry does not fail this
+     walk, and what it means to the backup and to the open is decided where those
+     are specified;
+   - it reads the mode again after a change, and an entry whose mode it cannot
+     change, or that is still not at its mode after the change, fails the start
+     before the backup and the open, as a store that cannot be opened:
+     `utils.ErrGraphStore`, exit code 1, with the open-or-recovery line of
+     `COMMANDS.md § Serve Error Cases`. A store whose entries cannot be made
+     private is not served.
+
+   The walk runs while the lock is held and before the engine opens the store, so
+   no other process creates, renames or removes an entry of `graph/` while it
+   runs.
+
+   **On Windows neither mechanism applies.** Windows has no process umask, and a
+   file's mode there toggles only its read-only attribute and grants and refuses
+   no account anything. Access to the graph store on Windows is governed by the
+   access-control list its entries inherit from the roadmap home directory, as it
+   is for the socket ([Socket Path and Permissions](#socket-path-and-permissions),
+   rule 3).
 5. The internal file names and on-disk format inside `graph/`, including the
    layout and contents of `snapshot/` and `wal.d/` and the format of `wal`,
    `wal.control`, `manifest.json`, `tombstones.bin`, `constraints.bin`, and
@@ -989,9 +1078,10 @@ Rules:
    except `write.lock`: that file carries no content, this server holds its lock,
    and a restored store does not need it (rule 12). Every directory of the backup,
    the backup itself included, is created with mode `0700`, and every file with
-   mode `0600`, whatever mode the entry it copies carries; the engine creates some
-   of its own subdirectories wider than `0700`, and a copy is not allowed to carry
-   that further. Only regular files and directories are copied. An entry of any
+   mode `0600`, whatever mode the entry it copies carries; the engine chooses the
+   modes of the entries it creates, some of its directories are wider than `0700`
+   under a common umask, and a copy sets its own modes rather than inherit any
+   ([Persistence Layout](#persistence-layout), rule 4). Only regular files and directories are copied. An entry of any
    other type — a symbolic link, a socket, a device, a named pipe — fails the
    backup (rule 7): a link is never followed and never copied, so the backup can
    neither read nor reproduce anything outside `graph/`.
@@ -2779,7 +2869,7 @@ graph subcommand can reach would be incomplete without it.
 | A label, relationship type or property key the statement writes is longer than the engine's token limit, or another field it writes is longer than a durable format can carry, and the engine refuses the statement (see [Field Length Limits](#field-length-limits)) | `utils.ErrGraphEngine` | 1 |
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
 | Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |
-| `graph serve` cannot open, recover, read, or write the graph store, or cannot create its directory (I/O or corruption) | `utils.ErrGraphStore` | 1 |
+| `graph serve` cannot open, recover, read, or write the graph store, or cannot create its directory (I/O or corruption), or cannot bring the graph directory or an entry below it to the mode `0700` or `0600` it requires (see [Persistence Layout](#persistence-layout), rule 4) | `utils.ErrGraphStore` | 1 |
 | `graph serve` finds the graph store in the single-file write-ahead-log format and cannot complete the backup that must precede its conversion; the store is neither opened nor converted (see [Graph Store Format Migration](#graph-store-format-migration), rule 7) | `utils.ErrGraphStore` | 1 |
 | `graph serve` cannot bring the data directory `~/.roadmaps/` or the roadmap home directory `~/.roadmaps/<name>/` to `0700`, or cannot verify it (see [Server Startup](#server-startup), step 1) | `utils.ErrIO` | 1 |
 | `graph serve` finds the graph store's exclusive lock still held when the bounded wait is exhausted, so another server is likely already running for the roadmap (see [Lock Contention](#lock-contention), rule 3) | `utils.ErrGraphStore` | 1 |
@@ -3277,6 +3367,14 @@ each step is what makes a later one safe.
    the directory is created only once both refusals have been passed, which is
    why they are the last actions of this step and not the first.
 
+   **The process umask is set to `0077` first.** On a platform with POSIX file
+   modes, before anything else in this step, `rmp graph serve` sets its process
+   umask to `0077`, and it never changes it afterwards. Setting it writes nothing
+   to disk, so a server that cannot start still touches nothing; setting it first
+   is what places every entry the server and its engine create later, at every
+   step and while it serves, under it.
+   [Persistence Layout](#persistence-layout), rule 4, is canonical for why.
+
    **The roadmap home is held to `0700` by the server exactly as by every other
    entry point.** Once both refusals have been passed, `rmp graph serve`
    re-applies `0700` to the data directory `~/.roadmaps/` and to the roadmap home
@@ -3346,7 +3444,11 @@ each step is what makes a later one safe.
    store and construct the engine**, through the one lifecycle
    `internal/graphstore` owns, so the server is on the same single path as the
    other two surfaces (see
-   [Engine Constructor by Path](#engine-constructor-by-path)). The backup, when
+   [Engine Constructor by Path](#engine-constructor-by-path)). On a platform with
+   POSIX file modes, the step begins by bringing the graph directory and every
+   entry below it to the modes [Persistence Layout](#persistence-layout), rule 4,
+   requires; an entry that cannot be brought to its mode ends the start before
+   the backup and the open, as a store that cannot be opened. The backup, when
    one is due, is complete and durable before the open begins; a backup that
    fails ends the start before the store is opened or converted; and a backup
    whose conversion succeeded is removed before step 7, while a failed conversion
@@ -4930,13 +5032,98 @@ ends ([Peak Resident Memory](#peak-resident-memory)).
    of the heaviest statement it has run. When other statements are still in flight,
    only the memory of the statements that have ended is owed back; the memory of
    the ones still running is theirs.
-4. **No figure is published.** The requirement is that the release happens, at
-   the end of every statement; it states no resident-memory threshold, because
-   this project keeps no performance-measurement tests and nothing would re-derive
-   such a figure (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
+
+   **A statement no release overlapped is released when, and only when, the
+   heap has grown past a gate.** The heap the server reads is the memory the
+   runtime holds and has not returned to the operating system: the bytes in
+   live and dead objects, the free spans not yet released, and the unused part
+   of the spans in use. The baseline is that reading taken right after the last
+   release the server made, and zero before its first. The gate is a quarter of
+   the baseline or 16 MiB, whichever is larger. At the end of a statement that
+   no release overlapped, the server releases when the heap exceeds the
+   baseline by more than the gate, and makes no release otherwise; a growth
+   equal to the gate makes none. The gate exists because each release is a full
+   collection followed by a return of all free memory to the operating system:
+   without it, every statement that allocated almost nothing would still pay a
+   collection at its end. Its proportional term keeps a stream of small
+   statements beside a large live heap from paying one each.
+
+   **Releases continue after the outcome has been written.** The engine frees a
+   statement's structures in stages after the outcome has been written, so the
+   memory a release finds at a statement's end is not yet all of it. Every
+   release made at a statement's end is therefore followed by settle passes,
+   whatever the heap reading says: the first pass runs 250 milliseconds after
+   that release and each later one 250 milliseconds after the previous; each
+   pass releases and takes a new baseline; at least four passes run, a fifth or
+   later pass runs only when the previous pass returned at least 16 MiB, and no
+   more than eight run. A release at a later statement's end restarts the
+   passes from the first. No pass runs once the server's listener has closed.
+
+   **Ownership under overlap is decided by the statement's lifetime, not by how
+   the heap grew.** A release can return only memory that is already free, so a
+   release made while another statement is running leaves that statement's live
+   memory in place, and from then on the heap gives no sign that this memory
+   belongs to a statement: when that statement ends, its memory becomes free
+   without the heap growing at all. A server that judged what is owed by the
+   heap's growth since its last release would therefore keep that memory for
+   as long as it stays idle. The server MUST instead attribute the debt as
+   follows:
+
+   - **A statement that a release overlapped is released at its own end,
+     unconditionally: the gate does not apply to it.** A release overlaps a statement when the server makes it
+     at any instant between the statement's start and its end, whatever
+     occasioned it: another statement's end, a pass that follows a release, or
+     the end of a checkpoint fold. At the end of such a
+     statement the server returns freed memory to the operating system whatever
+     the heap has done since the last release, and then goes on returning it on
+     the same terms as after any other release at a statement's end, so that the
+     memory the engine frees after the outcome has been written is returned too.
+   - **The start MAY be taken early, and never late.** The server MAY take a
+     statement's start to be the end of the previous statement on the same
+     connection or, for a connection's first statement, the moment the server
+     accepted that connection. An earlier start can only make the server treat
+     more statements as overlapped, never fewer, so it never withholds a release
+     that is owed. A start taken later than the moment the statement began to
+     accumulate memory is not permitted, because the memory accumulated before it
+     could then be counted into a release the statement is not seen to overlap.
+   - **A connection that closes before the statement's outcome has been written
+     ends that statement at the close.** The statement is owed exactly what it
+     would have been owed had its outcome been written: released at the close,
+     unconditionally, when a release overlapped it.
+   - **A checkpoint fold the server runs while it serves is owed on the same
+     terms.** Its lifetime starts when the fold starts and ends when the fold
+     ends ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process)),
+     and a fold that a release overlapped is released at its end unconditionally.
+
+   **The price is accepted.** Each release is a full collection, whose cost grows
+   with the memory still live when it runs. Under sustained concurrent load
+   nearly every statement is overlapped, so nearly every statement's end pays a
+   collection that also traverses the live memory of the statements still
+   running. That is the cost of returning a statement's memory when the statement
+   ends rather than when the server next happens to be quiet, and this
+   specification chooses it.
+4. **No figure is published.** The requirement is that the release is decided
+   at the end of every statement: made unconditionally when a release overlapped
+   the statement, and otherwise made exactly when the heap has grown past the
+   gate rule 3 states. It states no resident-memory threshold, because this
+   project keeps no performance-measurement tests and nothing would re-derive
+   such a figure (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`);
+   the gate's 16 MiB and quarter, and the settle passes' interval and counts, are
+   parameters this section fixes, not measured thresholds of resident memory.
    It is verified by the property, not by a measurement: that the statement's
    structures are unreachable once it has ended, and that the server returns freed
    memory to the operating system on that path, on every outcome listed above.
+   For the gate the property is that a non-overlapped end whose heap growth does
+   not exceed the gate makes no release and one whose growth exceeds it makes
+   one ([Acceptance Criteria](#acceptance-criteria), criterion 100).
+   For overlap the property is that a statement a release overlapped is released
+   at its own end, however little the heap grew after that release, whether its
+   start was taken when it began or at one of the earlier instants rule 3
+   permits, whether its outcome was written or its connection closed first, and
+   equally for a checkpoint fold. That property is verified deterministically,
+   against a model of the heap and of the timer that paces the releases, by
+   counting the releases the server makes; no resident memory is read
+   ([Acceptance Criteria](#acceptance-criteria), criteria 96 to 99).
 5. **What it does not bound.** The requirement bounds how long a statement's memory
    is held, not how much a statement may use while it runs. The peak cost of one
    statement, and the decision not to bound it from Groadmap's side, are unchanged
@@ -5964,20 +6151,29 @@ what is compared is a store no process holds open.
     would fail on a correct implementation, and one that checked only that each
     answered would pass on two independent engines.
 79. **The socket is never connectable under a mode wider than `0600`, and the
-    criterion MUST observe its whole startup rather than its final mode.** On a
-    platform with POSIX file modes (see
+    criterion MUST observe the whole bind rather than its final mode, at the
+    level of the bind itself.** On a platform with POSIX file modes (see
     [Socket Path and Permissions](#socket-path-and-permissions), rule 3, for
-    Windows), `rmp graph serve` is started under a umask of `0000` with `--socket` naming a
-    path in a directory every account can traverse and write. From before the
-    server is started until it announces the socket, a second account attempts to
-    connect to that path repeatedly, and the socket file's mode is observed from
-    the instant the file first appears. No attempt by the second account ever
-    succeeds, and no observation of the file finds a mode other than `0600`. A
-    check that reads the mode only after the announcement passes an
-    implementation that binds under the umask and narrows the mode afterwards,
-    which is the implementation this criterion exists to fail (see
-    [Socket Path and Permissions](#socket-path-and-permissions), rule 3, and
-    [Server Startup](#server-startup), step 5).
+    Windows), a test drives the server's bind step
+    ([Server Startup](#server-startup), step 5) directly, in its own process and
+    not through `rmp graph serve`, after setting that process's umask to `0000`
+    itself, with the target path in a directory every account can traverse and
+    write. From before the bind begins until it returns the listener, the target
+    path is observed repeatedly, and the socket file's mode is read from the
+    instant the file first appears there. No observation finds the file at a mode
+    other than `0600`, and the listener accepts a connection through the target
+    path once the bind has returned. A check that reads the mode only after the
+    bind has returned passes an implementation that binds under the umask and
+    narrows the mode afterwards, which is the implementation this criterion
+    exists to fail. The criterion is stated at this level because `rmp graph
+    serve` sets its own umask to `0077` before it binds
+    ([Persistence Layout](#persistence-layout), rule 4): that umask is a second,
+    independent layer, and a criterion run through the server would pass under it
+    whatever the bind does, so it could no longer tell the two implementations
+    apart. Rule 3 of [Socket Path and Permissions](#socket-path-and-permissions)
+    requires the bind to hold under every umask, so each layer is held to the
+    rule without the other (see
+    [Socket Path and Permissions](#socket-path-and-permissions), rules 3 and 8).
 80. **`rmp graph serve` brings an existing roadmap home to `0700`.** Given an
     existing roadmap whose home directory `~/.roadmaps/<roadmap>/` and data
     directory `~/.roadmaps/` are both at mode `0755`, `rmp graph serve -r
@@ -6159,6 +6355,100 @@ what is compared is a store no process holds open.
     [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
     rule 4, and [Graph Store Format Migration](#graph-store-format-migration),
     rule 11).
+94. **Every entry of the graph store is owner-only from its creation through the
+    first checkpoint, and the criterion MUST observe the store while the server
+    runs and while it stops, not only afterwards.** On a platform with POSIX file
+    modes (see [Persistence Layout](#persistence-layout), rule 4, for Windows),
+    `rmp graph serve` is started under a umask of `0000` for a roadmap that has no
+    graph. Through `rmp graph client` an index is declared over a label, nodes and
+    relationships carrying that label and an indexed property are created, and one
+    node is deleted, so that the first checkpoint writes the index directory and
+    the optional snapshot components; the server is then stopped with `SIGTERM`.
+    From the server's announcement until it exits, every entry below
+    `~/.roadmaps/<roadmap>/graph/` is listed and its mode read repeatedly, and,
+    after it exits, once more. `snapshot/manifest.json` and `snapshot/` holding at
+    least one subdirectory exist after the exit, proving that the checkpoint ran
+    and created a directory below `snapshot/`; and no observation, while the
+    server ran, while it stopped or afterwards, finds the graph directory or a
+    directory below it at a mode other than `0700`, or a regular file below it at
+    a mode other than `0600`. A criterion that read the modes only after the exit
+    passes an implementation that narrows them after each checkpoint, which is the
+    implementation this criterion exists to fail; one that ran the server under
+    a narrow umask passes an implementation that sets none.
+95. **A converted store, and any entry wider than its mode that a store carries
+    when the server starts, is owner-only before the store is opened.** On a
+    platform with POSIX file modes, given the fixture of criterion 88 with its
+    `snapshot/` directory and one directory below it at mode `0750` and one
+    regular file below `snapshot/` at mode `0644`, `rmp graph serve` is started
+    under a umask of `0000`, answers `MATCH (n) RETURN count(n)` with the count the
+    fixture holds, and is stopped with `SIGTERM`. While it serves, and again after
+    it exits, the graph directory and every directory below it are at mode `0700`
+    and every regular file below it at mode `0600`, the write-ahead log's control
+    file and segment directory created by the conversion included; the roadmap
+    home holds no `graph-backup-` directory. A criterion that asserted the modes
+    only after the exit passes an implementation that leaves a wider entry in
+    place until a checkpoint happens to rewrite it (see
+    [Persistence Layout](#persistence-layout), rule 4, and
+    [Server Startup](#server-startup), step 6).
+
+Criteria 96 to 100 run no Cypher statement and start no server. They drive the
+server's memory release directly, with the heap replaced by a model in which the
+memory the runtime holds is the sum of live memory and freed memory, a release
+returns the freed memory and is counted, and the timer that paces the releases
+fires each scheduled call once, when the test chooses. They count releases and
+read the model; they measure nothing
+(`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
+
+96. **A statement that another statement's release overlapped has its memory
+    returned at its own end.** The model starts at an idle server's live memory.
+    Statement A starts and its live memory grows by an amount many times that
+    idle figure; statement B starts, frees a smaller amount, and ends while A is
+    still live, and the release B's end makes, and every pass that follows it, run
+    while A is still live. A then ends: its live memory becomes freed memory and
+    the memory the runtime holds does not grow. At A's end the server makes at
+    least one release, and after the passes A's end schedules have run, the model
+    holds no freed memory. The criterion MUST place A's growth before B's release
+    and A's end after the last pass B's release scheduled: a criterion that let A
+    end while those passes were still running passes an implementation that
+    judges what is owed by the heap's growth, which is the implementation this
+    criterion exists to fail (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rules 3
+    and 4).
+97. **A start taken at the previous end on the connection, or at the
+    connection's acceptance, is honoured.** On one connection, statement A1 ends,
+    then a release made for another connection's statement runs, and only then
+    does statement A2 on the first connection start growing its live memory; on a
+    second, newly accepted connection, a release made for a third connection's
+    statement runs before that connection's first statement grows its live memory.
+    Each of the two statements, when it ends after the last pass that release
+    scheduled, is released at its end and leaves the model holding no freed
+    memory (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rule 3).
+98. **A connection that closes before the statement's outcome has been written
+    ends the statement, and an overlapped one is released at the close.** As in
+    criterion 96, except that A's connection closes while A is live and no
+    outcome is written for A: the close makes at least one release, and after the
+    passes it schedules have run, the model holds no freed memory (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rule 3).
+99. **A checkpoint fold that a release overlapped is released at its end.** As in
+    criterion 96, with a checkpoint fold in the place of A: the fold starts and
+    its live memory grows, a statement's release and its passes run while the fold
+    is still live, and the fold then ends. At the fold's end the server makes at
+    least one release, and after the passes it schedules have run, the model
+    holds no freed memory (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rule 3).
+100. **A statement no release overlapped is released exactly when the heap has
+    grown past the gate.** With no release between a statement's start and its
+    end, and the model's baseline set by a release, the criterion ends the
+    statement twice for each of two baselines: one below 64 MiB, where the gate
+    is 16 MiB, and one well above it and a multiple of four bytes, where the
+    gate is a quarter of the baseline. When the memory the model holds exceeds the baseline by exactly the
+    gate, the statement's end makes no release and schedules no settle pass; when
+    it exceeds the baseline by the gate plus one byte, the end makes one release
+    and schedules the settle passes. A criterion that used one baseline only
+    passes an implementation that applies one of the two terms and not the other
+    (see [Statement-Scoped Memory Release](#statement-scoped-memory-release),
+    rules 3 and 4).
 
 
 ## See Also

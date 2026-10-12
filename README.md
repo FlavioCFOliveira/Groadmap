@@ -797,7 +797,7 @@ When `--query` is absent, the statement is read from standard input under a boun
 
 **Where is the graph stored?**
 
-Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created by `rmp graph serve`. Removing the roadmap deletes its graph along with the rest of the home directory.
+Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created by `rmp graph serve`. On a platform with POSIX file modes every directory below it is `0700` and every file `0600` from the moment it is created, because `rmp graph serve` runs under a umask of `0077`, and an entry already wider when the server starts is brought to its mode before the store is opened. Removing the roadmap deletes its graph along with the rest of the home directory.
 
 ---
 
