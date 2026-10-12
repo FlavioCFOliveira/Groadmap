@@ -11,6 +11,7 @@
   - [Engine Constructor by Path](#engine-constructor-by-path)
   - [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)
 - [Persistence Layout](#persistence-layout)
+- [Graph Store Format Migration](#graph-store-format-migration)
 - [Multi-Layer Modelling Conventions](#multi-layer-modelling-conventions)
   - [Node Key Uniqueness](#node-key-uniqueness)
 - [What Groadmap Does Not Check](#what-groadmap-does-not-check)
@@ -185,9 +186,9 @@ rule 3). Neither examines what a statement does.
     [Schema Management](#schema-management).
 12. A statement runs under a time budget, enforced by the server that executes it
     and carrying one value for every surface. A statement that exhausts it is
-    cancelled, its transaction rolls back whole (with the one exception
-    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9, describes), no checkpoint runs, and the caller fails with `utils.ErrGraphEngine` (exit code 1); no new exit code is
-    introduced. What the budget does to a statement is specified in
+    cancelled, its transaction rolls back whole, no checkpoint runs on its
+    account, and the caller fails with `utils.ErrGraphEngine` (exit code 1); no
+    new exit code is introduced. What the budget does to a statement is specified in
     [Statement Time Budget](#statement-time-budget), the bound the server applies
     in [Server Options](#server-options), and
     `WEB.md § Graph Query Time Budget` is canonical for the value.
@@ -273,26 +274,42 @@ changes can land without a major-version bump. The following residual risks rema
    that this specification depends on.
 2. **On-disk format change across pre-1.0 releases.** The store's snapshot and
    write-ahead-log format may change between `0.y` releases, which could make a graph
-   written by one release unreadable by a later one. There is no graph-format
-   migration mechanism in Groadmap in this version: Groadmap cannot convert a graph
-   directory that the pinned engine refuses to open, so it depends entirely on the
-   engine reading the format its predecessor wrote. An on-disk-format change that the
-   newer engine does not read would therefore make an existing graph unreadable.
+   written by one release unreadable by a later one, or a graph the later release has
+   opened unreadable by the earlier one. Groadmap converts no graph format itself: it
+   depends entirely on the engine reading the format its predecessor wrote, and on
+   the engine performing whatever conversion a new format needs. An on-disk-format
+   change that the newer engine does not read would make an existing graph
+   unreadable, and nothing in Groadmap could repair it.
 
-   A format change of this kind has already occurred, and the engine absorbed it. The
-   snapshot's `labels.bin` component moved from format version 1 to format version 2:
-   the edge record gained a slot field, so that a relationship type on parallel edges
-   survives a checkpoint. Reading format version 1 is retained upstream as the
-   deliberate upgrade path, so a graph directory written by the earlier release opens
-   unchanged under the later one. The migration is **one-way**: because every
-   successful Groadmap write checkpoints synchronously (see
-   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), the first
-   write after the upgrade rewrites `labels.bin` in place at format version 2, and the
-   older release does not read format version 2. Reverting to an earlier pinned engine
-   after a write is therefore not an available recovery step. Naming this component
-   records the evidence behind mitigation 4 below; the internal layout of the graph
-   directory remains owned by GoGraph and is not specified by Groadmap (see
-   [Persistence Layout](#persistence-layout), rule 5).
+   Two format changes of this kind have occurred, and the engine absorbed both. In
+   the first, the snapshot's `labels.bin` component moved from format version 1 to
+   format version 2: the edge record gained a slot field, so that a relationship type
+   on parallel edges survives a checkpoint. The engine kept reading format version 1
+   as the deliberate upgrade path, and the first fold after the upgrade rewrote the
+   component at format version 2, which the older release does not read.
+
+   In the second, the write-ahead log changed from a **single file** to a
+   **segmented log**: a control file carrying the store's identity and the position
+   from which the log is retained, numbered segment files, and frames that carry
+   their own logical position. The snapshot manifest moved to a version the older
+   release refuses. The engine performs the conversion itself, one way, the first
+   time it opens the store for writing: it writes the control file, seals the
+   single-file log with a record the older release cannot decode — or, where that
+   file held no history, replaces it with a stub of that one record — and continues
+   in segments; a sealed file that held history is replaced by the stub at the first
+   fold afterwards. From that first open on, the older release refuses the
+   directory, even when no statement has been run against it. This is
+   the one format change for which Groadmap takes a backup before the conversion,
+   so that a conversion that fails leaves the store as it was, restorable by hand
+   for the earlier engine; a conversion that succeeds removes the backup, and
+   [Graph Store Format Migration](#graph-store-format-migration) is canonical for
+   the backup, the detection that triggers it, its removal, and the restore.
+
+   Both migrations are **one-way**. Reverting to an earlier pinned engine after a
+   successful conversion is not an available recovery step at all. Naming
+   these components records the evidence behind mitigation 4 below; the internal
+   layout of the graph directory remains owned by GoGraph and is not specified by
+   Groadmap beyond what [Persistence Layout](#persistence-layout), rule 5, names.
 
 3. **A widened Cypher statement surface.** `rmp graph client` runs whatever the
    engine accepts, so the set of statements the engine accepts is Groadmap's
@@ -335,27 +352,33 @@ Mitigations required by this specification:
    **The re-validation MUST cover the relationship behaviours recorded in
    [What Groadmap Does Not Check](#what-groadmap-does-not-check), and MUST cover
    each of them in both directions.** Those items state measured properties of the
-   pinned engine rather than properties of Cypher, and items 4 and 8 each assert a
-   boundary that an upstream fix moves: an assertion that only checks the losing
-   side is satisfied by an engine in which the working side has regressed to match
-   it. For item 4: that a relationship property removal through a pattern that
-   walks against the stored arrow is still dropped, **and** that an assignment
-   through the same pattern still persists and a `DELETE` over it still removes
-   every relationship it matched. For item 8: that a write through a relationship
-   bound by a `MERGE` that matched one of several relationships joining the same
-   two nodes in one direction still reaches another relationship, and that a
-   `DELETE` through a relationship bound by `CREATE`, or by a `MERGE` that created
-   it, on a pair a relationship already joined in that direction still deletes a
-   pre-existing relationship and keeps the created one; **and** that the sound
-   sides still hold — a write, a removal and a deletion through a relationship
-   bound by `MATCH`, an assignment and a removal through a relationship bound by
-   `CREATE` or by a `MERGE` that created it, and a deletion through such a binding
-   on a pair that no other relationship joins in that direction each still reach
-   their own relationship. For item 5: the reads it names are still resolved
-   correctly. Item 4's loss is
-   decided by the data rather than by the statement, so its fixture MUST fix the
-   stored orientation of every relationship it measures and read each one back;
-   a statement's shape does not tell the assertion what to expect.
+   pinned engine rather than properties of Cypher. Items 4, 5 and 8 record
+   relationship behaviours an earlier pinned engine got wrong and the pinned engine
+   gets right, and item 9 a value the earlier engine stored silently and the pinned
+   engine refuses; each is a boundary an engine change can move back, and an
+   assertion that checks only one side of it is satisfied by an engine in which the
+   other side has regressed. For item 4: that a relationship property removal
+   through an incoming pattern, and through an undirected one anchored on either
+   endpoint, removes the property from every relationship the pattern bound,
+   **and** that an assignment through the same patterns still persists and a
+   `DELETE` over them still removes every relationship they matched. For item 8:
+   that a `MERGE` that matched, over a node pair joined in the pattern's direction
+   by several relationships, binds each of them once, so that an assignment, a
+   removal and a `DELETE` through the binding reach every matched relationship and
+   no other, and that a `MERGE` whose inline property map one of them satisfies
+   creates none; that a `DELETE` through a relationship bound by `CREATE`, or by a
+   `MERGE` that created it, on a pair a relationship already joined in that
+   direction deletes the created relationship and keeps every pre-existing one;
+   **and** that the relationships the statement did not bind keep every property
+   they held. For item 5: the reads it names are still resolved correctly. For
+   item 9: that each write form it names is still refused and stores nothing.
+   And for [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9:
+   that a failed statement which had created a relationship between two nodes
+   already joined in that direction still leaves every relationship of the pair as
+   it found it. A removal's reach was once decided by the data rather than by the
+   statement, so item 4's fixture MUST fix the stored orientation of every
+   relationship it measures and read each one back; a statement's shape does not
+   tell the assertion what to expect.
 4. **An existing graph directory MUST remain readable across a GoGraph upgrade, and
    this MUST be demonstrated empirically rather than assumed.** Before an upgrade is
    released, a graph directory written under the previously pinned version MUST be
@@ -366,6 +389,20 @@ Mitigations required by this specification:
    rewriting the directory in the new one. Backward compatibility MUST NOT be inferred
    from release notes alone, because Groadmap has no migration path of its own for a
    graph it can no longer open. An upgrade that fails this check MUST NOT be released.
+
+   **Where the engine being adopted converts the store's format one way, the check
+   MUST also cover the backup.** The directory written under the previously pinned
+   version MUST be opened by `rmp graph serve` built against the new version, which
+   MUST take the backup [Graph Store Format Migration](#graph-store-format-migration)
+   requires and, once the conversion has succeeded, remove it. Because that removal
+   leaves no backup to check, the backup's fitness is verified on a failed
+   conversion: with the open made to fail after the backup is taken, the backup
+   that is kept, restored in place of the graph directory as that section
+   describes, MUST be opened by `rmp graph serve` built against the previously
+   pinned version and verified to read back the same content by the same three
+   measures. A backup that the earlier engine cannot open is not the way back that
+   section promises, and an upgrade whose backup fails this check MUST NOT be
+   released either.
 
 5. **Which statements admit no `LIMIT` clause MUST be re-verified against the new
    engine.** Before an upgrade is released, the rule in
@@ -395,7 +432,10 @@ implementation:
    holds it until step 6 has completed (see
    [Concurrency and Recovery](#concurrency-and-recovery)).
 3. Opens the GoGraph store rooted at that directory, recovering any committed
-   state from the snapshot and write-ahead log.
+   state from the snapshot and write-ahead log. When the store is still in the
+   single-file write-ahead-log format, it first copies the store to a backup, and
+   opens it only once the backup is complete and durable (see
+   [Graph Store Format Migration](#graph-store-format-migration)).
 4. Constructs the Cypher engine that will run the statement: it wraps the
    recovered graph and a write-ahead-log writer in a transactional store and
    constructs a store-backed engine over that store. There is one such
@@ -485,9 +525,22 @@ runs, not what is constructed (see
 
 Groadmap constructs an engine through no other constructor. The pinned engine
 also exposes `NewEngine`, `NewEngineWithOptions`, `NewEngineWithRegistry`,
-`NewEngineWithStore`, `NewEngineWithStoreAndConstraints`, and
-`NewEngineWithStoreAndSchema`; Groadmap uses none of the six, and adopting one is
-a change to this table before it is a change to the code.
+`NewEngineWithStore`, `NewEngineWithStoreAndConstraints`,
+`NewEngineWithStoreAndSchema`, and `NewEngineWithOpened`; Groadmap uses none of
+the seven, and adopting one is a change to this table before it is a change to
+the code.
+
+**`NewEngineWithOpened` is declined for what it is bound to, not for what it
+builds.** It takes the store the engine's composed open returns and applies the
+constructor this table gives to that store and to that open's recovery result, so
+the engine it builds is the same engine. What it cannot be given is the store this
+section's lifecycle opens: the composed open performs the recovery open, the
+write-ahead-log open and the transactional store's construction itself, in one
+call, and adopting the constructor means adopting that open in place of the
+sequence `internal/graphstore` owns. That open also decides differently what a
+store whose recovery was not clean becomes. Each of those is a change to the
+lifecycle this specification fixes, so it is decided here first, if ever, and the
+constructor is not adopted as a refactor.
 
 **Why the one path must be the transactional one.** The server executes
 caller-supplied Cypher and does not examine it, so a statement that arrives — from
@@ -571,16 +624,20 @@ fails as though the index had never been created. Passing the recovered schema i
 not an optimisation; it is what makes the engine report the schema the store
 actually holds.
 
-**The constructor this table gives is the one the engine names as recommended for
-opening a persisted store, and the alternative it replaces is not merely less
-informative.** An engine opened over a store that holds durable constraints
-without being given them does not report an empty constraint set: it re-registers
-what it finds in the store under **synthesised** names, so a constraint the caller
-created as `spec_key_uq` is reported under a name the caller never chose and
-cannot use in a `DROP CONSTRAINT`. Secondary indexes are not re-registered at
-all. The engine emits a warning at construction saying so and naming the
-constructor that avoids it. Groadmap uses that constructor, so the names it
-reports are the names the caller declared.
+**The constructor this table gives is the one the engine documents for the
+recovery-then-write-ahead-log open sequence this section's lifecycle performs, and
+the alternative it replaces is not merely less informative.** The engine
+recommends `NewEngineWithOpened` for a store opened through its composed open, and
+documents this table's constructor as the one that composed constructor applies
+to the store and the recovery result. An engine opened over a store that holds
+durable constraints without being given them does not report an empty constraint
+set: it re-registers what it finds in the store under **synthesised** names, so a
+constraint the caller created as `spec_key_uq` is reported under a name the caller
+never chose and cannot use in a `DROP CONSTRAINT`. Secondary indexes are not
+re-registered at all. The engine emits a warning at construction saying so and
+naming a constructor that avoids it. The constructor this table gives avoids it
+too, because it re-registers the recovered definitions under their declared names,
+so the names Groadmap reports are the names the caller declared.
 
 **Moving a surface off this path is a change to this table first.** It is decided
 here on the same footing that
@@ -612,9 +669,12 @@ everything else is fixed as follows:
 - **The capture is a transaction boundary.** The fold captures the graph through
   the engine's commit serialiser, which excludes writers while the capture is
   taken, so no transaction is in the capture in part.
-- **The truncation excludes writers too.** Removing the folded prefix of the
-  write-ahead log, after the snapshot is durable, runs through the same
-  serialiser, and it removes the log only up to the captured boundary.
+- **The truncation does not exclude writers, and needs not to.** Removing the
+  folded prefix of the write-ahead log happens after the snapshot is durable and
+  after the log's control file records the captured boundary as the point from
+  which the log is retained. It removes only whole segments every record of which
+  lies below that boundary, and no writer ever appends to such a segment, so it
+  runs while writers commit.
 - **Writing the snapshot does not exclude writers.** Between the capture and the
   truncation, while the snapshot is serialised and written, writers keep
   committing. What they append lies beyond the captured boundary, survives the
@@ -685,6 +745,21 @@ Sequence and durability boundary:
    truncated. Truncation bounds the log's growth: without it the log grows with
    every write for the life of the graph (see [Concurrency and Recovery](#concurrency-and-recovery)).
 
+   **Truncation discards the folded prefix in whole segments, and that is all it
+   means.** The log is a sequence of segment files, and every record in it carries
+   a logical position that only grows: a fold does not reset positions, and
+   discarding a prefix does not move them. The fold records in the log's control
+   file the position up to which its snapshot covers the log, and then removes
+   every segment all of whose records lie below that position. A segment that also
+   holds a record at or beyond it is kept whole, as is the segment currently being
+   written. Recovery replays only the records at or beyond the recorded position,
+   so a retained record the snapshot already covers costs nothing at the next open.
+   The consequence a reader of the directory sees is that the log on disk does not
+   shrink after every fold: a log shorter than one segment is not shortened at all,
+   and the bound truncation keeps is the unfolded records plus at most the part of
+   one segment that precedes them. The segment size is the engine's and is not
+   restated here.
+
 Failure policy:
 
 1. **A checkpoint is never part of a statement's result.** The server folds at a
@@ -741,9 +816,12 @@ roadmap's home directory:
 ├── project.db-wal        # SQLite sidecar (when present)
 ├── project.db-shm        # SQLite sidecar (when present)
 ├── graph.sock            # Graph server socket, mode 0600 (present only while a server runs)
+├── graph-backup-YYYYMMDDTHHMMSSZ/  # Copy of graph/ before a format migration; removed once the migration succeeds
 └── graph/                # Knowledge graph store (GoGraph)
     ├── write.lock        # Groadmap's store access lock (see Concurrency and Recovery)
-    ├── wal               # Write-ahead log (truncated after each checkpoint)
+    ├── wal.control       # Write-ahead-log control file: store identity, retained-from position (GoGraph-owned)
+    ├── wal.d/            # Write-ahead-log segments (GoGraph-owned)
+    ├── wal               # One-record seal stub, or a sealed single-file log awaiting its first fold (GoGraph-owned)
     └── snapshot/         # On-disk snapshot, present after the first write
         ├── manifest.json   # Snapshot manifest (GoGraph-owned)
         ├── tombstones.bin  # Deleted-node tombstone set (present only when the graph has tombstoned nodes; GoGraph-owned)
@@ -770,16 +848,16 @@ Rules:
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). It is
    expected to be present after the first statement that changed the graph. A
    graph against which no statement has ever written has no `snapshot/`
-   subdirectory and holds a `wal` file that recovery finds empty, because the
-   snapshot is produced by the checkpoint and the checkpoint has never run. Such a
-   directory holds `write.lock`, and it holds that only once a statement has
-   actually opened the store.
+   subdirectory and holds a write-ahead log in which recovery finds no
+   transaction, because the snapshot is produced by the checkpoint and the
+   checkpoint has never run. Such a directory holds `write.lock`, and it holds that
+   only once a statement has actually opened the store.
 4. The graph directory uses permissions `0700`, consistent with the roadmap home
    directory and the data directory (see `ARCHITECTURE.md § Directory Structure`).
 5. The internal file names and on-disk format inside `graph/`, including the
-   layout and contents of `snapshot/` and the format of `wal`, `manifest.json`,
-   `tombstones.bin`, `constraints.bin`, and `indexdefs.bin`, are owned by GoGraph
-   and are not specified here. The one exception is `write.lock`, which GoGraph
+   layout and contents of `snapshot/` and `wal.d/` and the format of `wal`,
+   `wal.control`, `manifest.json`, `tombstones.bin`, `constraints.bin`, and
+   `indexdefs.bin`, are owned by GoGraph and are not specified here. The one exception is `write.lock`, which GoGraph
    knows nothing about: Groadmap creates and maintains it, and it is specified in
    [Concurrency and Recovery](#concurrency-and-recovery). Its contents are never
    read or written; only the advisory lock on it carries meaning.
@@ -831,6 +909,217 @@ Rules:
    its path, its mode, and what a leftover one means. A roadmap that has never
    been served has no such entry, and a roadmap served on a non-default path has
    it wherever `--socket` put it.
+9. **A `graph-backup-YYYYMMDDTHHMMSSZ/` directory is a copy of `graph/` taken
+   before a format migration, and it is not part of the store.** It lives in the
+   roadmap home beside `graph/`, is written by `rmp graph serve` only, and is
+   removed by the same start once the conversion it protects has succeeded. One
+   remains only where a conversion or an open failed, or where its removal failed
+   or never ran; such a backup is never read, changed or removed by any later `rmp`
+   command, and a roadmap home may hold several. A directory of the same name
+   carrying the suffix `.partial` is an incomplete copy, or a backup whose removal
+   did not finish, and is never a backup.
+   [Graph Store Format Migration](#graph-store-format-migration) is canonical for
+   both.
+
+## Graph Store Format Migration
+
+The pinned engine keeps the write-ahead log in the **segmented** format, and it
+converts a store written in the earlier **single-file** format one way, the first
+time it opens that store for writing ([Dependency Maturity Risk](#dependency-maturity-risk),
+risk 2). A build of `rmp` pinned to an engine that predates the segmented format
+refuses a converted store. Groadmap converts nothing itself. What it adds is a
+backup: before the engine first opens a store in the single-file format,
+`rmp graph serve` copies the store beside it, so that the store as it was before
+the conversion remains available to such a build.
+
+**The policy is automatic migration with a prior backup.** There is no prompt, no
+flag and no way to decline: a server that finds a store in the single-file format
+backs it up, lets the engine convert it, and removes the backup once the
+conversion has succeeded (rule 9). The backup protects the conversion, not the
+choice of engine: while one exists, because a conversion failed, the store can be
+restored by hand for an earlier engine (rule 12); once a conversion has
+succeeded, there is no way back to an engine that reads the single-file
+format.
+
+Rules:
+
+1. **`rmp graph serve` takes the backup, at one point of its startup.** It is the
+   only process that opens a store, so it is the only one that can meet a store
+   before its conversion. The backup is taken in step 6 of
+   [Server Startup](#server-startup): after the exclusive lock of step 2, after
+   the socket is bound, and before the store is opened — that is, before the
+   engine reads, repairs or converts anything inside `graph/`. A start that finds
+   the store in the single-file format takes exactly one backup, and a start that
+   does not takes none.
+2. **What counts as the single-file format.** A store is in the single-file
+   format when both of the following hold:
+   - its write-ahead log has **no control file**, as the engine's own read-only
+     inspection of the log reports it; Groadmap reads no file of the log to decide
+     this, and the inspection changes nothing on disk; and
+   - `graph/` holds the single-file log `wal`, or a snapshot directory —
+     `snapshot/`, or `snapshot.bak/`, the form an interrupted checkpoint leaves.
+
+   A directory whose log has a control file has already been converted and is
+   opened without a backup. A directory that meets the first condition and not the
+   second holds no store yet — a graph directory created at step 1 of
+   [Server Startup](#server-startup) and never opened — and is opened without a
+   backup: the engine creates the segmented log in it directly. An inspection that
+   fails, because the directory holds segments without a control file or a
+   control file the engine reports as damaged, takes no backup and fails the start
+   as a store that cannot be opened (`utils.ErrGraphStore`, exit code 1, the
+   open-or-recovery line of `COMMANDS.md § Serve Error Cases`), since the open
+   would refuse the same directory. A single-file log that holds no record is
+   still the single-file format: the conversion replaces it, and the earlier
+   engine then refuses the directory although nothing was ever written to it.
+3. **The backup's location and name.** The backup is the directory
+   `~/.roadmaps/<name>/graph-backup-<T>/`, beside `graph/` in the roadmap home,
+   where `<T>` is the UTC instant at which the backup starts, to the second, in
+   the ISO 8601 basic format `YYYYMMDDTHHMMSSZ` — for example
+   `graph-backup-20261012T153000Z`. The basic format is used rather than the
+   extended one that `DATA_FORMATS.md § Dates - ISO 8601 with UTC` fixes for data,
+   because a colon is not a portable character in a file name; the instant it
+   names is still UTC and still ISO 8601. The roadmap home is the location
+   because it is on the same file system as the store, so the final rename of
+   rule 5 is atomic; because it is inside the `0700` fence the roadmap home
+   already is (`ARCHITECTURE.md § Directory Structure`); because `rmp roadmap
+   remove` removes it with the roadmap; and because `graph/` itself is the
+   engine's directory, in which Groadmap places nothing but `write.lock`.
+4. **What the backup holds, and at which modes.** The backup is a copy of every
+   entry of `graph/`, recursively and byte for byte, under the same relative path,
+   except `write.lock`: that file carries no content, this server holds its lock,
+   and a restored store does not need it (rule 12). Every directory of the backup,
+   the backup itself included, is created with mode `0700`, and every file with
+   mode `0600`, whatever mode the entry it copies carries; the engine creates some
+   of its own subdirectories wider than `0700`, and a copy is not allowed to carry
+   that further. Only regular files and directories are copied. An entry of any
+   other type — a symbolic link, a socket, a device, a named pipe — fails the
+   backup (rule 7): a link is never followed and never copied, so the backup can
+   neither read nor reproduce anything outside `graph/`.
+5. **The backup is complete or it does not exist under its name.** The copy is
+   assembled in a staging directory, `graph-backup-<T>.partial/`, beside the final
+   name. Each file is written and then synchronised to disk; each directory is
+   synchronised once its entries are in place; the staging directory is then
+   renamed to `graph-backup-<T>/`, and the roadmap home is synchronised so that the
+   rename itself is durable. Only once that synchronisation has returned does the
+   server open the store. A directory carrying a backup's final name is therefore
+   always a complete copy of the store as it was before the conversion, and a crash
+   at any point of the copy leaves at most a `.partial` directory and an
+   unconverted store, which the next start backs up afresh.
+6. **An earlier backup is never overwritten, never reused, and never removed by
+   a later start.** The staging directory is created exclusively: when an entry
+   of any type already exists at the staging name or at the final name, the
+   backup fails (rule 7) and nothing at either name is touched. A backup taken by
+   an earlier start, under another instant, is left exactly as it is and is not
+   consulted: every start that finds the store in the single-file format takes a
+   new one. That is what gives a store restored from a backup, and written to
+   again by an earlier engine, a backup of its newer state before it is converted
+   a second time. The one backup `rmp` ever removes is the one the same start
+   took, under rule 9; a backup left by an earlier start — one whose conversion
+   or open failed, or one whose start ended before it could remove it — and a
+   `.partial` directory left by an interrupted start are neither read, reused
+   nor removed by any later one, and removing them is the operator's decision.
+7. **A backup that fails leaves the store unconverted, and the server does not
+   start.** Whatever fails — an existing entry at either name, an entry of a type
+   rule 4 does not copy, a read of the store, a write, a synchronisation or the
+   rename — the store is not opened and the engine converts nothing, so every
+   entry of `graph/` but `write.lock`, which step 2 may have created, is byte for
+   byte what the server found. The server removes the staging directory it
+   created, as far as it can; a staging directory it could not remove is left as
+   rule 6 describes. It then closes the listener it bound, releases the lock and
+   exits with `utils.ErrGraphStore`, exit code 1, writing the backup line
+   `COMMANDS.md § Serve Error Cases` publishes; a caller connected to the bound
+   socket in the meantime sees its connection dropped, as it does when the store
+   open fails (see [Server Startup](#server-startup)). The sentinel is the store's
+   because the failure is the store's: the server declined to open it.
+8. **The backup runs inside the store's exclusive hold.** The lock of step 2 of
+   [Server Startup](#server-startup) is held from before the backup starts until
+   the server stops, so no other server can open, recover or convert the store
+   while it is being copied or while its backup is being removed, and
+   `rmp roadmap remove` is refused for the whole of both, because it takes that
+   lock without waiting ([Concurrency and Recovery](#concurrency-and-recovery)).
+   The copy is therefore of a directory nothing else is changing. The backup takes
+   and releases no lock of its own.
+9. **A backup whose conversion succeeded is removed by the start that took it.**
+   The conversion has succeeded when both of the following hold, in this order:
+   the store open of step 6 of [Server Startup](#server-startup) — recovery, the
+   write-ahead-log open that converts the store, and the engine's construction —
+   has returned without an error; and the engine's read-only inspection of the
+   log, made after that open, reports that the log now has a control file. Only
+   then, and still inside step 6, before the socket is announced, does the server
+   remove the backup it took in this start, and no other: it first renames
+   `graph-backup-<T>/` to `graph-backup-<T>.partial/`, so that no moment of the
+   removal leaves an incomplete copy under a backup's final name, and then removes
+   that directory and everything in it, and synchronises the roadmap home.
+   - **The removal is reported.** A removal that completes writes one structured
+     record at level `INFO` naming the absolute path of the backup removed.
+   - **A removal that fails does not fail the server.** The store is open,
+     converted and correct whether or not its backup is gone, so a failure of the
+     rename or of the removal writes one structured record at level `WARN` naming
+     the absolute path that remains — the final name when the rename failed, the
+     `.partial` name when the removal failed after it — and the server goes on to
+     step 7 and serves. What remains is left as rule 6 describes, and no later
+     start removes it. This is the same division
+     [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)'s failure
+     policy draws for a checkpoint: a failure that leaves everything acknowledged
+     intact is a diagnostic for the operator, not an end to the process.
+   - **When the conversion does not succeed, the backup is kept, and its path is
+     reported.** A store open that fails after the backup was taken, and an open
+     after which the log still has no control file, both end the start as a store
+     that cannot be opened (`utils.ErrGraphStore`, exit code 1, the
+     open-or-recovery line of `COMMANDS.md § Serve Error Cases`). Before that line,
+     the server writes one structured record at level `WARN` naming the absolute
+     path of the backup it kept and stating that the store may already have been
+     partly converted by the engine. The backup is the store as it was before the
+     engine touched it, and rule 11 is the way back to it.
+   - **A process that ends between the conversion and the removal** — killed
+     outright, or stopped before step 6 completes — leaves the backup in place
+     under its final name. The next start finds the store converted, takes no
+     backup and removes none, so that backup stays until the operator removes it.
+10. **The operator is told where each backup is and what became of it.** When a
+    backup completes, the server writes one structured record at level `INFO`
+    naming the backup directory's absolute path, of the kind
+    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
+    governs; together with the record of rule 9 that reports its removal, its
+    retention after a failed conversion, or a removal that failed, it is queued
+    before the socket announcement and so reaches stderr before the announcement
+    reaches stdout, or before the error line of a start that fails. A start that
+    takes no backup writes none of these records. What each record must convey is
+    fixed here; its wording is not.
+11. **The conversion is the engine's, and it is completed by the first fold.**
+    Once the backup is durable, the store is opened as on every start, and the
+    engine converts it during the open: it writes the log's control file and its
+    first segment and seals or replaces `wal`, and, for a store opened from a
+    snapshot that stands alone, records beside the log that the log's history
+    requires that snapshot. The first fold after the conversion rewrites the
+    snapshot in the manifest version the earlier engine refuses, and replaces a
+    sealed `wal` that still held history with its one-record stub. History the
+    single-file log held when the store was converted is history no fold in the
+    segmented format has covered, so it counts as unfolded and is folded at the
+    first due instant of the cadence or at shutdown, whichever comes first
+    ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+    rule 4). From the conversion on, `rmp graph serve` built against an earlier
+    engine fails to open the directory, with the open-or-recovery line of
+    `COMMANDS.md § Serve Error Cases` and exit code 1.
+12. **There is a way back to an earlier engine only while a backup exists, and
+    after a successful conversion there is none.** A conversion that succeeded
+    removes its backup (rule 9), so a converted store cannot be returned to an
+    engine that reads the single-file format: no `rmp` command restores or
+    re-creates the single-file format, and the converted store is the only copy.
+    A backup exists after a conversion or open that failed (rule 9), and after a
+    removal that failed or a process that ended before the removal; while one
+    does, and only then, the operator can restore it by hand: stop every
+    `rmp graph serve` for that roadmap; move `graph/` aside or delete it; rename the
+    chosen `graph-backup-<T>/` to `graph/`; and run a build of `rmp` pinned to an
+    engine that reads the single-file format. Every write the converted store
+    accepted after the backup was taken is lost by the restore. The restored
+    directory has no `write.lock`, which the next server creates. A later start of
+    a build pinned to an engine that writes the segmented format finds the
+    restored store in the single-file format again, and takes a new backup before
+    the engine converts it again (rule 6).
+13. **A backup costs a copy's worth of disk while it exists.** A backup is as
+    large as the store it copies. The one a successful conversion leaves is
+    removed by that start; any other is removed with the roadmap by
+    `rmp roadmap remove`, and otherwise only by the operator.
 
 ## Multi-Layer Modelling Conventions
 
@@ -1023,26 +1312,21 @@ reports an `EXPLAIN` or `PROFILE` prefix, and it refuses a statement that carrie
 one rather than send it (`WEB.md § Query-Bar Error Handling`, rule 12). That
 question classifies nothing about what the statement does.
 
-This section enumerates what follows. Every item but one is a hazard: a real
+This section enumerates what follows. Items 1, 2, 3, 6 and 7 are hazards: a real
 outcome of a real statement, silent, reporting success. They are stated here so
 that a caller meets them in the specification rather than in the store.
 
-Item 5 is the exception and states the opposite of a hazard: a direction in which
-the engine is correct. It is here because it is the neighbour of item 4 and would
-otherwise be inferred from it — a reader told that a relationship property removal
-may be dropped when the pattern walks against the stored arrow has every reason
-to assume that reading the relationship, or assigning one of its properties, is
-unreliable in the same way, and that assumption is false. Item 5 is a measured
-property of the pinned engine, not a property of Cypher, so it is re-measured
-whenever the pin moves (see
-[Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
-
-Items 4 and 8 are two members of one family: a relationship property write that
-does not reach the relationship the statement meant, by two independent causes.
-They belong side by side and are numbered apart because these item numbers are
-cited from elsewhere in this specification and are not renumbered, which is also
-why item 9 comes last. Each of the two names the other, and neither one's
-workarounds are the other's.
+Items 4, 5, 8 and 9 are not hazards at the pinned engine, and each says so. Items
+4 and 8 record relationship writes that an earlier pinned engine misdirected,
+silently, and that the pinned engine is measured to direct to the relationship the
+statement bound; item 5 records the reads beside them, which were correct at both
+engines; and item 9 records a property value an earlier engine stored other than
+as written, silently, and that the pinned engine refuses. They are kept, in place,
+for two reasons. These item numbers are cited from elsewhere in this
+specification and are not renumbered. And each is a measured property of the
+pinned engine rather than a property of Cypher, so each is re-measured whenever
+the pin moves, in both directions, because an engine change can move any of them
+back (see [Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
 
 1. **A statement runs whatever it says.** There is no subcommand whose contract is
    "this cannot delete". A statement that deletes reaches the engine the same way
@@ -1069,70 +1353,45 @@ workarounds are the other's.
    governs task and sprint fields (`MODELS.md § Task`) does not reach
    knowledge-graph property values.
 
-4. **A relationship property removal persists only where the pattern walked the
-   relationship the way storage holds it, and where it does not the statement
-   still reports success.** A `REMOVE e.k` addresses the relationship by its
-   endpoint pair, and it takes that pair from the columns the expansion emitted,
-   which carry the relationship the way the **pattern** walked it rather than the
-   way storage holds it. The property is therefore removed only where the node
-   bound at the pattern's **left** position is the relationship's stored source
-   and the node bound at its **right** position is its stored target. Every other
-   matched relationship keeps the property. No error is raised, no notification is
-   attached, and the transaction still commits.
-
-   **The assignment forms are not affected.** `SET e.k = …`, `SET e.k = null`,
-   `SET e = {…}` and `SET e += {…}` reach the relationship the pattern bound
-   whichever way the pattern walked it — through an incoming pattern, through an
-   undirected one, and on a node pair joined in both directions — and read back as
-   written. The engine turns the pair into the stored orientation before an
-   assignment and does not before a removal. That boundary is the part of this item
-   an engine upgrade is most likely to move (see
-   [Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
-
-   **How much of a removal survives is decided by the data, not by the
-   statement.** An undirected pattern anchored on one node removes the property
-   from every relationship that points away from the anchor and from none that
-   points at it. An **incoming** pattern is the extreme case of the rule rather
-   than a separate one: every relationship it binds is bound against its stored
-   arrow, so `MATCH (v:Test {key:'…'})<-[e]-(s) REMOVE e.last_commit` removes
-   nothing.
-
-   **The selective statement is the hazardous one and the sweeping statement is
-   safe**, which inverts the order a caller would triage in. An undirected pattern
-   with neither endpoint pinned removes the property from **every** relationship it
-   matches: with nothing to prune the rows, the expansion emits each relationship
-   twice, once per direction, and one of the two rows is oriented the way storage
-   holds it. Any filter that narrows the match to one row per relationship — an
-   inline key, a `WHERE`, a bound second endpoint — can leave the reversed row as
-   the survivor.
-
-   **The write counters report what landed, and that does not make them a
-   detector.** A removal is counted where it is applied, so a statement whose only
-   removal was dropped publishes no `counters` object at all — which is also what a
-   `REMOVE` of a property that was genuinely absent publishes. The absence means
-   something only to a caller who already knows how many relationships carried the
-   property (see
+4. **A relationship property removal reaches every relationship the pattern
+   bound, whichever way the pattern walked it.** `REMOVE e.k` through an incoming
+   pattern, through an undirected pattern anchored on either endpoint, through a
+   pattern over a node pair joined in **both** directions, and behind a `WHERE`
+   that selects one relationship of such a pair removes the property from exactly
+   the relationships the pattern bound, and from no other, and a read-back through
+   an outgoing pattern finds it gone from each.
+   `MATCH (v:Test {key:'…'})<-[e]-(s) REMOVE e.last_commit` removes
+   `last_commit` from every relationship that points at `v`, and the write
+   counters count each removal (see
    [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed)).
 
-   **`DELETE` is unaffected.** A `DELETE` over an incoming or undirected pattern
-   removes every relationship it matched.
+   **This is the reverse of what an earlier pinned engine did, and it is why the
+   item is kept.** That engine took the endpoint pair a removal addresses from the
+   columns the expansion emitted, which carry the relationship the way the
+   pattern walked it rather than the way storage holds it, so it removed the
+   property only where the node at the pattern's left position was the stored
+   source. Every other removal was dropped, without an error and without a
+   counter, and how much of a removal survived was decided by the data rather than
+   by the statement. A store restored for such an engine
+   ([Graph Store Format Migration](#graph-store-format-migration), rule 12) is
+   served by it again, and a statement that must hold under either engine is
+   written as a removal through an outgoing pattern, or as an assignment of
+   `null` — `SET e.last_commit = null` — each of which removed the property under
+   both.
 
-   **Every relationship's property can still be removed, and three forms remove it
-   whatever the stored direction.** An **outgoing** pattern may be anchored on
-   either endpoint, so `MATCH (s)-[e]->(v:Test {key:'…'}) REMOVE e.last_commit`
-   removes what the incoming form did not. A statement that must remove without
-   knowing the stored direction may instead assign `null`, which is an assignment
-   and removes the property through any pattern —
-   `MATCH (v:Test {key:'…'})<-[e]-(s) SET e.last_commit = null` — or project the
-   relationship before removing from it, either across a `WITH`,
-   `MATCH (a {key:'…'})-[e]-(b {key:'…'}) WITH e REMOVE e.last_commit`, or inside a
-   `FOREACH` over the collected relationships. Each is measured to remove the
-   property from every relationship it matches. None of them extends to item 8,
-   whose binding names the wrong relationship before any of them runs.
+   **The assignment forms and `DELETE` are as they were.** `SET e.k = …`,
+   `SET e.k = null`, `SET e = {…}` and `SET e += {…}` reach the relationship the
+   pattern bound whichever way the pattern walked it, and a `DELETE` over an
+   incoming or undirected pattern removes every relationship it matched. The
+   boundary between a removal and these forms is the one an engine change is most
+   likely to move, which is why it is re-measured in both directions (see
+   [Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
 
 5. **A relationship read through an incoming or undirected fixed-length pattern
-   is reported correctly, and this is measured rather than assumed.** The reach of
-   item 4 stops at removing a property. Reading a bound relationship resolves its
+   is reported correctly, and this is measured rather than assumed.** It was
+   correct under the earlier pinned engine too, where item 4's removals were not,
+   and it is stated so that the one is not inferred from the other. Reading a
+   bound relationship resolves its
    identity, its type and its stored orientation whichever way the pattern walked
    it, including on the shape that is hardest for an engine to get right: a node
    pair joined in **both** directions, where an implementation that inferred the
@@ -1148,16 +1407,13 @@ workarounds are the other's.
    relationship (`-[e*1..2]-`, and equally `-[e*1..1]-`), for a projected **named
    path** (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`), and for a bare `DELETE e`.
 
-   The line between this item and item 4 is the line between **reading** a
-   relationship, or assigning one of its properties, and **removing** one of its
-   properties. A right-hand side or a `WHERE` that reads a bound relationship sees
-   the orientation storage holds, and so does an assignment to it; a removal whose
-   target is that same relationship is governed by item 4 regardless. A statement
-   may therefore select exactly the relationship its author meant and remove
-   nothing from it: in
+   Items 4 and 5 now draw no line between **reading** a relationship, assigning one
+   of its properties, and **removing** one: each reaches the relationship the
+   traversal bound. In
    `MATCH (n)-[e]-(m {key:'b'}) WHERE startNode(e).key = 'b' REMOVE e.stamp`,
-   the predicate is evaluated against the stored orientation and binds the one
-   relationship it names, correctly, and the removal behind it is dropped.
+   the predicate is evaluated against the stored orientation, binds the one
+   relationship it names, and the removal behind it removes `stamp` from that
+   relationship and from no other.
 
    This is a statement about GoGraph at the pinned tag and about nothing else.
    Groadmap does not verify it per statement, cannot repair it if a later engine
@@ -1206,105 +1462,78 @@ workarounds are the other's.
    general grammar rather than routed to the schema parser, and
    `CREATE INDEX ...` is not.
 
-8. **A relationship bound by a `MERGE` or a `CREATE` is not reliably the
-   relationship that clause matched or created where more than one relationship
-   joins the same two nodes in the pattern's direction, and the statement still
-   reports success.** How the binding was made decides what goes wrong.
+8. **A relationship bound by a `MERGE` or a `CREATE` is the relationship that
+   clause matched or created, including where several relationships join the same
+   two nodes in the pattern's direction.** How the binding was made decides what
+   the statement acts on, and at the pinned engine each case is measured to act
+   on the relationship it bound and on no other.
 
-   **A `MERGE` that matched an existing relationship.** The condition is a `MERGE`
-   whose relationship pattern joins two nodes the statement has already bound,
-   which matches an existing relationship rather than creating one, over a node
-   pair that more than one relationship joins in the direction the pattern names.
-   Measured on such a pair:
+   **A `MERGE` that matched existing relationships.** A `MERGE` whose relationship
+   pattern joins two nodes the statement has already bound, over a node pair that
+   several relationships join in the pattern's direction, matches **every** one of
+   them, and emits one row per relationship it matched, each row binding a
+   different one. `SET e.k = …`, `SET e = {…}`, `ON MATCH SET` and `REMOVE e.k`
+   therefore act on every matched relationship once, `DELETE e` deletes every
+   matched relationship and no other, and the write counters report exactly those
+   effects. A relationship pattern carrying an inline property map is compared
+   against each relationship the pair holds, so a `MERGE` whose map an existing
+   relationship satisfies matches it and creates nothing. A statement that means
+   one relationship of such a pair names it — by a type, or by a property in the
+   pattern's map — rather than relying on the `MERGE` to choose one.
 
-   - the clause emits more than one row for the one relationship it matched, so
-     every clause after it runs more than once;
-   - every row binds the identifier of one relationship of the pair — the same one
-     whichever relationship matched — so the binding names the matched
-     relationship only when that happens to be the one;
-   - `SET e.k = …`, `SET e = {…}`, `ON MATCH SET` and `REMOVE e.k` act on the
-     relationship the binding names, the replacing form clearing that
-     relationship's properties first; a clause after the `MERGE` runs once per row,
-     and the write counters report every run, so the published number overstates
-     what the statement did as well as hiding where it landed;
-   - `DELETE e` deletes more relationships of the pair than the one matched — in
-     every measurement, as many as the rows the clause emitted — and reports each
-     deletion;
-   - a relationship pattern carrying an inline property map is compared against
-     the relationship the binding names rather than the ones the pair holds, so a
-     `MERGE` whose map an existing relationship satisfies can create a second
-     relationship beside it.
+   **A `CREATE`, or a `MERGE` that created the relationship.** On a node pair that
+   a relationship already joins in the direction the clause creates one, the
+   created relationship takes every assignment, every removal and every deletion
+   on itself — `SET e.k = …`, `SET e = {…}`, `SET e += {…}`, `ON CREATE SET`,
+   `REMOVE e.k` and `DELETE e`, the last whether the relationship is projected
+   across a `WITH` first or not — and the pair's pre-existing relationships keep
+   every property they held.
 
-   **A `CREATE`, or a `MERGE` that created the relationship.** The condition is a
-   node pair that a relationship already joins, before the statement runs, in the
-   direction the clause creates one. Measured on such a pair, the created
-   relationship takes every assignment and every removal on itself —
-   `SET e.k = …`, `SET e = {…}`, `SET e += {…}`, `ON CREATE SET` and
-   `REMOVE e.k` — but `DELETE e` does not reach it: the statement deletes one of
-   the pair's pre-existing relationships and keeps the one it created. The same
-   happens when the relationship is projected across a `WITH` before the
-   `DELETE`. The write counters report one relationship created and one deleted,
-   which is exactly what they report when the right one is deleted, so they do not
-   reveal the substitution.
+   **This is the reverse of what an earlier pinned engine did, and it is why the
+   item is kept.** That engine bound one relationship of such a pair to every row
+   a matching `MERGE` emitted, so writes and removals landed on that one, the
+   counters overstated them, a `DELETE` removed as many relationships as rows, and
+   an inline-map `MERGE` could create a duplicate; and a `DELETE` through a
+   relationship bound by `CREATE` deleted a pre-existing relationship of the pair
+   instead of the created one. All of it reported success. Under that engine, and
+   so under a store restored for it
+   ([Graph Store Format Migration](#graph-store-format-migration), rule 12), the
+   sound form was to bind the relationship again with `MATCH` before writing or
+   deleting it, and that form remains correct under both engines:
+   `MERGE (a)-[:VERIFIED_BY]->(b) WITH DISTINCT a, b MATCH (a)-[e:VERIFIED_BY]->(b) SET e.last_commit = '…'`.
 
-   No error is raised, no notification is attached, and the transaction still
-   commits.
+9. **A property value that is a list holding `null` is refused, and the statement
+   writes nothing.** Every write form refuses it, on a node and on a relationship
+   alike: an assignment (`SET n.k = [1, null, 2]`), an entry of a replacing or
+   merging map (`SET n = {k: [null, 1]}`, `SET n += {k: [1, null]}`), and an
+   inline property map in a `CREATE` or `MERGE` pattern
+   (`CREATE (:Spec {k: [null, 'x']})`). The statement fails with
+   `utils.ErrGraphEngine` and exit code 1 through the ordinary parse-or-execution
+   line of [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2,
+   and that line ends in the engine's own diagnostic, which names the refused kind
+   of value; the transaction rolls back whole, so neither the refused key nor any
+   other effect of the statement is stored. A list that holds no `null` is stored
+   as written (see `DATA_FORMATS.md § Graph element mapping`, rule 1), and `null`
+   assigned on its own removes the property, as Cypher defines.
 
-   **What is sound.** A relationship bound by `MATCH` takes every write, removal
-   and deletion on itself, on such a pair as on any other. A relationship bound by
-   `CREATE`, or by a `MERGE` that created it, takes every assignment and removal
-   on itself on any pair, and its deletion is sound on a pair that no other
-   relationship joins in the clause's direction, whatever joins the pair in the
-   other. A `MERGE` that matched is sound where exactly one relationship joins the
-   pair in the pattern's direction, whatever joins the pair in the other. This
-   item and item 4 are independent: here the identity is wrong
-   whichever way the pattern points, and item 4's workarounds — assigning `null`,
-   projecting across a `WITH`, iterating in a `FOREACH` — carry the wrong identity
-   with them.
+   **The item is kept because an earlier pinned engine accepted such a value
+   silently.** It reported success while storing nothing for an assignment, while
+   dropping only that entry of a map, and while storing an inline map's list with
+   its `null` elements removed. A store restored for that engine
+   ([Graph Store Format Migration](#graph-store-format-migration), rule 12) is
+   served by it with that behaviour again.
 
-   **Binding the relationship again with `MATCH` is sound, and it is how a
-   statement that must write or delete a relationship it ensured or created is
-   written.**
-   `MERGE (a)-[:VERIFIED_BY]->(b) WITH DISTINCT a, b MATCH (a)-[e:VERIFIED_BY]->(b) SET e.last_commit = '…'`
-   ensures the relationship and writes the property once, to the relationship the
-   `MATCH` binds, on a pair joined by several relationships; the `DISTINCT`
-   collapses the extra rows before the `MATCH` runs. For the reason the last
-   bullet above gives, a `MERGE` meant to ensure a relationship is written without
-   an inline property map, and the properties are set after the `MATCH`. A
-   statement that creates a relationship and deletes it again re-binds it the same
-   way, by a type or a property that names it alone, before the `DELETE`.
-
-9. **A property value that is a list holding `null` is not stored as written, and
-   the statement reports success.** What happens depends on the form of the
-   write, and no form stores the list the statement wrote:
-
-   - an assignment — `SET n.k = [1, null, 2]`, on a node or on a relationship —
-     stores nothing, leaves whatever value the key already held in place, and is
-     counted by no write counter;
-   - an entry of a replacing or merging map — `SET n = {k: [null, 1]}`,
-     `SET n += {k: [1, null]}` — is not stored, while the map's other entries are,
-     and the replacing form still clears the properties the map does not name;
-   - an inline property map in a `CREATE` pattern — `CREATE (:Spec {k: [null, 'x']})`,
-     on a node or on a relationship — stores the list with its `null` elements
-     removed, so the property reads back as `['x']`.
-
-   No error is raised and no notification is attached. A list that holds no `null`
-   is stored as written (see `DATA_FORMATS.md § Graph element mapping`, rule 1),
-   and `null` assigned on its own removes the property, as Cypher defines.
-
-**The divergences in items 4, 8 and 9 are upstream in GoGraph and cannot be
-corrected from this repository.** Each is a measured property of the engine at
-the pinned tag, as item 5 is. Groadmap holds no position from which to repair any
-of them: what reaches Groadmap is a committed transaction reporting success, and
-the write counters it carries, where it carries any, describe the engine's own
-accounting rather than which element changed or whether a value was stored as
-written. Detecting any of them would require reading the element back and
-comparing, which is the caller's statement to write and not Groadmap's to insert.
-Recognising the statement shapes instead is what the paragraph below rules out,
-and for item 4 it would be unsound as well as forbidden: how much of a removal
-survives is decided by the data, so a rule that refused the shapes which can lose
-one would refuse the many statements of that shape which remove from every
-relationship they match.
+**Items 4, 8 and 9 describe the engine, not Groadmap, and Groadmap holds no
+position from which to change them in either direction.** Each is a measured
+property of the engine at the pinned tag, as item 5 is. What reaches Groadmap is a
+committed transaction reporting success, or an engine refusal, and the write
+counters a success carries describe the engine's own accounting rather than which
+element changed. Had any of them stayed wrong, detecting it would have required
+reading the element back and comparing, which is the caller's statement to write
+and not Groadmap's to insert; and recognising the statement shapes instead is what
+the paragraph below rules out. What keeps them true is mitigation 3 of
+[Dependency Maturity Risk](#dependency-maturity-risk), which re-measures each in
+both directions before a new engine is adopted.
 
 **None of the items above is a reason for Groadmap to inspect a statement.** A
 check for any one of them would introduce the coupling this specification does not
@@ -1949,45 +2178,27 @@ is the whole reason both exist:
    there is exactly what counts as one here. What this section says a prefixed
    statement produces is therefore reachable through `rmp graph client` alone;
    `WEB.md § Query-Bar Error Handling`, rule 12, is canonical for the refusal.
-4. **`PROFILE` refuses a statement that writes, and at the pinned engine the
-   caller is not told why.** Measuring a write would mean performing it, and the
-   engine refuses the statement rather than perform a write a caller asked only
-   to have measured. The invocation fails with `utils.ErrGraphEngine` and exit
-   code 1, through the same parse-and-execution failure class every other engine
-   refusal uses, and no new exit code is introduced (see
-   [Error Handling and Exit Codes](#error-handling-and-exit-codes)). What
-   arrives in place of the engine's diagnostic is generic internal-error text
-   naming only the session. Every statement runs inside `rmp graph serve` and
-   every result crosses a Bolt connection, and the engine's Bolt server
-   classifies this refusal as a **server** fault: its failure-code mapping
-   carries no case for it — the refusal carries no sentinel and none of the
-   categorised message forms the mapping recognises — so the mapping falls back
-   to its generic database-error code, and the session then replaces the message
-   of every failure so classified. The diagnostic itself is not destroyed. The
-   engine writes it in full, under the same session, as a record of the kind
-   [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
-   governs, and that record does name the remedy — use `EXPLAIN` for the
-   statement's plan, or run the statement with no prefix to execute it. It is
-   therefore readable by whoever can read the server's stderr, and unreadable by
-   the caller who ran the statement.
+4. **`PROFILE` executes a statement that writes, and applies its writes exactly
+   once.** A writing statement carrying the prefix — `CREATE`, `MERGE`, `SET`,
+   `REMOVE`, `DELETE` and `DETACH DELETE` among its clauses — runs as it runs
+   without the prefix: it commits, its writes are durable before the result is
+   acknowledged, and they are applied once, not once to be measured and once
+   more. Its output carries the `profile` tree beside the statement's rows, and
+   the `counters` member after it, with the same values the statement publishes
+   without the prefix (see
+   [Write Counters: What a Statement Changed](#write-counters-what-a-statement-changed),
+   rule 10). A caller who wants a writing statement's plan without its effect
+   uses `EXPLAIN`, which executes nothing (rule 1); `PROFILE` is not a way to
+   inspect a write safely, and a caller must not reach for it as one.
 
-   **The substitution is above Groadmap's reach, as is the same substitution
-   applied to a property value the engine cannot store
-   (`DATA_FORMATS.md § One Realisation of the Mapping`).** There is no
-   interception point to close it at: the engine's server exposes no
-   error-mapping option, and Groadmap runs no statement of its own between the
-   caller and the server. The one remaining lever would be matching the
-   substituted text, which names no statement, no prefix and no remedy, so it
-   would yield nothing worth publishing even before it broke silently at the
-   next version bump. **The remedy belongs in the engine**: a case in its Bolt
-   failure-code mapping that resolves this refusal to a client-error code, after
-   which the engine's own message reaches the caller intact, exactly as a parse
-   diagnostic already does (rule 6) and as the diagnostic of an over-long field
-   now does ([Field Length Limits](#field-length-limits), rule 13). **What is
-   unaffected**: the sentinel is `utils.ErrGraphEngine` and the exit code is 1,
-   the statement is still refused and still writes nothing, and no condition moves
-   between sentinels. Only the message the caller reads is less informative than
-   the refusal deserves.
+   **An earlier pinned engine refused a `PROFILE` of a write, and the caller was
+   not told why.** Its Bolt server classified the refusal as a server fault and
+   replaced the diagnostic with generic text naming only the session, so the
+   invocation failed with `utils.ErrGraphEngine` and exit code 1 and wrote
+   nothing. The pinned engine has no such refusal. The change matters to a caller
+   in one direction only: a statement that an earlier build refused now writes,
+   so a script that relied on the refusal to keep a `PROFILE` of a write
+   harmless relied on something that no longer holds.
 5. **A writing statement's plan is a logical plan, and it is published as one.**
    A write's operators bind to an open transaction, so there is no physical
    operator tree to walk outside one, and opening one is precisely what `EXPLAIN`
@@ -2242,15 +2453,18 @@ Behaviour:
    reach a caller. Should the figure appear, `propertiesWritten` may be replaced
    by the two separate members; nothing in this specification is written so as to
    make that harder than it needs to be.
-10. **The counters and a query plan never appear together, and neither surface
-    has to arrange it.** An `EXPLAIN` executes nothing, so it has no applied
-    effect to count. A `PROFILE` executes, but the engine refuses a `PROFILE` of
-    a writing statement rather than perform a write it was asked only to measure
-    (see
+10. **The counters never appear beside a `plan`, and appear beside a `profile`
+    exactly when the profiled statement changed the graph; neither surface has to
+    arrange either.** An `EXPLAIN` executes nothing, so it has no applied effect
+    to count. A `PROFILE` executes the statement, a writing one included, and
+    applies its writes once (see
     [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
-    rules 1 and 4), so the only statement a `profile` tree can describe is one
-    that changed nothing. Both exclusions are the engine's, and this
-    specification records them rather than imposing them.
+    rules 1 and 4), so a `PROFILE` of a statement that changed the graph carries
+    both its `profile` tree and its `counters`, the counters holding exactly what
+    the same statement publishes without the prefix, and a `PROFILE` of one that
+    changed nothing carries no counters under rule 4. These are the engine's
+    outcomes, and this specification records them rather than imposing them;
+    `DATA_FORMATS.md § Graph Query Counters`, rule 5, fixes the member order.
 
 ## Field Length Limits
 
@@ -2269,8 +2483,10 @@ is an encoding limit. The snapshot bounds one by what its own reader is required
 to accept, which is an anti-exhaustion control — a reader that allocated for any
 length a prefix could express would allocate gigabytes on an untrusted file. The
 two are set independently and neither is uniformly the stricter: for a label and
-for a property key the log's bound is by far the tighter and fires first, at
-commit, so the snapshot's can never be reached; for a property value and for a
+for a property key the log's bound is by far the tighter, and the engine enforces
+that same figure on every layer it has, refusing the field as soon as the
+statement writes it and before the statement has changed anything, so neither
+the commit nor the snapshot's bound is ever reached; for a property value and for a
 node key the snapshot's is the tighter by a factor of four, so a field can be
 short enough to commit and too long to fold. Such a field is durable, correct,
 recoverable and unfoldable at the same time. Rules 6 to 9 exist for exactly that
@@ -2284,8 +2500,8 @@ it (see [Dependency Maturity Risk](#dependency-maturity-risk)).
 
 | Field | Write-ahead log, at commit | Snapshot, at checkpoint | Which bound binds |
 |-------|----------------------------|-------------------------|-------------------|
-| Node or edge label | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
-| Node or edge property key | 65535 bytes | 1 MiB | The log, by a factor of sixteen |
+| Node or edge label | 65535 bytes | 1 MiB | The log's figure, a sixteenth of the snapshot's, enforced by the engine before the statement changes anything |
+| Node or edge property key | 65535 bytes | 1 MiB | The log's figure, a sixteenth of the snapshot's, enforced by the engine before the statement changes anything |
 | Index or constraint identifier | 65535 bytes | 64 KiB | Neither: the engine's Cypher parser bounds it far below both |
 | Property value, list element, list element count | 4294967295 bytes | 1 GiB | **The snapshot**, at a quarter of the log's bound |
 | Node key | 4294967295 bytes, enforced by the node-key codec | 1 GiB | **The snapshot**, at a quarter of the log's bound |
@@ -2311,8 +2527,8 @@ Behaviour:
    ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). Every
    rule below describes what Groadmap does with a refusal the engine has already
    made.
-2. **A commit the engine refuses for an over-long field publishes a line of its
-   own.** It carries `utils.ErrGraphEngine` and exit code 1, as an ordinary parse
+2. **A statement the engine refuses for an over-long field publishes a line of
+   its own on `rmp graph client`.** It carries `utils.ErrGraphEngine` and exit code 1, as an ordinary parse
    or execution failure does, and it is nonetheless not that failure's line. The
    two conditions were otherwise separated only by the engine's diagnostic tail,
    which [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2,
@@ -2323,14 +2539,20 @@ Behaviour:
    the exhausted serialisation retry, which each hold a line of their own for the
    same reason (rules 6 and 7 of that section).
 3. **What a caller may rely on to recognise the class is `rmp`'s own text, and
-   inside the binary the engine's sentinel.** Externally, the fixed prefix of the
-   published line is the whole of the contract: `COMMANDS.md § Graph Management`
-   publishes the exact line. Internally, the condition is recognised with
-   `errors.Is` against `store/txn.ErrFieldTooLong`, which the engine wraps around
-   every write-ahead-log length refusal. It MUST NOT be recognised by matching
-   the engine's message text: that text is the engine's to reword, a match on it
-   fails silently at the next version bump, and the whole point of a sentinel is
-   that it survives the wording.
+   inside the binary the failure code the engine's server assigns.** Externally,
+   the fixed prefix of the published line is the whole of the contract:
+   `COMMANDS.md § Graph Management` publishes the exact line. Internally, the
+   condition reaches `rmp` as a failure the engine's Bolt server has already
+   classified from the engine's own sentinels, under one of two codes:
+   `Neo.ClientError.Schema.TokenLengthError` for a token — a label, a
+   relationship type, a property key or a schema identifier — longer than the
+   engine's token limit, and `Neo.ClientError.Data.DataUnsupportedByStoreFormat`
+   for any other field a durable format cannot carry. `rmp` recognises the class
+   by those two codes and by nothing else, as it recognises the conflict and the
+   budget classes by theirs. It MUST NOT be recognised by matching the engine's
+   message text: that text is the engine's to reword, a match on it fails
+   silently at the next version bump, and the whole point of a code is that it
+   survives the wording.
 4. **The published line ends in the engine's diagnostic, and the resulting echo
    is deliberate.** The engine formats every such refusal with the field kind and
    both figures — the length the field occupies and the maximum in force — and
@@ -2345,11 +2567,9 @@ Behaviour:
    `rmp`'s half accordingly names no field kind of its own — it defers to the
    engine's, which is the only one that knows.
 5. **Nothing is written, the store stays usable, and the exit code is
-   unchanged.** The refused transaction consumes a sequence number and applies
+   unchanged.** The refused statement's transaction is rolled back and applies
    nothing, so the graph holds no part of the statement — not the elements it
-   created before the over-long field, and not the properties it set on them —
-   with the one exception [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9,
-   describes, which this refusal does not escape.
+   created before the over-long field, and not the properties it set on them.
    Measured, an ordinary write submitted immediately after such a refusal
    returned `{"ok": true}` and a following `MATCH` counted it. The refusal adds
    no exit code and moves no condition between sentinels
@@ -2427,16 +2647,16 @@ Behaviour:
 10. **Two neighbouring refusals are outside this class, and an implementation
     MUST NOT fold them in.** A node key longer than the write-ahead log's
     unsigned 32-bit prefix is refused by the engine's node-key codec, which does
-    not wrap `store/txn.ErrFieldTooLong`; it reaches the caller through the
+    not wrap the engine's field-length sentinel; it reaches the caller through the
     ordinary parse-or-execution line of
     [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2. An
     assembled write-ahead-log frame over the engine's frame ceiling — which a
     single list property of many individually-legal elements can reach without
     any one of them being over-long — is refused by the log's framer under a
-    sentinel of its own, and reaches the caller the same way. Both are genuine
+    sentinel of its own, and reaches the caller the same way. The engine's server
+    gives neither of them either of the two codes of rule 3. Both are genuine
     length refusals in spirit; neither is this class, because the class is
-    defined by the sentinel a caller matches and not by the shape of the
-    complaint.
+    defined by the code `rmp` matches and not by the shape of the complaint.
 11. **A schema identifier does not reach the write-ahead log's bound.** The
     engine's Cypher parser bounds an index or constraint name, label and property
     far below 65535 bytes at the point the statement is parsed, so a schema
@@ -2464,67 +2684,65 @@ Behaviour:
     of which line or which diagnostic to publish, and that decision is testable
     without a field of any particular size. Criterion 70 fixes that division and
     forbids a criterion that attempts the field itself.
-13. **The published line is not reachable at the pinned engine, and this rule
-    states that plainly rather than implying otherwise.** Every statement now runs
-    inside `rmp graph serve` and every result crosses a Bolt connection, so there
-    is no path on which a caller reads this refusal as itself. The engine's Bolt
-    server classifies the refusal as a **client** fault, under the code
-    `Neo.ClientError.Statement.ArgumentError`, and forwards the engine's
-    diagnostic unchanged, so the caller does read the field kind and both figures.
-    What does not cross is the class. The sentinel stays on the server's side of
-    the connection, and the code is the one the server also gives to every other
-    argument the engine refuses — a numeric argument out of range, for one — so
-    neither separates this condition from the others. What a caller reads is
-    therefore the ordinary parse-or-execution line of
-    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2, ending
-    in the engine's diagnostic. That is the defect rule 2 of this section exists to
-    remove, in its milder form: the line says what is wrong, and only its wording,
-    which a caller may not match, says which class of failure it is. The engine
-    also logs the diagnostic in full, under the same session, as a record of the
-    kind [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
+13. **The published line is reachable through `rmp graph client` at the pinned
+    engine, through the failure code the engine's server assigns, and it is a line
+    of that surface alone.** Every statement runs inside
+    `rmp graph serve` and every result crosses a Bolt connection, so what a
+    caller can be told about this refusal is what that connection carries. The
+    engine's Bolt server classifies the refusal as a **client** fault, under a code
+    that belongs to this condition alone — one for an over-long token and one for
+    any other over-long field (rule 3) — and forwards the engine's diagnostic
+    unchanged, so the line `rmp` publishes carries both the class, in `rmp`'s
+    half, and the field kind and both figures, in the engine's. The engine also
+    logs the diagnostic in full, under the same session, as a record of the kind
+    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), rule 1,
     governs.
 
-    **The line stays published, and it is published as not yet reachable.** It is
-    specified in `COMMANDS.md § Client Error Cases`, and its scenario says that it
-    is the line a caller reads once the engine distinguishes the condition — not
-    the line a caller reads today. Keeping it costs nothing and removing it would
-    cost the contract: the class is real, the remedy is known and is small, and a
-    line withdrawn now would have to be re-specified, re-agreed and re-tested the
-    moment the engine gains the distinction. What MUST NOT happen is a
-    specification that publishes the line without saying it is unreachable,
-    because a caller told to match it would wait for something that never arrives.
+    **An earlier pinned engine did not separate the condition, and the line was
+    then unreachable.** That engine's server gave the refusal the code it also
+    gave every other argument the engine refused — a numeric argument out of
+    range, for one — so neither the code nor anything else that crossed the
+    connection told the class apart, and the caller read the ordinary
+    parse-or-execution line of
+    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2, ending
+    in the engine's diagnostic. The line stayed published, as not yet reachable,
+    because the remedy belonged in the engine and was small: a code of the
+    condition's own. The pinned engine supplies it, so the client reaches the line
+    through the code-matching it already uses for the conflict and the budget
+    classes, and `rmp graph client` writes the line. A store restored
+    for an earlier engine ([Graph Store Format Migration](#graph-store-format-migration),
+    rule 12) is served by that engine's server again, and against it the caller
+    reads the parse-or-execution line again; the sentinel and the exit code are the
+    same either way.
 
-    **What is unaffected.** The sentinel is `utils.ErrGraphEngine` and the exit
-    code is 1; nothing is written, with the one exception
-    [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9,
-    describes, and the store stays usable (rule 5); no condition moves between
-    sentinels and no exit code is added. Only the message the caller reads differs
-    from the message this section specifies.
+    **What is unaffected by which engine serves the statement.** The sentinel is
+    `utils.ErrGraphEngine` and the exit code is 1; nothing is written and the store
+    stays usable (rule 5); no condition moves between sentinels and no exit code is
+    added.
 
-    **Groadmap MUST NOT close this on its own side.** There is no interception
-    point to close it at: the engine's server exposes no error-mapping option, and
-    Groadmap runs no statement of its own between the caller and the server. The
-    code the client receives cannot close it either, because publishing this line
-    for every argument error would publish it for refusals that are not an
-    over-long field. The one remaining lever would be matching the forwarded text,
-    which rule 3 forbids. **The remedy belongs in the engine**: a failure the
-    client can tell apart from every other argument error — a code of its own, or
-    a structured field that carries the class. Once one exists, the client reaches
-    the published line through the code-matching it already uses lawfully for the
-    conflict and the budget classes, this rule's exception ends, and the line
-    becomes reachable at both surfaces at once.
+    **Groadmap MUST NOT widen the match to recover the class some other way.** A
+    code that the engine's server also gives to refusals that are not an over-long
+    field — the argument-error code above, for one — MUST NOT select this line,
+    because publishing it for every argument error would publish it for refusals
+    that are not this condition; and matching the forwarded text is what rule 3
+    forbids. The two codes rule 3 names are the whole of the match.
 
-    **No identity is broken by this, which is the one thing the withdrawal
-    improved here.** While two paths existed, one statement produced one of two
-    different stderr lines according to whether a server happened to be running —
-    which the caller did not choose and could not see — and that departure had to
-    be recorded against the identity
+    **The web graph data endpoint publishes no field-length line, and answers this
+    class as an execution failure.** A statement the query bar sends that the
+    engine refuses for an over-long field is answered HTTP `400 Bad Request` with
+    `kind` `execution`, and its `error` is `query failed to execute: ` followed by
+    the engine's diagnostic — the same diagnostic that ends the CLI's line — exactly
+    as for any other statement that fails in the engine
+    (`WEB.md § Query-Bar Error Handling`, rules 2, 4 and 7). The endpoint's `kind`
+    set is closed and holds no field-length class, so the class is told apart there
+    by the diagnostic's text alone, which is for the user to read and for no
+    program to match.
+
+    **No identity is broken by this.** The identity
     [Functional Requirements](#functional-requirements), rule 16, and
-    `DATA_FORMATS.md § Graph Client Result` fix. With one path there is one line,
-    the same one for every caller of every surface, so the identity holds without
-    qualification and the departure is retired. What remains is not an
-    inconsistency but a deficiency: the line every caller reads names the fault
-    and not its class, where this section requires both.
+    `DATA_FORMATS.md § Graph Client Result` fix binds a statement's success output
+    and exit code, not the error text each surface writes, and with one path every
+    caller of `rmp graph client` reads the same line.
 
 ## Error Handling and Exit Codes
 
@@ -2558,10 +2776,11 @@ graph subcommand can reach would be incomplete without it.
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | The query was to come from standard input and the read of the stream itself failed (see [Bounded Standard-Input Read](#bounded-standard-input-read)) | `utils.ErrIO` | 1 |
 | Cypher fails to parse or execute in the engine, a schema statement included (see [Schema Failure Classes](#schema-failure-classes)) | `utils.ErrGraphEngine` | 1 |
-| A label or property key the statement writes is longer than the write-ahead log's length prefix allows, and the engine refuses the commit (see [Field Length Limits](#field-length-limits)) | `utils.ErrGraphEngine` | 1 |
+| A label, relationship type or property key the statement writes is longer than the engine's token limit, or another field it writes is longer than a durable format can carry, and the engine refuses the statement (see [Field Length Limits](#field-length-limits)) | `utils.ErrGraphEngine` | 1 |
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
 | Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |
 | `graph serve` cannot open, recover, read, or write the graph store, or cannot create its directory (I/O or corruption) | `utils.ErrGraphStore` | 1 |
+| `graph serve` finds the graph store in the single-file write-ahead-log format and cannot complete the backup that must precede its conversion; the store is neither opened nor converted (see [Graph Store Format Migration](#graph-store-format-migration), rule 7) | `utils.ErrGraphStore` | 1 |
 | `graph serve` cannot bring the data directory `~/.roadmaps/` or the roadmap home directory `~/.roadmaps/<name>/` to `0700`, or cannot verify it (see [Server Startup](#server-startup), step 1) | `utils.ErrIO` | 1 |
 | `graph serve` finds the graph store's exclusive lock still held when the bounded wait is exhausted, so another server is likely already running for the roadmap (see [Lock Contention](#lock-contention), rule 3) | `utils.ErrGraphStore` | 1 |
 | The roadmap's socket answers but no server can be reached through it, or the connection fails for a reason other than the socket being absent or refusing (see [Server Resolution](#server-resolution)) | `utils.ErrGraphServer` | 1 |
@@ -2665,39 +2884,41 @@ Rules:
    [Field Length Limits](#field-length-limits) states the behaviour behind it,
    including the second half of the condition that reaches the caller as a
    diagnostic on a successful invocation rather than as an error at all, and
-   including the fact that at the pinned engine no caller reads this line: the
-   engine's Bolt server forwards the diagnostic under a code it shares with other
-   argument errors, so the condition arrives through rule 2's line, ending in that
-   diagnostic ([Field Length Limits](#field-length-limits), rule 13).
-9. **A failed statement is not always without effect on the graph, and the lines
-   that say nothing was written can then be wrong.** A statement that creates a
-   relationship between two nodes already joined by a relationship in the same
-   direction, and then fails before it commits, leaves the served graph with one
-   of those pre-existing relationships replaced by the one it was creating: the
-   relationship now carries the new type and no properties, and the one it
-   replaced is gone. The cause of the failure made no difference in any
-   measurement — an evaluation error, a violated presence constraint, a property
-   value the engine refuses, an over-long property key, and the statement time
-   budget — and neither does the line the caller reads: the budget line of rule 6
-   says that nothing was written while the replacement is in place. A failed statement that
-   creates no relationship, or creates one only between nodes not yet joined in
-   that direction, is measured to leave the graph as it found it.
+   including how the line is reached: the engine's Bolt server forwards the
+   diagnostic under a code that belongs to this condition alone, and `rmp`
+   recognises the condition by that code
+   ([Field Length Limits](#field-length-limits), rules 3 and 13).
+9. **A failed statement leaves the graph's content as it found it, including a
+   statement that had created a relationship between two nodes already joined in
+   the same direction.** The engine undoes such a relationship by its own
+   identity, so the pair's pre-existing relationships keep their type and every
+   property they held. Measured at the pinned engine, for a statement that creates
+   a relationship between two nodes already joined in that direction and then
+   fails — through an evaluation error, a property value the engine refuses, and
+   the statement time budget — every relationship of the pair reads back as it did
+   before the statement ran, and the lines of rules 6, 7 and 8, which say that
+   nothing was written, are true of the graph's content.
 
-   The write-ahead log is not affected, so the replacement lives in the server's
-   in-memory graph, and every statement the server runs from then on reads it,
-   until a checkpoint folds that graph into the snapshot and makes it permanent.
-   Measured: a server killed with `SIGKILL` after such a failure recovered the
-   original relationship on its next start, and a server stopped with `SIGINT`,
-   whose shutdown checkpoint ran, did not.
+   **The rule is kept, under its number, because an earlier pinned engine broke
+   it.** That engine left one of the pair's pre-existing relationships replaced by
+   the relationship the failed statement was creating, carrying the new type and
+   no properties, while reporting the failure with those same lines; a checkpoint
+   made the replacement permanent. A store restored for that engine
+   ([Graph Store Format Migration](#graph-store-format-migration), rule 12) is
+   served by it with that defect again, and a caller of such a server that needs
+   certainty reads the node pair back after any failure of a statement that
+   creates a relationship. The rule is re-measured whenever the pin moves (see
+   [Dependency Maturity Risk](#dependency-maturity-risk), mitigation 3).
 
-   This is an engine defect, and Groadmap does not correct it: it holds no copy of
-   the graph to compare with, and runs no statement of its own between the caller
-   and the server. The published lines of rules 6, 7 and 8 are kept as they are,
-   because the statement did not commit and the remedy each names still stands.
-   Wherever this specification says that a failed or cut statement wrote nothing,
-   rolled back whole, or left the graph as it found it, the statement is subject
-   to this rule. A caller that needs certainty reads the node pair back after any
-   failure of a statement that creates a relationship.
+   **"Nothing was written" speaks of the graph's content, and not of every byte
+   in the store.** A failed or cut statement that had created nodes before it
+   failed can leave the engine's node-identifier reservations in the write-ahead
+   log, and the physical state those reservations describe reaches the snapshot
+   at a later fold
+   ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+   rule 8). Neither changes a node, a relationship, a property, a label, an index
+   or a constraint.
+
 10. **A roadmap exists, for both graph subcommands, only when its home is a
     directory that holds `project.db`.** `rmp graph serve` and `rmp graph client`
     each refuse a roadmap that does not exist, at the step at which they resolve
@@ -3121,10 +3342,16 @@ each step is what makes a later one safe.
    platform with POSIX file modes, a listener bound under the process umask and
    narrowed afterwards does not meet this step. On Windows the listener is bound
    and the mode set afterwards, as that rule states.
-6. **Open the store and construct the engine**, through the one lifecycle
+6. **Back the store up when it is still in the single-file format, then open the
+   store and construct the engine**, through the one lifecycle
    `internal/graphstore` owns, so the server is on the same single path as the
    other two surfaces (see
-   [Engine Constructor by Path](#engine-constructor-by-path)). An engine
+   [Engine Constructor by Path](#engine-constructor-by-path)). The backup, when
+   one is due, is complete and durable before the open begins; a backup that
+   fails ends the start before the store is opened or converted; and a backup
+   whose conversion succeeded is removed before step 7, while a failed conversion
+   keeps it ([Graph Store Format Migration](#graph-store-format-migration), rules
+   1, 5, 7 and 9). An engine
    constructed over a graph with no write-ahead log behind it accepts every write,
    acknowledges every commit, warns about nothing, and loses all of it when the
    process ends; the constructor that table fixes is the one that does not.
@@ -3162,7 +3389,8 @@ to span the store open.
 connects between step 5 and step 7 waits for the handshake while the store opens,
 and its probe deadline is 2500 ms (see
 [Server Resolution](#server-resolution)). The store open grows with the graph, and
-on a graph large enough that it outlasts the probe the caller's probe expires and
+so does the backup that precedes it on the one start that converts a store; on a
+graph large enough that the two outlast the probe the caller's probe expires and
 the roadmap resolves as **Unreachable**. That point is not fixed here and no
 figure is published for it: this project measures nothing
 (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`), and the
@@ -3324,8 +3552,7 @@ engine's own records of these same connections carry an empty one.
    answered, or is cut whole.** A cut statement's transaction is rolled back
    entirely: it leaves no partial write and no torn state on disk, exactly as a
    statement the time budget cuts does (see
-   [Statement Time Budget](#statement-time-budget)), and it is subject to the same
-   exception, [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9.
+   [Statement Time Budget](#statement-time-budget)).
 3. **A statement that completes during the drain is answered before the server
    stops.** That is the whole of what the drain buys over the engine's own
    shutdown, and it is worth buying: without it a client that had just committed
@@ -3805,21 +4032,43 @@ something.
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write) fixes, and
    the server MUST apply the single realisation of it that the store lifecycle
    owns rather than a second one beside it: one comparison and one mark, so that
-   no copy can drift from it. A shutdown that owes no fold writes nothing at all —
-   `snapshot/` and `wal` are left byte for byte as the server found them — which
-   is what makes the guarantee in rule 8 below hold at the surface a long-lived
-   process exposes.
+   no copy can drift from it. A shutdown that owes no fold writes no snapshot and
+   truncates nothing: `snapshot/` and every file of the write-ahead log are left
+   byte for byte as the server found them, save only that closing the log makes
+   durable whatever records were appended to it without a synchronisation of
+   their own — the node-identifier reservations a failed or cut write leaves
+   behind ([Statement Time Budget](#statement-time-budget), rule 3). That is what
+   rule 8 below requires of the shutdown.
 
-   **"Grown since it was last folded" counts every byte of the log that no fold
-   has covered, including the bytes it already held when the server opened the
-   store.** A server that was killed leaves a log tail that no snapshot covers;
-   the next server replays it at open, and that replay does not fold it. That
-   tail therefore counts as grown from the moment the store is opened: the mark of
-   what has been folded starts at the beginning of the log, not at its length at
-   open. A server that opens a store with such a tail folds it at the first due
-   instant of its cadence (rule 9) even if it receives no write, or at shutdown if
-   it stops first. A shutdown that finds the log empty, or wholly covered by a
-   fold this server took, still owes nothing and writes nothing.
+   **"Grown since it was last folded" counts every record of the log that no fold
+   has covered, including the records it already held when the server opened the
+   store.** Every record in the log carries a logical position, positions only
+   grow, and neither a fold nor the truncation that follows it moves them
+   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), step 3).
+   The question is therefore always the same one: does the log's durable end lie
+   beyond the position up to which the last fold covered it? The mark that answers
+   it is that position. When the server opens the store, the mark is the position
+   the snapshot it was opened from records as covered — the start of the log when
+   the store has no snapshot — and **not** the log's end at open: a server that
+   was killed leaves records beyond the snapshot's position, the next server
+   replays them at open, and that replay does not fold them, so they count as
+   grown from the moment the store is opened. A store whose single-file log still
+   held history when the engine converted it
+   ([Graph Store Format Migration](#graph-store-format-migration), rule 11) counts
+   as grown in the same way, because no fold in the segmented format has yet
+   covered that history. A server that opens a store with such a tail folds it at
+   the first due instant of its cadence (rule 9) even if it receives no write, or
+   at shutdown if it stops first. A shutdown that finds no record beyond the mark
+   owes nothing and writes no snapshot.
+
+   **After a fold, the mark is a position the fold is proven to have covered, and
+   never one beyond the position it captured.** The fold captures the graph at one
+   transaction boundary and covers the log up to that boundary's position (rule
+   10). The mark MAY be set to the log's durable end read before the fold was
+   requested, which the capture is proven to have reached, rather than to the
+   captured position itself; the cost of that choice is at most one further fold,
+   and it never records an unfolded record as folded. A fold that failed moves
+   nothing, and the fold stays owed.
 5. **The server MUST also checkpoint while it runs, and only when the
    write-ahead log has grown since it was last folded**, because the log
    otherwise grows for the whole process lifetime and the cost of recovering from
@@ -3848,26 +4097,37 @@ something.
 8. **An unconditional checkpoint is not merely a wasted write; it publishes a
    permanent residue, and that is why rule 4's condition is a requirement rather
    than an optimisation.** A statement the deadline cuts while it is writing is
-   rolled back whole, and the rollback restores the **logical** graph — with the
-   one exception [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9,
-   describes — but not the **physical** one: the engine's key mapper keeps the interned key of every node
-   the statement created, and the tombstone set keeps a tombstone for each. A
-   checkpoint taken afterwards serialises that residue to disk, where nothing
-   removes it and where every later reader pays for it. The observable is the
-   store on disk and the graph in it, and the two disagree: after one cut
-   `MATCH (a),(b),(c) CREATE ()` followed by an unconditional checkpoint, the
-   store on disk has grown by orders of magnitude while a `MATCH (n)` over it
-   still returns exactly the nodes the graph held before the statement ran. A
+   rolled back whole, and the rollback restores the **logical** graph but not the
+   **physical** one: the node identifiers the statement reserved for the nodes it
+   created stay reserved, and the engine's storage keeps a place for every one of
+   them. A checkpoint that captures the graph afterwards serialises that residue
+   to disk, where nothing removes it. The observable is the store on disk and the
+   graph in it, and the two disagree: after one cut
+   `MATCH (a),(b),(c) CREATE ()` over a store of a few hundred nodes, the snapshot
+   the next fold writes has grown by orders of magnitude while a `MATCH (n)` over
+   it still returns exactly the nodes the graph held before the statement ran. A
    later ordinary write rewrites the same residue, so it does not decay. The
    control isolates it to the write path: one cut **read** over the same store
-   leaves the store byte-identical. Rule 4's
-   condition is what keeps the residue off the disk: a cut statement commits
-   nothing, so it appends nothing to the write-ahead log, so no fold is owed, and
-   neither the shutdown nor any in-flight fold writes anything on its account
-   ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). The
-   residue reaches the disk only inside a fold that a genuine write made owed,
-   and that fold would have captured the same graph with or without the cut
-   statement before it.
+   appends nothing and leaves the store byte-identical.
+
+   **Rule 4's condition keeps the cut statement from making a fold owed, and at
+   the pinned engine that is all it can do.** A cut statement commits nothing, so
+   no fold is owed on its account, and neither the shutdown nor any in-flight fold
+   takes one because of it. But the statement leaves the engine's reservations
+   for the nodes it created in the write-ahead log
+   ([Statement Time Budget](#statement-time-budget), rule 3); they become durable
+   at the log's next synchronisation; recovery replays them; and the next fold
+   that runs for any reason — owed by a genuine write, or by those records
+   themselves as a tail no fold has covered (rule 4) — carries the residue into
+   the snapshot. Measured: a server that took a cut write and then one ordinary
+   write, and was killed before any fold, came back with the residue, and the next
+   fold wrote it. Under an earlier pinned engine the residue lived in the server's
+   memory alone, so the condition kept it off the disk until a genuine write's
+   fold captured it, and a restart before that cleared it; the pinned engine
+   carries it through the log and through a restart. This is the engine's
+   behaviour and Groadmap accepts it as the expected one: the residue changes no
+   node, relationship, property, label, index or constraint, and Groadmap neither
+   prevents nor removes it.
 9. **Groadmap drives the in-flight fold itself, and the cadence decides only when
    a fold is due; the condition decides whether it runs.** The engine's own
    checkpoint loop folds unconditionally: it serialises the whole graph and
@@ -3876,9 +4136,10 @@ something.
    to fold to that loop: the loop is given no cadence of its own and folds only
    when the server asks it to (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). At each instant the cadence of rule 6 makes a fold due, the
-   server observes the write-ahead log's **durable offset** — the length of the
-   log that its last synchronisation to disk covers — and folds when, and only
-   when, that offset shows the log has grown since the last fold. That
+   server observes the write-ahead log's **durable end** — the position just past
+   the last record its last synchronisation to disk covers — and folds when, and
+   only when, that position lies beyond the mark of rule 4, which is to say when
+   the log holds a durable record no fold has covered. That
    observation is the whole of the gate: it is taken at the instants the cadence
    makes a fold due and at no other time, it reads one value, and it costs nothing
    that grows with the graph. A due fold the gate withholds is not a fold: the
@@ -3891,9 +4152,9 @@ something.
     - **An idle server writes nothing once nothing is left to fold.** A server
       that receives no write — whether no client connects or every statement it is
       sent appends nothing — and whose log held no unfolded tail when it opened the
-      store leaves `snapshot/` and `wal` byte for byte as it found them for as long
-      as it runs, at every due instant of the cadence, as the shutdown of rule 4
-      already leaves them. A server that opened the store with such a tail folds it
+      store leaves `snapshot/` and every file of the write-ahead log byte for byte
+      as it found them for as long as it runs, at every due instant of the
+      cadence, as the shutdown of rule 4 already leaves them. A server that opened the store with such a tail folds it
       once, at the first due instant, and from then on writes nothing while it
       stays idle (rule 4).
     - **A server that receives one write folds it.** The first due instant of the
@@ -3905,12 +4166,12 @@ something.
       fold, and it is folded by a later one.** A fold captures the graph at one
       transaction boundary and covers the log up to that boundary; writers keep
       committing while it writes the snapshot, and what they append lies beyond it
-      and survives its truncation. Those bytes MUST count as grown since the last
+      and survives its truncation. Those records MUST count as grown since the last
       fold, so the next due instant, or the shutdown, folds them. What a fold
-      covered is therefore the point it captured, never the offset read after it
-      returns: taking the offset after the fold as the new mark would record the
-      unfolded bytes as folded, and a server that then received no further write
-      would neither fold them in flight nor at shutdown.
+      covered is therefore at most the position it captured, never the durable end
+      read after it returns: taking that end as the new mark would record the
+      unfolded records as folded, and a server that then received no further write
+      would neither fold them in flight nor at shutdown (rule 4).
     - **The in-flight fold and the shutdown checkpoint never run at the same time**,
       and they share one mark, so each sees what the other folded.
     - **The cadence is unchanged.** When a fold becomes due, and how often the
@@ -4252,7 +4513,11 @@ checkpoint before it loads anything: it removes a stale staging directory
 `snapshot.tmp` unconditionally, and, when the live `snapshot/` directory carries no
 manifest while `snapshot.bak/` does, it promotes the backup by renaming
 `snapshot.bak` to `snapshot` and making that rename durable. Both actions repair
-the very directory a checkpoint publishes into.
+the very directory a checkpoint publishes into. Opening the write-ahead log for
+appending writes to the store too: it discards a torn tail, removes segment files
+an interrupted fold left wholly below the retained position, and, on a store in
+the single-file format, performs the one-way conversion that
+[Graph Store Format Migration](#graph-store-format-migration) backs up before it.
 
 Durability is provided by a write-ahead log with CRC32C integrity checks plus
 atomic on-disk snapshots; on opening the store, GoGraph runs recovery to restore
@@ -4324,21 +4589,29 @@ residual limits that survive.
    [Server Resolution](#server-resolution), rule 7). The web graph data endpoint
    has a third, a request whose client disconnects, which a CLI invocation does
    not (see `WEB.md § Graph Query Time Budget`, rule 2).
-2. **A cut statement rolls back whole, with one exception.** There is no partial
-   write to reconcile and no torn state on disk. The exception is
-   [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9: a cut statement that had
-   created a relationship between two nodes already joined in that direction
-   leaves one of the pair's relationships replaced, and the budget line still says
-   that nothing was written. The observable is the survivor count: a writing
+2. **A cut statement rolls back whole.** There is no partial write to reconcile
+   and no torn state on disk, and that includes a cut statement that had created a
+   relationship between two nodes already joined in that direction
+   ([Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9). The
+   observable is the survivor count: a writing
    statement over a Cartesian product, cut by the deadline, leaves **zero** of its
    elements behind when the store is closed, reopened from disk, and the survivors
    counted.
-3. **No checkpoint runs, and nothing on disk is rewritten.** A cut statement
-   committed no change, so it never checkpoints and never truncates the
-   write-ahead log. `snapshot/` and `wal` are left exactly as the statement found
-   them, which is what
+3. **No checkpoint runs on its account, and nothing on disk is rewritten.** A
+   cut statement committed no change, so it never checkpoints and never truncates
+   the write-ahead log, and `snapshot/` is left exactly as the statement found it.
+   The log is left as the statement found it too, with one exception the engine
+   owns: a cut statement that had created nodes before the cut leaves the
+   engine's node-identifier reservations for them behind it, records the engine
+   appends to the log without a synchronisation of their own and which become
+   durable at the log's next synchronisation — the next commit, or the close at
+   shutdown. Those records describe no node, relationship, property, label, index
+   or constraint; what they do describe, and what a later fold does with it, is
+   stated in rule 8 of
+   [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process).
+   A cut **read** appends nothing at all, which is what
    [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)
-   requires of every statement that commits nothing. The recovery repair the open
+   requires of every statement that appends nothing. The recovery repair the open
    already performed is neither undone nor repeated.
 4. **The caller fails with `utils.ErrGraphEngine` (exit code 1).** The
    budget introduces no new exit code, and may not:
@@ -4511,15 +4784,20 @@ A caller sees a process that vanished.
 
 **What that kill leaves on disk is the good half, and it is structural rather
 than lucky.** After a kill at any point — during the forward pass, during the
-undo replay, and against a server with several statements in flight — `wal` and
-every file under `snapshot/` are byte-identical to what the statement found, and
+undo replay, and against a server with several statements in flight — every
+file under `snapshot/` is byte-identical to what the statement found, and
 reopening the store replays every committed write with zero survivors of the
-killed one. Nothing durable is written before the commit: the write-ahead log's
-operation list is buffered in memory, which is the first accumulator above, and
-reaches disk only when the result closes. A kill at any point before that commit
-is therefore indistinguishable from the statement never having run, so
-[Statement Time Budget](#statement-time-budget), rule 3, holds of a statement
-that is **killed** exactly as it holds of one that is merely cut. **This is an
+killed one. No operation of the statement reaches the log before its commit:
+the write-ahead log's operation list is buffered in memory, which is the first
+accumulator above, and reaches disk only when the result closes. The one record
+of the statement that can precede the commit is the engine's reservation of node
+identifiers for the nodes it creates, which the engine appends as it creates
+them; a kill can leave those records, and a torn last record, in the log, and
+recovery reads them without restoring any element. A kill at any point before
+the commit is therefore indistinguishable, in the graph's content, from the
+statement never having run, so [Statement Time Budget](#statement-time-budget),
+rule 3, holds of a statement that is **killed** exactly as it holds of one that
+is merely cut. **This is an
 availability defect and not a durability one**, and the distinction is worth
 stating because the two call for different remedies.
 
@@ -4907,9 +5185,16 @@ what is compared is a store no process holds open.
     snapshot manifest `~/.roadmaps/<roadmap>/graph/snapshot/manifest.json` exists,
     proving a checkpoint ran (see
     [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-14. After a statement that wrote, and its checkpoint, the write-ahead log
-    `~/.roadmaps/<roadmap>/graph/wal` is truncated (small or empty), proving the
-    log was bounded rather than left to grow with history.
+14. After a statement that wrote, and its checkpoint, the write-ahead log's
+    control file records as covered a position at or beyond the last record of
+    that write, and the log retains no segment all of whose records lie below
+    that position, proving the log was bounded rather than left to grow with
+    history. The criterion MUST read both through the engine's read-only
+    inspection of the log rather than from a file's size: a log shorter than one
+    segment is not shortened by a fold at all
+    ([Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write), step 3),
+    so a size comparison would fail on a correct store. The segment-retention
+    half MUST be driven with enough writes to fill more than one segment.
 15. After a statement that wrote and its checkpoint, a subsequent read in a
     **separate** invocation returns the written data, proving recovery from the
     snapshot plus any log tail works across process exits.
@@ -4922,14 +5207,16 @@ what is compared is a store no process holds open.
     policy).
 17. **A statement that writes nothing leaves the store's data untouched, and the
     criterion MUST be run against a store whose write-ahead log is not empty.**
-    After `rmp graph client -r <roadmap> --query "MATCH (n) RETURN count(n)"`, the
-    `wal` file is byte for byte identical to what it was before, and every file
-    under `snapshot/` is unchanged, proving that a transaction which appended
+    After `rmp graph client -r <roadmap> --query "MATCH (n) RETURN count(n)"`,
+    every file of the write-ahead log — `wal`, `wal.control` and every segment
+    under `wal.d/` — is byte for byte identical to what it was before, and every
+    file under `snapshot/` is unchanged, proving that a transaction which appended
     nothing neither checkpointed nor truncated the log. The comparison is made
     while the server that ran the statement is still running and before its
     cadence has first made a fold due, which is the one exception to the rule
     above that a store is inspected only once its server has stopped: a log that
-    is not empty when the server opens the store is an unfolded tail, and the
+    holds records beyond the position its snapshot covers when the server opens
+    the store is an unfolded tail, and the
     server folds it at its first due instant or at shutdown whatever statements it
     receives (see
     [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
@@ -5172,17 +5459,20 @@ what is compared is a store no process holds open.
       bound; and a `DELETE` gated by such a predicate removes that relationship and
       leaves the other in place. The undirected and the incoming spelling are each
       asserted with the far endpoint bound by key and bound by label alone. This
-      bullet and the third are the two whose subject is not a hazard (see items 4
-      and 5), and they are asserted for the mirror-image reason: each is what fails
+      bullet, the third and the sixth are the three whose subject is not a hazard
+      (see items 4 and 5), and they are asserted for the mirror-image reason: each
+      is what fails
       if the engine stops resolving these shapes correctly, and equally what fails
       if a refusal of the shape is reintroduced;
     - `CREATE INDEX spec_key FOR (n:Spec) ON (n.key) MATCH (m) SET m.reviewed = true`
       creates the index, prints `{"ok": true}`, and leaves `m.reviewed` absent;
-    - `MATCH (v:Test {key:'…'})<-[e]-(s) REMOVE e.last_commit` reports success and
-      publishes no `counters` object, while a read-back through an outgoing pattern
-      still reports `last_commit` on every relationship the incoming pattern bound;
-      and the same removal written
-      `MATCH (s)-[e]->(v:Test {key:'…'}) REMOVE e.last_commit` removes it.
+    - `MATCH (v:Test {key:'…'})<-[e]-(s) REMOVE e.last_commit` reports success,
+      publishes a `counters` object whose `propertiesWritten` equals the number of
+      relationships the incoming pattern bound, and a read-back through an
+      outgoing pattern reports `last_commit` absent from every one of them and
+      still present on every relationship incident to `v` that points away from
+      it; and the same removal written
+      `MATCH (s)-[e]->(v:Test {key:'…'}) REMOVE e.last_commit` removes it too.
     An implementation that refused any of the six fails this criterion. It is
     stated in this direction — asserting the outcome rather than the absence of a
     check — because an absence cannot be tested and an outcome can (see
@@ -5204,9 +5494,14 @@ what is compared is a store no process holds open.
     Where the cut statement was
     a **write**, the criterion MUST also
     assert that nothing survived: in a **separate** invocation afterwards the
-    graph holds none of the elements that statement was creating, `wal` is byte
-    for byte what it was before, and every file under `snapshot/` is unchanged,
-    proving the transaction rolled back whole and that no checkpoint ran. An
+    graph holds none of the elements that statement was creating, and every file
+    under `snapshot/` is unchanged, proving the transaction rolled back whole and
+    that no checkpoint ran. The write-ahead log is not required to be unchanged:
+    it MAY have gained the engine's reservation records for the nodes the
+    statement created, which become durable at the log's next synchronisation and
+    are carried into the snapshot by a later fold, and the criterion MUST accept
+    that while asserting that no record of the log replays into an element of the
+    graph ([Statement Time Budget](#statement-time-budget), rule 3). An
     implementation that classified the engine call's error and not the result's
     passes an exit-code-only check while reporting an ordinary query failure,
     which is the outcome this criterion exists to catch (see
@@ -5333,23 +5628,32 @@ what is compared is a store no process holds open.
     `--socket ""` and otherwise valid arguments, exits 2 and writes zero bytes to
     stdout. No store is opened, no socket is created or removed, and the roadmap's
     `graph/` directory is byte-identical before and after.
-53. **A cut write served by a server leaves the store byte-identical, and the
-    criterion MUST compare content rather than size.** Over a store whose
-    write-ahead log holds no unfolded tail, a server serves exactly one
-    statement that the deadline cuts while it is writing, and is then stopped. Every
-    file under the roadmap's `graph/` directory is compared by name, by length and
-    by content digest against a fingerprint taken before that statement ran: the
-    set of files, their lengths and their digests are all unchanged, and the graph
-    still holds exactly the nodes it held. Size alone is the weak reading — a fold
-    whose residue happened to be small would pass it while still rewriting the
-    snapshot — and the property that actually holds is the stronger one: a shutdown
-    that owes no fold writes nothing (see
+53. **A cut write served by a server leaves the snapshot unchanged and the graph
+    without a survivor, and the criterion MUST compare content rather than
+    size.** Over a store whose write-ahead log holds no unfolded tail, a server
+    serves exactly one statement that the deadline cuts while it is writing, and
+    is then stopped. Every file under `snapshot/` is compared by name, by length
+    and by content digest against a fingerprint taken before that statement ran,
+    and the set of files, their lengths and their digests are all unchanged: the
+    shutdown owed no fold on the statement's account and took none. The graph,
+    read through a server started afterwards, holds exactly the nodes and
+    relationships it held before. The write-ahead log is **not** required to be
+    unchanged: it MAY have gained the engine's reservation records for the nodes
+    the statement created, made durable by the close at shutdown, and the
+    criterion MUST accept that growth as the engine's expected behaviour while
+    asserting that every record it gained is such a reservation and none replays
+    into an element; a later fold carries what those records describe into the
+    snapshot, which is the behaviour
     [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
-    rules 4 and 8). Content rather than modification time, because a fold renames a
-    directory into place and timestamps move even for identical bytes. The criterion
-    MUST also assert that the statement was **cut** rather than refused — it failed
-    no sooner than the deadline it was given, and it did not succeed — because a
-    statement that applied nothing exercises none of what this criterion is for.
+    rule 8, specifies. Size alone is the weak reading of the snapshot half — a
+    fold whose output happened to be small would pass it while still rewriting
+    the snapshot — and the property that actually holds is the stronger one: a
+    shutdown that owes no fold writes no snapshot (rules 4 and 8). Content rather
+    than modification time, because a fold renames a directory into place and
+    timestamps move even for identical bytes. The criterion MUST also assert that
+    the statement was **cut** rather than refused — it failed no sooner than the
+    deadline it was given, and it did not succeed — because a statement that
+    applied nothing exercises none of what this criterion is for.
 54. **Every writer against one hot node ultimately succeeds, and the criterion
     MUST drive the shape that used to fail rather than a milder one.** Sixteen
     concurrent clients, each updating the **same** node through
@@ -5685,12 +5989,15 @@ what is compared is a store no process holds open.
 81. **An idle server writes nothing to the store, however many due instants of
     its cadence pass.** A server is started over a roadmap whose graph holds
     committed nodes and whose write-ahead log was folded by the previous server's
-    shutdown. With no client connected and no statement sent, the contents of
-    every file under `snapshot/` and of `wal` are compared before the server
-    starts and after at least two due instants of its cadence have passed, and
-    they are identical, as are the files' modification times. A server that folds
-    unconditionally rewrites the snapshot at the first due instant and fails this
-    criterion (see
+    shutdown, and whose log holds no record beyond the position that fold
+    covered. With no client connected and no statement sent, the contents of
+    every file under `snapshot/` and of every file of the write-ahead log are
+    compared before the server starts and after at least two due instants of its
+    cadence have passed, and they are identical, as are the files' modification
+    times. A server that folds unconditionally rewrites the snapshot at the first
+    due instant and fails this criterion, and so does one that takes the start of
+    the log, rather than the position the snapshot covers, as the mark at open,
+    because log positions do not restart at a fold (see
     [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
     rules 9 and 10).
 82. **A server that receives one write folds it while it runs, and the criterion
@@ -5698,18 +6005,22 @@ what is compared is a store no process holds open.
     `rmp graph client -r <roadmap> --query "CREATE (s:Spec {key:'k'})"` is sent
     and nothing else. After the next due instant of the cadence has passed, and
     while the server is still running, `snapshot/` has been rewritten and the
-    write-ahead log no longer holds the frames of that write. A criterion that
+    position the log's control file records as covered lies at or beyond the
+    last record of that write. A criterion that
     stopped the server first would observe the shutdown checkpoint of rule 4 and
     pass an implementation whose gate withheld every in-flight fold (see
     [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
     rule 10).
 83. **A log tail left by a killed server is folded by the next server while it is
     idle.** A server receives a write that it acknowledges, and is killed outright
-    before any fold covers it, so `wal` is not empty. A new server started over
+    before any fold covers it, so the log holds records beyond the position the
+    snapshot covers. A new server started over
     that store replays the tail at open, receives no statement and no connection,
     and, after its first due instant of the cadence has passed and while it is
-    still running, has rewritten `snapshot/` and emptied `wal`; a statement then
-    sent through `rmp graph client` still finds the acknowledged write. The
+    still running, has rewritten `snapshot/`, and the position the log's control
+    file records as covered lies at or beyond the last record of the
+    acknowledged write; a statement then sent through `rmp graph client` still
+    finds the acknowledged write. The
     criterion MUST assert the fold while the second server is still running and
     idle: a criterion that stopped it first would observe only the shutdown fold,
     and one that sent a write first would observe a fold that write made owed, so
@@ -5744,6 +6055,110 @@ what is compared is a store no process holds open.
     --socket` with the first path is not refused for its length, because the
     target itself is inside the bound (see
     [Socket Path Length](#socket-path-length), rule 9).
+86. **A `PROFILE` of a write performs the write once and publishes both its plan
+    and its counters, and the criterion MUST assert all three.** Against one
+    roadmap, `PROFILE CREATE (w:Widget {serial:'P-1'}) RETURN w.serial` exits 0
+    and returns the column `w.serial`, the one row `["P-1"]`, a `profile` object
+    and no `plan` key, and, written after `profile`, a `counters` object of
+    exactly `nodesCreated` 1, `propertiesWritten` 1 and `labelsAdded` 1; a
+    following `MATCH (w:Widget {serial:'P-1'}) RETURN count(w)` returns 1, so the
+    write was applied once and not twice; and
+    `PROFILE MATCH (w:Widget {serial:'P-1'}) SET w.batch = 3`, which declares no
+    column, returns empty `columns` and `rows` arrays, a `profile` object and a
+    `counters` object of exactly `propertiesWritten` 1. The count is the part that
+    cannot be dropped: a criterion that read only the output passes an engine
+    that measured the write in one run and applied it in another (see
+    [Query Plans: The EXPLAIN and PROFILE Prefixes](#query-plans-the-explain-and-profile-prefixes),
+    rule 4, and `DATA_FORMATS.md § Graph Query Counters`, rule 5).
+87. **The relationship and property-value behaviours an earlier engine got wrong
+    are asserted on the read-back, in both directions.** Against a node pair `a`,
+    `b` joined from `a` to `b` by two relationships of one type told apart by a
+    property `n` of 1 and 2, each of the following is run on a fresh copy of that
+    fixture and asserted on the rows a following read returns, not on the exit
+    code: a `MERGE (a)-[e:T]->(b)` over the bound pair returning `e.n` returns two
+    rows naming 1 and 2; the same `MERGE` followed by `SET e.x = 1` leaves `x`
+    equal to 1 on both relationships and publishes `propertiesWritten` 2; a
+    `MERGE (a)-[e:T {n:2}]->(b)` creates no relationship and publishes no
+    `counters`; `CREATE (a)-[e:T {n:9}]->(b) DELETE e` leaves exactly the
+    relationships whose `n` is 1 and 2; `CREATE (a)-[:U]->(b) WITH a RETURN 1/0`
+    exits 1 with the parse-or-execution line and leaves exactly the two original
+    relationships, each with its type and its `n`; and
+    `MATCH (x {key:'a'}) SET x.k = [1, null, 2]` exits 1 with the
+    parse-or-execution line while a value `x.k` held before the statement reads
+    back unchanged. An implementation, or an engine, that let any of these report
+    success while acting on a relationship other than the one bound, or that
+    stored a list holding `null`, fails this criterion (see
+    [What Groadmap Does Not Check](#what-groadmap-does-not-check), items 8 and 9,
+    and [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 9).
+88. **A store in the single-file format is backed up, converted, and its backup
+    removed once the conversion has succeeded, and the criterion MUST assert all
+    three.** Given a roadmap whose `graph/` holds a store in the single-file
+    write-ahead-log format — a fixture written by a build pinned to an engine that
+    writes that format, holding nodes, relationships of more than one type, and a
+    single-file log with an acknowledged write no snapshot covers —
+    `rmp graph serve` is started, answers `MATCH (n) RETURN count(n)` and is
+    stopped. The server's stderr carried, before the socket announcement reached
+    stdout, a record naming the absolute path of a directory whose name is
+    `graph-backup-` followed by eight digits, `T`, six digits and `Z`, naming a UTC
+    instant no earlier than the start, and an `INFO` record naming that same path
+    as removed; afterwards the roadmap home holds no `graph-backup-` directory and
+    no `.partial` one; `graph/` now carries the write-ahead log's control file; and
+    the count the statement returned includes the acknowledged write. A criterion
+    that asserted only the absence of a backup passes an implementation that never
+    took one (see [Graph Store Format Migration](#graph-store-format-migration),
+    rules 1, 2, 9 and 10).
+89. **A backup is complete and at the required modes, and it is kept when the
+    open fails; the criterion MUST compare content.** Given the fixture of
+    criterion 88 with one frame in the middle of its single-file log corrupted, so
+    that the engine refuses to convert or open it, a fingerprint of `graph/` is
+    taken (every entry's relative path, type, length and content digest) and
+    `rmp graph serve` is started. It exits 1 with the open-or-recovery line of
+    `COMMANDS.md § Serve Error Cases`, after a `WARN` record naming the absolute
+    path of the backup it kept. That path names exactly one directory in the
+    roadmap home matching the name criterion 88 gives; its fingerprint equals the
+    one taken before the start in every entry but `write.lock`, which it does not
+    hold; every directory in it has mode `0700` and every file mode `0600`; and no
+    directory whose name ends in `.partial` remains. A criterion that asserted
+    only that a backup directory exists passes an implementation that copied half
+    the store (see [Graph Store Format Migration](#graph-store-format-migration),
+    rules 4, 5 and 9).
+90. **No backup is taken when none is due.** A server started for a roadmap that
+    has no graph creates no `graph-backup-` directory, and neither does a second
+    start of the store criterion 88 converted: after it, the roadmap home holds no
+    `graph-backup-` directory and its stderr carries no record of a backup taken
+    or removed (see [Graph Store Format Migration](#graph-store-format-migration),
+    rules 1 and 2).
+91. **A backup that fails leaves the store unconverted and the server not
+    started, and the criterion MUST assert the store's bytes.** Given the fixture
+    of criterion 88 with a symbolic link added inside `graph/`, pointing at a
+    directory outside it, `rmp graph serve` exits 1, writes nothing to stdout,
+    and writes the backup line `COMMANDS.md § Serve Error Cases` publishes; the
+    fingerprint of `graph/`, `write.lock` aside, is unchanged, so no control file
+    was created; the roadmap home holds no `graph-backup-` directory and no
+    `.partial` one; and the link's target is unchanged. A criterion that asserted
+    only the exit code passes an implementation that converted the store and
+    failed afterwards (see
+    [Graph Store Format Migration](#graph-store-format-migration), rules 4 and 7).
+92. **A backup an earlier start left is never overwritten or removed.** Given the
+    fixture of criterion 88 and, beside its `graph/`, a directory
+    `graph-backup-20000101T000000Z/` holding known content, a start of
+    `rmp graph serve` takes, and after the successful conversion removes, a backup
+    under its own instant, and leaves the earlier directory byte for byte as it
+    was; afterwards that directory is the only `graph-backup-` directory in the
+    roadmap home (see [Graph Store Format Migration](#graph-store-format-migration),
+    rules 6 and 9).
+93. **History a single-file log held at the conversion is folded by the server
+    while it is idle.** Started over the fixture of criterion 88, whose
+    single-file log holds an acknowledged write no snapshot covers, a server that
+    receives no statement and no connection has, after the first due instant of
+    its cadence and while it is still running, rewritten `snapshot/` and replaced
+    `wal` with the engine's one-record stub; a statement then sent through
+    `rmp graph client` still finds the acknowledged write. The criterion MUST
+    assert this while the server is running and idle, for the reason criterion 83
+    gives (see
+    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+    rule 4, and [Graph Store Format Migration](#graph-store-format-migration),
+    rule 11).
 
 
 ## See Also

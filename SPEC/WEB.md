@@ -3736,7 +3736,14 @@ of an internal read error, and what the body carries.
    read alike is kept rather than broken: a lost or silent server connection
    (rule 10) and an exhausted serialisation retry (rule 11) carry `rmp`'s own
    line, because no engine produced either failure and there is no engine
-   diagnostic to carry. The `500` of an internal read error does not carry
+   diagnostic to carry. A field the engine refuses as too long for its durable
+   format is the one execution failure where the CLI prints a line of its own and
+   the endpoint does not: the endpoint's `error` is `query failed to execute: `
+   followed by the engine's diagnostic, as for any other engine failure, while
+   `rmp graph client` writes its field-length line, which ends in that same
+   diagnostic (`GRAPH.md § Field Length Limits`, rule 13); the diagnostic the two
+   surfaces carry is the same, and only the CLI names the class in text of its
+   own. The `500` of an internal read error does not carry
    this shape: it is answered as every other route's internal read error is.
 
 8. **A request the caller abandoned is not a query-bar failure, and it carries no
@@ -3871,7 +3878,8 @@ of an internal read error, and what the body carries.
     still refuses nothing on the ground of what a statement does. Every write the
     query bar could make before this rule existed it can make after it, written
     without the prefix: an `EXPLAIN` of a write executes nothing wherever it runs,
-    and the engine refuses a `PROFILE` of a write wherever it runs
+    and a `PROFILE` of a write performs exactly the write the same statement
+    performs without the prefix
     (`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rules 1 and 4).
     The refusal is therefore no security control, and it does not narrow the
     property [Security and Constraints](#security-and-constraints), rule 3,
@@ -6866,8 +6874,9 @@ Rules:
 19. After serving any number of graph page and graph data requests that carry no
     `q`, or a `q` that writes nothing, for a roadmap that has never been written,
     no `snapshot/` subdirectory exists and no checkpoint has run. For a roadmap
-    that **has** been written, serving any number of those requests leaves the
-    `wal` file byte for byte unchanged and every file under `snapshot/` unchanged,
+    that **has** been written, serving any number of those requests leaves every
+    file of the write-ahead log byte for byte unchanged and every file under
+    `snapshot/` unchanged,
     proving that a statement which wrote nothing neither checkpointed nor truncated
     the log (see `GRAPH.md § Synchronous Checkpoint on Write` and
     `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
@@ -7063,7 +7072,9 @@ Rules:
     `MATCH (n:WebProbe) DETACH DELETE n` is answered HTTP `200`, and the same
     read-back afterwards reports it gone. The store's durable state is asserted
     after the server has been stopped, because the fold is the server's and not the
-    request's: `snapshot/manifest.json` exists and the `wal` file is short.
+    request's: `snapshot/manifest.json` exists, and the position the write-ahead
+    log's control file records as covered lies at or beyond the last record of
+    the second statement (`GRAPH.md § Synchronous Checkpoint on Write`, step 3).
     Neither statement carries a top-level `RETURN`, so neither is injected into,
     which is what makes this criterion reachable at all: an endpoint that appended
     the node `LIMIT` to either would hand the engine a statement that fails in the
@@ -8621,11 +8632,13 @@ Rules:
     same two prefixed statements are each answered HTTP `400` with `kind`
     `plan_prefix`, while `MATCH (n) RETURN n` is answered HTTP `500`.
 
-    **The no-write half alone asserts little.** An `EXPLAIN` executes nothing and
-    the engine refuses a `PROFILE` of a write wherever either runs, so an endpoint
-    that sent both statements would leave the graph unchanged too. The `kind`, and
-    the two pairs that set a `400` against a `503` and against a `500`, are what
-    establish that the refusal is decided before any graph server is resolved.
+    **The no-write half asserts only part of the refusal.** A `PROFILE` of a write
+    performs the write, so an endpoint that sent `PROFILE CREATE (n:Probe ...)`
+    would leave a `Probe` node behind and fail the read-back; but an `EXPLAIN`
+    executes nothing wherever it runs, so an endpoint that sent the `EXPLAIN`
+    would leave the graph unchanged too. The `kind`, and the two pairs that set a
+    `400` against a `503` and against a `500`, are what establish that the refusal
+    is decided before any graph server is resolved.
 168. **A statement carrying no prefix is answered byte for byte as before.**
     Against a served roadmap, each of the following requests is answered with the
     status and the exact response bytes that the same request produces when the

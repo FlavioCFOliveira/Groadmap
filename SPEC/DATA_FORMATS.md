@@ -515,7 +515,8 @@ A statement that **changed the graph** adds one further optional member,
 [Graph Query Counters](#graph-query-counters) is canonical for it. A statement
 that changed nothing carries no such key, so a read — which is what this shape
 answers in the ordinary case — is unchanged in every byte. The member never
-appears beside `plan` or `profile`, for the reason that section's rule 5 gives.
+appears beside `plan`, and it appears beside `profile` only for a `PROFILE` of a
+statement that changed the graph, for the reasons that section's rule 5 gives.
 
 This is the canonical specification of the graph read-result shape. The command
 contract that references it is `COMMANDS.md § Graph Management`; the feature
@@ -691,9 +692,9 @@ Rules:
    relationship, or a path, and a list never holds a list, a map, a node, a
    relationship, or a path: the engine refuses to store any of them (see
    [One Realisation of the Mapping](#one-realisation-of-the-mapping)). A stored
-   list never holds `null` either, although the engine does not refuse one: a
-   list written with a `null` element is not stored as written
-   (`GRAPH.md § What Groadmap Does Not Check`, item 9). A `properties` object
+   list never holds `null` either: the engine refuses a list written with a
+   `null` element in the same way (`GRAPH.md § What Groadmap Does Not Check`,
+   item 9). A `properties` object
    therefore holds only scalar renderings and JSON arrays of scalar renderings.
 2. A node's `labels` array preserves the order GoGraph reports and may be empty
    (`[]`) when the node carries no labels.
@@ -780,18 +781,17 @@ The engine raises `InvalidPropertyType` for a node, a relationship, or a path �
 alone or inside a list — on every write form measured: `SET e.k = …`,
 `SET e = {…}`, `SET e += {…}`, `ON CREATE SET` and `ON MATCH SET`, and an inline
 property map in a `CREATE` or `MERGE` pattern, on a node and on a relationship
-alike. A map, and a list holding a list or a map, are refused in the same way.
-The key is never stored, and a replacing form leaves the properties the element
-already carried as they were. The caller reads the ordinary engine failure of
-`GRAPH.md § Error Handling and Exit Codes`, rule 2 — exit code 1 and nothing on
-stdout — but not the engine's diagnostic: the engine's server classifies this
-refusal as a fault of its own rather than of the caller, and replaces the message
-with generic text naming only the session, so the line does not say which value
-was refused. The engine's own diagnostic, which names the key, is written to the
-server's stderr as a record of the kind `GRAPH.md § Server Diagnostics on Stderr`,
-rule 1, describes. None of this is what the conclusion above rests on, and this
-section settles that conclusion alone: the element rows of the shared realisation
-are reached from a top-level result cell and from nowhere else.
+alike. A map, a list holding a list or a map, and a list holding `null` are
+refused in the same way. The key is never stored, and a replacing form leaves the
+properties the element already carried as they were. The caller reads the
+ordinary engine failure of `GRAPH.md § Error Handling and Exit Codes`, rule 2 —
+exit code 1, nothing on stdout, and the parse-or-execution line ending in the
+engine's own diagnostic, which names the kind of value refused and the write that
+carried it. The engine's server classifies the refusal as the caller's fault,
+under a type-error code, and so forwards that diagnostic rather than replacing it.
+None of this is what the conclusion above rests on, and this section settles that
+conclusion alone: the element rows of the shared realisation are reached from a
+top-level result cell and from nowhere else.
 
 Giving a surface that only ever maps property bags a realisation which also
 carries those rows therefore widens neither what that surface can publish nor any
@@ -1221,16 +1221,20 @@ Rules:
    protocol faithfully. `GRAPH.md § Write Counters: What a Statement Changed` is
    canonical for the constraint and for the upstream change that would let the
    split be restored.
-5. **`counters` and the plan members are mutually exclusive, and that is a
-   property of the engine rather than a rule imposed here.** A consumer may rely
-   on never seeing `counters` beside `plan` or `profile`, and the two ways it
-   could have happened are both closed upstream. An `EXPLAIN` executes nothing,
-   so it has no applied effect to count and rule 1 omits the block. A `PROFILE`
-   does execute, but the engine refuses a `PROFILE` of a writing statement
-   outright rather than perform a write a caller asked only to have measured, so
-   the only statement a `profile` tree can describe is one that changed nothing.
+5. **`counters` never appears beside `plan`, and appears beside `profile` exactly
+   when the profiled statement changed the graph; both are properties of the
+   engine rather than rules imposed here.** An `EXPLAIN` executes nothing, so it
+   has no applied effect to count and rule 1 omits the block: a consumer may rely
+   on never seeing `counters` beside `plan`. A `PROFILE` executes the statement
+   in full, a writing one included, and applies its writes exactly once, so a
+   `PROFILE` of a statement that changed the graph publishes the `profile` tree
+   and then `counters`, the last member as rule 3 requires, carrying the same
+   values the same statement publishes without the prefix; a `PROFILE` of a
+   statement that changed nothing publishes no `counters`, under rule 1. The two
+   members describe different things — what the run cost, and what it changed —
+   so their presence together is not a conflict to resolve.
    `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rules 1 and 4, is
-   canonical for what each prefix does and for that refusal.
+   canonical for what each prefix does.
 6. **The counters fall inside the identity
    [Graph Client Result](#graph-client-result) requires, and take no exception
    from it.** They describe the statement and the graph, not the duration of the
@@ -1285,16 +1289,17 @@ render and never in what the engine said.
 reach the error line.** What it fixes is the bytes a statement writes to stdout
 and the code it exits with; the plain-text diagnostic a *failing* statement
 writes to stderr is outside it, and is fixed per condition by the error tables of
-`COMMANDS.md` rather than here. Three conditions are worth naming, because the
-protocol degrades them rather than carrying them. A field the engine refuses as
-too long for its durable format arrives with its diagnostic but without its
-class, so the line the caller reads is the ordinary parse-or-execution line;
-`GRAPH.md § Field Length Limits`, rule 13, is canonical for that, for the remedy
-that ends it, and for what holds meanwhile — the sentinel and the exit code. A
-property value the engine cannot store, and a `PROFILE` of a statement that
-writes, arrive with the engine's diagnostic replaced by generic text naming only
-the session (see [One Realisation of the Mapping](#one-realisation-of-the-mapping)
-and `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 4). Nothing
+`COMMANDS.md` rather than here. Three conditions that an earlier pinned engine
+degraded now cross the protocol intact, and are named so that the earlier
+degradation is not assumed. A field the engine refuses as too long for its
+durable format arrives with a failure code of its own, so the line
+`rmp graph client` writes is the field-length line, while the web graph data
+endpoint answers it as an `execution` failure carrying the engine's diagnostic
+(`GRAPH.md § Field Length Limits`, rule 13). A
+property value the engine cannot store arrives with the engine's own diagnostic
+(see [One Realisation of the Mapping](#one-realisation-of-the-mapping)). And a
+`PROFILE` of a statement that writes is executed rather than refused
+(`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 4). Nothing
 above is weakened for a statement that succeeds.
 
 5. **The requirement binds every value that is a property of the statement and

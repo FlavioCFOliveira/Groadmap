@@ -169,6 +169,8 @@ The application version and schema version are independent:
 
 This section covers **database schema** migrations, which alter the contents and structure of a roadmap's SQLite database. They are distinct from the **filesystem layout** migration, which relocates a roadmap's database within the data directory and is specified in `ARCHITECTURE.md § Filesystem Layout Migration`. The two mechanisms are independent: a schema migration runs when a specific database is opened; the layout migration runs once at startup against the data directory.
 
+Neither covers the knowledge-graph store. Its on-disk format belongs to GoGraph, which converts a store in an earlier format one way when it opens it, and `rmp graph serve` backs the store up before that conversion (`GRAPH.md § Graph Store Format Migration`). That conversion is not a schema migration: it records nothing in `_metadata`, it does not change `SchemaVersion`, it is not part of the Migration Chain Guarantee below, and it neither requires nor causes a schema migration. A binary that refuses a converted graph store does so as a graph-store open failure (`GRAPH.md § Error Handling and Exit Codes`), not under `Database Schema Newer Than the Binary`, and its roadmap database is unaffected.
+
 The `_metadata` table records the active schema version. Migration steps and their descriptions live in `internal/db/migrations.go`; the migration history is recoverable via `git log internal/db/migrations.go`.
 
 ### Current Schema Version

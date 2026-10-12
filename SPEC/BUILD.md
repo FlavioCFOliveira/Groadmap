@@ -21,8 +21,8 @@ three:
    older than the minimum any of its dependencies declares. GoGraph is the dependency this
    floor is recorded for; see `GRAPH.md § Dependency Maturity Risk` for the
    dependency itself.
-2. **Security floor, set by a reachable-advisory requirement.** Four Go standard
-   library advisories are reachable from Groadmap's own code — the vulnerable
+2. **Security floor, set by a reachable-advisory requirement.** Thirteen Go
+   standard library advisories are reachable from Groadmap's own code — the vulnerable
    functions are called, not merely present in the module graph. The `go`
    directive MUST name a stable release that carries the fix for every one of
    them, and the release it names does.
@@ -36,7 +36,7 @@ three:
    is chosen and not inherited, and Rule 5 requires it to be treated as a change to
    both.
 
-The four advisories item 2 names:
+The thirteen advisories item 2 names:
 
 | Advisory | Package | Defect |
 |----------|---------|--------|
@@ -44,11 +44,32 @@ The four advisories item 2 names:
 | GO-2026-6090 | `crypto/tls` | Post-handshake handshake messages accepted without limit |
 | GO-2026-6089 | `net/http` | `ReadHeaderTimeout` not applied to the unencrypted HTTP/2 check |
 | GO-2026-5972 | `encoding/asn1` | Maximum recursion depth not enforced |
+| GO-2026-6599 | `html/template` | Context tracking not reset on consecutive template expressions |
+| GO-2026-6600 | `html/template` | `yield` not recognised as a regexp preceder keyword |
+| GO-2026-6603 | `net/http` | HTTP/2 server memory exhaustion through trailer headers |
+| GO-2026-6607 | `crypto/tls` | Malformed ECH outer extension references accepted |
+| GO-2026-6609 | `net/http` | No limit on the size of parsed `Range` headers |
+| GO-2026-6611 | `net/http` | Excessive CPU consumption from repeated HTTP/2 initial window changes |
+| GO-2026-6612 | `net/http` | Double flow-control refund on HTTP/2 server streams |
+| GO-2026-6613 | `net/http` | HTTP/1 server connection desynchronisation after a 2xx `CONNECT` response |
+| GO-2026-6617 | `net/http` | HTTP/2 server crash from an HPACK encoder race |
 
-Two of the four, `html/template` and `net/http`, sit on the `rmp web` request
-path, which serves HTML over HTTP (see `WEB.md`). All four are toolchain
+`html/template` and `net/http` sit on the `rmp web` request path, which serves
+HTML over HTTP (see `WEB.md`). All thirteen are toolchain
 vulnerabilities rather than module vulnerabilities: the toolchain version alone
-remediates them, and no dependency change can.
+remediates them, and no dependency change can. The last nine are fixed in the
+patch release that follows the one the floor previously named, on the same minor
+line, so recording them raises the patch component of the floor and nothing else.
+
+**Raising the patch floor changes no Unicode data.** `Unicode Data Rules`, Rule
+5, makes a change of toolchain a change to the tasks page's search and to the key
+comparison of `GRAPH.md § Node Key Uniqueness` wherever it changes the Unicode
+version, and this raise does not: `golang.org/x/text/unicode/norm` selects its
+tables by the toolchain's minor line, and the standard library's own Unicode
+tables change only with a minor release, so both halves of the rule read the
+same Unicode version before and after a patch raise. Measured: the standard
+library reports the same Unicode version under both patch releases, and the
+pinned `golang.org/x/text` compiles the same table file under both.
 
 **A reachable advisory raises the patch floor.** The patch component of the
 required version is a security floor, not routine version currency. It moves by
@@ -130,7 +151,12 @@ module is the one `go.mod` pins.
    (pre-1.0 API instability and on-disk format change across pre-1.0 releases) and
    their mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is a
    change that MUST be re-validated against the acceptance criteria in `GRAPH.md`
-   before release.
+   before release. An upgrade that changes the store's on-disk format one way is
+   not reversible by pinning the earlier version again: the converted store is
+   refused by the earlier engine, and once the conversion has succeeded there is no
+   way back to it. `GRAPH.md § Graph Store Format Migration` is canonical for the
+   backup taken before the conversion, its removal once the conversion has
+   succeeded, and the manual restore available only while a backup is kept.
 4. `go.sum` MUST record the checksum of the pinned version. The build MUST fail
    if the module checksum does not match.
 
