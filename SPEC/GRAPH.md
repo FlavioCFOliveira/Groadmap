@@ -5032,13 +5032,98 @@ ends ([Peak Resident Memory](#peak-resident-memory)).
    of the heaviest statement it has run. When other statements are still in flight,
    only the memory of the statements that have ended is owed back; the memory of
    the ones still running is theirs.
-4. **No figure is published.** The requirement is that the release happens, at
-   the end of every statement; it states no resident-memory threshold, because
-   this project keeps no performance-measurement tests and nothing would re-derive
-   such a figure (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
+
+   **A statement no release overlapped is released when, and only when, the
+   heap has grown past a gate.** The heap the server reads is the memory the
+   runtime holds and has not returned to the operating system: the bytes in
+   live and dead objects, the free spans not yet released, and the unused part
+   of the spans in use. The baseline is that reading taken right after the last
+   release the server made, and zero before its first. The gate is a quarter of
+   the baseline or 16 MiB, whichever is larger. At the end of a statement that
+   no release overlapped, the server releases when the heap exceeds the
+   baseline by more than the gate, and makes no release otherwise; a growth
+   equal to the gate makes none. The gate exists because each release is a full
+   collection followed by a return of all free memory to the operating system:
+   without it, every statement that allocated almost nothing would still pay a
+   collection at its end. Its proportional term keeps a stream of small
+   statements beside a large live heap from paying one each.
+
+   **Releases continue after the outcome has been written.** The engine frees a
+   statement's structures in stages after the outcome has been written, so the
+   memory a release finds at a statement's end is not yet all of it. Every
+   release made at a statement's end is therefore followed by settle passes,
+   whatever the heap reading says: the first pass runs 250 milliseconds after
+   that release and each later one 250 milliseconds after the previous; each
+   pass releases and takes a new baseline; at least four passes run, a fifth or
+   later pass runs only when the previous pass returned at least 16 MiB, and no
+   more than eight run. A release at a later statement's end restarts the
+   passes from the first. No pass runs once the server's listener has closed.
+
+   **Ownership under overlap is decided by the statement's lifetime, not by how
+   the heap grew.** A release can return only memory that is already free, so a
+   release made while another statement is running leaves that statement's live
+   memory in place, and from then on the heap gives no sign that this memory
+   belongs to a statement: when that statement ends, its memory becomes free
+   without the heap growing at all. A server that judged what is owed by the
+   heap's growth since its last release would therefore keep that memory for
+   as long as it stays idle. The server MUST instead attribute the debt as
+   follows:
+
+   - **A statement that a release overlapped is released at its own end,
+     unconditionally: the gate does not apply to it.** A release overlaps a statement when the server makes it
+     at any instant between the statement's start and its end, whatever
+     occasioned it: another statement's end, a pass that follows a release, or
+     the end of a checkpoint fold. At the end of such a
+     statement the server returns freed memory to the operating system whatever
+     the heap has done since the last release, and then goes on returning it on
+     the same terms as after any other release at a statement's end, so that the
+     memory the engine frees after the outcome has been written is returned too.
+   - **The start MAY be taken early, and never late.** The server MAY take a
+     statement's start to be the end of the previous statement on the same
+     connection or, for a connection's first statement, the moment the server
+     accepted that connection. An earlier start can only make the server treat
+     more statements as overlapped, never fewer, so it never withholds a release
+     that is owed. A start taken later than the moment the statement began to
+     accumulate memory is not permitted, because the memory accumulated before it
+     could then be counted into a release the statement is not seen to overlap.
+   - **A connection that closes before the statement's outcome has been written
+     ends that statement at the close.** The statement is owed exactly what it
+     would have been owed had its outcome been written: released at the close,
+     unconditionally, when a release overlapped it.
+   - **A checkpoint fold the server runs while it serves is owed on the same
+     terms.** Its lifetime starts when the fold starts and ends when the fold
+     ends ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process)),
+     and a fold that a release overlapped is released at its end unconditionally.
+
+   **The price is accepted.** Each release is a full collection, whose cost grows
+   with the memory still live when it runs. Under sustained concurrent load
+   nearly every statement is overlapped, so nearly every statement's end pays a
+   collection that also traverses the live memory of the statements still
+   running. That is the cost of returning a statement's memory when the statement
+   ends rather than when the server next happens to be quiet, and this
+   specification chooses it.
+4. **No figure is published.** The requirement is that the release is decided
+   at the end of every statement: made unconditionally when a release overlapped
+   the statement, and otherwise made exactly when the heap has grown past the
+   gate rule 3 states. It states no resident-memory threshold, because this
+   project keeps no performance-measurement tests and nothing would re-derive
+   such a figure (`BUILD.md § No Benchmarks and No Performance-Measurement Tests`);
+   the gate's 16 MiB and quarter, and the settle passes' interval and counts, are
+   parameters this section fixes, not measured thresholds of resident memory.
    It is verified by the property, not by a measurement: that the statement's
    structures are unreachable once it has ended, and that the server returns freed
    memory to the operating system on that path, on every outcome listed above.
+   For the gate the property is that a non-overlapped end whose heap growth does
+   not exceed the gate makes no release and one whose growth exceeds it makes
+   one ([Acceptance Criteria](#acceptance-criteria), criterion 100).
+   For overlap the property is that a statement a release overlapped is released
+   at its own end, however little the heap grew after that release, whether its
+   start was taken when it began or at one of the earlier instants rule 3
+   permits, whether its outcome was written or its connection closed first, and
+   equally for a checkpoint fold. That property is verified deterministically,
+   against a model of the heap and of the timer that paces the releases, by
+   counting the releases the server makes; no resident memory is read
+   ([Acceptance Criteria](#acceptance-criteria), criteria 96 to 99).
 5. **What it does not bound.** The requirement bounds how long a statement's memory
    is held, not how much a statement may use while it runs. The peak cost of one
    statement, and the decision not to bound it from Groadmap's side, are unchanged
@@ -6305,6 +6390,65 @@ what is compared is a store no process holds open.
     place until a checkpoint happens to rewrite it (see
     [Persistence Layout](#persistence-layout), rule 4, and
     [Server Startup](#server-startup), step 6).
+
+Criteria 96 to 100 run no Cypher statement and start no server. They drive the
+server's memory release directly, with the heap replaced by a model in which the
+memory the runtime holds is the sum of live memory and freed memory, a release
+returns the freed memory and is counted, and the timer that paces the releases
+fires each scheduled call once, when the test chooses. They count releases and
+read the model; they measure nothing
+(`BUILD.md § No Benchmarks and No Performance-Measurement Tests`).
+
+96. **A statement that another statement's release overlapped has its memory
+    returned at its own end.** The model starts at an idle server's live memory.
+    Statement A starts and its live memory grows by an amount many times that
+    idle figure; statement B starts, frees a smaller amount, and ends while A is
+    still live, and the release B's end makes, and every pass that follows it, run
+    while A is still live. A then ends: its live memory becomes freed memory and
+    the memory the runtime holds does not grow. At A's end the server makes at
+    least one release, and after the passes A's end schedules have run, the model
+    holds no freed memory. The criterion MUST place A's growth before B's release
+    and A's end after the last pass B's release scheduled: a criterion that let A
+    end while those passes were still running passes an implementation that
+    judges what is owed by the heap's growth, which is the implementation this
+    criterion exists to fail (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rules 3
+    and 4).
+97. **A start taken at the previous end on the connection, or at the
+    connection's acceptance, is honoured.** On one connection, statement A1 ends,
+    then a release made for another connection's statement runs, and only then
+    does statement A2 on the first connection start growing its live memory; on a
+    second, newly accepted connection, a release made for a third connection's
+    statement runs before that connection's first statement grows its live memory.
+    Each of the two statements, when it ends after the last pass that release
+    scheduled, is released at its end and leaves the model holding no freed
+    memory (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rule 3).
+98. **A connection that closes before the statement's outcome has been written
+    ends the statement, and an overlapped one is released at the close.** As in
+    criterion 96, except that A's connection closes while A is live and no
+    outcome is written for A: the close makes at least one release, and after the
+    passes it schedules have run, the model holds no freed memory (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rule 3).
+99. **A checkpoint fold that a release overlapped is released at its end.** As in
+    criterion 96, with a checkpoint fold in the place of A: the fold starts and
+    its live memory grows, a statement's release and its passes run while the fold
+    is still live, and the fold then ends. At the fold's end the server makes at
+    least one release, and after the passes it schedules have run, the model
+    holds no freed memory (see
+    [Statement-Scoped Memory Release](#statement-scoped-memory-release), rule 3).
+100. **A statement no release overlapped is released exactly when the heap has
+    grown past the gate.** With no release between a statement's start and its
+    end, and the model's baseline set by a release, the criterion ends the
+    statement twice for each of two baselines: one below 64 MiB, where the gate
+    is 16 MiB, and one well above it and a multiple of four bytes, where the
+    gate is a quarter of the baseline. When the memory the model holds exceeds the baseline by exactly the
+    gate, the statement's end makes no release and schedules no settle pass; when
+    it exceeds the baseline by the gate plus one byte, the end makes one release
+    and schedules the settle passes. A criterion that used one baseline only
+    passes an implementation that applies one of the two terms and not the other
+    (see [Statement-Scoped Memory Release](#statement-scoped-memory-release),
+    rules 3 and 4).
 
 
 ## See Also

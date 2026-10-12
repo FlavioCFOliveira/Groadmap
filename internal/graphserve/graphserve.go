@@ -626,7 +626,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger, ln.releaser.statementEnded)
+	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger, ln.releaser)
 	if err != nil {
 		_ = closer.Close() //nolint:errcheck // tearing down a server that never served; the close error cannot be acted on
 		_ = st.Close()     //nolint:errcheck // idem: the lock is released by this call whatever it returns
@@ -881,10 +881,11 @@ func removeStaleSocket(path string) {
 // reason [checkpointCadence] gives. Production passes [productionCadence]; a
 // disabled cadence starts no in-flight fold at all.
 //
-// afterFold, which may be nil, runs after every fold that ran: the server
-// passes its memory releaser's, so the memory a fold used is returned to the
-// operating system when the fold ends (see [foldGate.foldIfOwed]).
-func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger, afterFold func()) (*shutdownCloser, *server.Server, error) {
+// memory, which may be nil, is told when every fold starts and when a fold
+// that ran ends: the server passes its memory releaser, so the memory a fold
+// used is returned to the operating system when the fold ends (see
+// [foldGate.foldIfOwed]).
+func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger, memory memoryLedger) (*shutdownCloser, *server.Server, error) {
 	txnStore := st.Txn()
 	engine := st.Engine()
 
@@ -912,7 +913,7 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 		store.WithCheckpointer(cp),
 		store.WithQuiesce(txnStore.RunUnderCommitLock))
 
-	gate := &foldGate{st: st, cp: cp, afterFold: afterFold}
+	gate := &foldGate{st: st, cp: cp, memory: memory}
 	closer := &shutdownCloser{db: db, gate: gate}
 
 	if cadence.maxAge > 0 {
@@ -972,10 +973,11 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 type foldGate struct {
 	st *graphstore.Store
 	cp *checkpoint.Checkpointer[string, float64]
-	// afterFold, when set, runs after every fold that ran; see foldIfOwed.
-	// It is fixed at construction, before any fold can run.
-	afterFold func()
-	mu        sync.Mutex
+	// memory, when set, is told when a fold starts and when a fold that ran
+	// ends; see foldIfOwed. It is fixed at construction, before any fold can
+	// run.
+	memory memoryLedger
+	mu     sync.Mutex
 }
 
 // foldIfOwed folds the write-ahead log into the snapshot when, and only when, the
@@ -989,15 +991,24 @@ type foldGate struct {
 //
 // A fold that ran serialised the whole graph, and the memory that took is
 // garbage once it returns. It is handed back to the operating system through
-// afterFold, outside the gate's mutex, for the reason [memoryReleaser] gives:
+// memory, outside the gate's mutex, for the reason [memoryReleaser] gives:
 // an idle server triggers no collection of its own, and the runtime's
 // background scavenger returns such memory over minutes. Measured on rmp task
 // #589: an in-flight fold after a cut write took an idle server from 0.38 GB
 // to 1.1 GB, where it stayed for more than two minutes without this release.
+//
+// The fold is owed on a statement's terms (SPEC/GRAPH.md § Statement-Scoped
+// Memory Release, rule 3): its start is taken before the gate's mutex, earlier
+// than the fold's first allocation, so a release made while the fold runs
+// makes its end release unconditionally.
 func (g *foldGate) foldIfOwed() (bool, error) {
+	var start uint64
+	if g.memory != nil {
+		start = g.memory.statementStarted()
+	}
 	ran, err := g.fold()
-	if ran && g.afterFold != nil {
-		g.afterFold()
+	if ran && g.memory != nil {
+		g.memory.statementEnded(start)
 	}
 	return ran, err
 }
@@ -1597,6 +1608,11 @@ func (l *serverListener) Accept() (net.Conn, error) {
 	}
 	l.live.Add(1)
 	wrapped := &drainConn{Conn: conn, owner: l, summaries: newSummaryScanner()}
+	// The connection's first statement starts no earlier than its acceptance
+	// (SPEC/GRAPH.md § Statement-Scoped Memory Release, rule 3).
+	accepted := l.releaser.statementStarted()
+	wrapped.start.Store(accepted)
+	wrapped.lastWrite = accepted
 	l.connsMu.Lock()
 	// Zero is the mark of a connection markWrites has never seen, and zero is
 	// even, so a connection accepted after the mark is never a candidate for the
@@ -1794,6 +1810,20 @@ type drainConn struct {
 	// writeSeq it is touched only by the connection's single writer.
 	summaries *summaryScanner
 
+	// start is the release epoch taken at an instant no later than the start
+	// of any statement this connection has open or will open next; the
+	// statements that end hand it to the releaser, which releases them
+	// unconditionally when a release has been made since (SPEC/GRAPH.md
+	// § Statement-Scoped Memory Release, rule 3). It is written by the
+	// connection's single writer and read by Close, which may run on another
+	// goroutine.
+	start atomic.Uint64
+
+	// lastWrite is the release epoch taken as the previous Write returned, or
+	// at acceptance. Every byte of the current Write was produced after that
+	// instant, by the same goroutine. Touched only by the single writer.
+	lastWrite uint64
+
 	// writeSeq is an even/odd sequence counter over this connection's writes: it
 	// is incremented on entry to Write and again on return, so an ODD value means
 	// a write is outstanding and the value itself identifies WHICH write. One
@@ -1817,15 +1847,41 @@ type drainConn struct {
 // and the write is no longer outstanding for the shutdown's selector — a write
 // that completed a statement's summary returns that statement's memory to the
 // operating system (SPEC/GRAPH.md § Statement-Scoped Memory Release).
+//
+// # Where the next statement's start is taken
+//
+// The engine buffers its responses and flushes them only when it is about to
+// wait for the client or its buffer is full, so one write can carry a
+// statement's summary followed by the first messages of the next statement,
+// which then began before this write. The start therefore moves only to an
+// instant the scanner proves earlier than any statement still open:
+//
+//   - the write ends with no statement open and no message begun: the next
+//     statement starts after this write returns, so the start is taken now,
+//     after this write's own release;
+//   - a statement ended with none other open, but more bytes followed it: the
+//     statement those bytes belong to began after that summary was produced,
+//     which was after the previous write returned, so the start is the epoch
+//     taken then;
+//   - otherwise a statement that was open is still open, and the start stays.
 func (c *drainConn) Write(b []byte) (int, error) {
 	c.writeSeq.Add(1)
 	n, err := c.Conn.Write(b)
 	c.writeSeq.Add(1)
 	// The whole buffer is scanned, written or not: a statement whose summary
 	// could not be delivered — its client has gone — has ended all the same.
+	releaser := c.owner.releaser
 	if c.summaries.feed(b) > 0 {
-		c.owner.releaser.statementEnded()
+		releaser.statementEnded(c.start.Load())
 	}
+	now := releaser.statementStarted()
+	switch {
+	case c.summaries.idle():
+		c.start.Store(now)
+	case c.summaries.quiesced:
+		c.start.Store(c.lastWrite)
+	}
+	c.lastWrite = now
 	return n, err
 }
 
@@ -1835,8 +1891,9 @@ func (c *drainConn) Close() error {
 	err := c.Conn.Close()
 	c.closeOnce.Do(func() {
 		// A connection that closes ends whatever statement it was serving,
-		// whether or not a summary was written for it.
-		defer c.owner.releaser.statementEnded()
+		// whether or not a summary was written for it, and is owed what that
+		// statement would have been owed at its outcome.
+		defer c.owner.releaser.statementEnded(c.start.Load())
 		// The registry is left BEFORE the count is decremented, so that a drain
 		// which observes live == 0 can never then find this connection still
 		// registered. See [serverListener.cutBlockedWrites] for what that

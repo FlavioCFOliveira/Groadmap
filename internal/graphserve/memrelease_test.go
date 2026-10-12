@@ -90,17 +90,17 @@ func TestMemoryReleaser_ReleasesWhatAStatementLeftBehind(t *testing.T) {
 	held, releases := uint64(4<<20), 0
 	r := countingReleaser(&held, &mu, &releases)
 
-	r.statementEnded() // the first statement grew nothing past the floor
+	r.statementEnded(r.statementStarted()) // the first statement grew nothing past the floor
 	if releases != 0 {
 		t.Errorf("%d releases for a statement that grew the heap by nothing", releases)
 	}
 	held = 1350 << 20 // a cut statement left 1.35 GB of freed heap
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	if releases != 1 || held != 4<<20 {
 		t.Errorf("after a heavy statement: %d releases, held %d; want one release back to the live heap", releases, held)
 	}
 	held += 2 << 20 // a small statement
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	if releases != 1 {
 		t.Errorf("a small statement triggered a collection")
 	}
@@ -158,10 +158,11 @@ func TestMemoryReleaser_ConcurrentEndsDoNotStack(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			start := r.statementStarted()
 			mu.Lock()
 			held += 64 << 20
 			mu.Unlock()
-			r.statementEnded()
+			r.statementEnded(start)
 		}()
 	}
 	wg.Wait()
@@ -285,7 +286,7 @@ func TestMemoryReleaser_SettlePassesReturnWhatTheEngineFreesAfterTheSummary(t *t
 		},
 	}
 
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	if releases != 1 || held != 1460<<20 {
 		t.Fatalf("at the summary: %d releases, held %d MB", releases, held>>20)
 	}
@@ -309,7 +310,7 @@ func TestMemoryReleaser_SettlePassesReturnWhatTheEngineFreesAfterTheSummary(t *t
 	mu.Lock()
 	held = 3000 << 20
 	mu.Unlock()
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	pending := timers[len(timers)-1]
 	r.stop()
 	if !pending.stopped {
@@ -326,8 +327,9 @@ func TestMemoryReleaser_SettlePassesReturnWhatTheEngineFreesAfterTheSummary(t *t
 // residue of rmp task #589: the server's own in-flight fold serialises the
 // whole graph, and that memory is garbage once the fold returns. An idle
 // server triggers no collection, so without the hook the memory stayed
-// resident for minutes (0.38 GB to 1.1 GB, measured). A fold that ran calls
-// afterFold once; a fold that was not owed does not.
+// resident for minutes (0.38 GB to 1.1 GB, measured). A fold that ran reports
+// its start and its end, handing back its start token; a fold that was not
+// owed reports no end.
 func TestFoldGate_AFoldThatRanReturnsItsMemory(t *testing.T) {
 	graphDir := filepath.Join(t.TempDir(), "graph")
 	if err := os.MkdirAll(graphDir, 0o700); err != nil {
@@ -343,8 +345,8 @@ func TestFoldGate_AFoldThatRanReturnsItsMemory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	folds := 0
-	closer, _, err := build(st, graphDir, checkpointCadence{}, logger, func() { folds++ })
+	ledger := &countingLedger{}
+	closer, _, err := build(st, graphDir, checkpointCadence{}, logger, ledger)
 	t.Cleanup(func() { _ = closer.Close() })
 	if err != nil {
 		t.Fatal(err)
@@ -358,14 +360,26 @@ func TestFoldGate_AFoldThatRanReturnsItsMemory(t *testing.T) {
 	if err != nil || !ran {
 		t.Fatalf("the owed fold: ran %v, err %v", ran, err)
 	}
-	if folds != 1 {
-		t.Errorf("a fold that ran called afterFold %d times, want 1", folds)
+	if ledger.ended != 1 || ledger.started != 1 || ledger.endToken != 1 {
+		t.Errorf("a fold that ran: %d starts, %d ends with token %d; want one start and one end with its token",
+			ledger.started, ledger.ended, ledger.endToken)
 	}
 	ran, err = closer.gate.foldIfOwed()
 	if err != nil || ran {
 		t.Fatalf("a fold with nothing owed: ran %v, err %v", ran, err)
 	}
-	if folds != 1 {
-		t.Errorf("a fold that did not run called afterFold")
+	if ledger.ended != 1 {
+		t.Errorf("a fold that did not run reported an end")
 	}
 }
+
+// countingLedger counts the starts and ends a fold reports; each start's token
+// is the number of starts so far.
+type countingLedger struct {
+	started, ended int
+	endToken       uint64
+}
+
+func (c *countingLedger) statementStarted() uint64 { c.started++; return uint64(c.started) }
+
+func (c *countingLedger) statementEnded(start uint64) { c.ended++; c.endToken = start }
