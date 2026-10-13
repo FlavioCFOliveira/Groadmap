@@ -3,7 +3,7 @@ module github.com/FlavioCFOliveira/Groadmap
 go 1.27.2
 
 require (
-	github.com/FlavioCFOliveira/GoGraph v0.16.0
+	github.com/FlavioCFOliveira/GoGraph v0.17.0
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/dlclark/regexp2/v2 v2.8.4
 	github.com/yuin/goldmark v1.8.6

@@ -286,16 +286,17 @@ statement alone:
 - **rmp releases up to and including 1.18.0** are built against GoGraph v0.15.0
   or earlier. Hazards 2, 3 and 4 below are real on them: a write lands on the
   wrong relationship or nowhere, or a read-back misleads.
-- **Builds against GoGraph v0.16.0** direct every relationship write to the
+- **Builds against GoGraph v0.16.0 or later** direct every relationship write to the
   relationship the statement bound. Hazard 1 remains; hazards 2, 3 and 4 do not
   occur.
 - **Telling them apart:** a graph directory last served by a GoGraph v0.16.0
-  build holds `wal.control` (`references/cli.md` § Storage & side effects), and an older build
+  or later build holds `wal.control` (`references/cli.md` § Storage & side effects), and an older build
   refuses such a directory. When the engine is unknown, use the forms marked
   **safe on both engines** — they are correct either way.
 
-The results below were measured against a throwaway roadmap on a GoGraph v0.16.0
-build; the older engine's results are stated beside them.
+The results below were measured against a throwaway roadmap on GoGraph v0.16.0
+and v0.17.0 builds, which return the same results; the older engine's results
+are stated beside them.
 
 ### 1. `MERGE` over a pattern duplicates a relationship's endpoints (both engines)
 
@@ -389,7 +390,7 @@ pattern persist on both engines, from rmp 1.17.3 on.
 
 ### 4. Verifying a relationship write — do NOT use `RETURN e`
 
-On a GoGraph v0.16.0 build the projection `RETURN e` and the accessors
+On a GoGraph v0.16.0 or later build the projection `RETURN e` and the accessors
 (`e.k`, `properties(e)`, `keys(e)`) agree. **On the older engine they could
 disagree** on a pair joined by more than one relationship, so two lawful
 read-backs of the same relationship reached opposite conclusions:

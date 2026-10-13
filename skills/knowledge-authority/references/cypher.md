@@ -106,8 +106,8 @@ earlier, every release up to 1.18.0) binds a relationship of the pair that may b
 another one to a matched `MERGE`, and its `SET` lands there, `{"ok":true}`; and on
 that engine a property **removal** through an undirected or incoming pattern is
 dropped with `{"ok":true}` and no `counters`, so the re-binding `MATCH` is
-**outgoing**, from the stored source. A GoGraph v0.16.0 build directs both to the
-relationship the statement bound. Verify an edge write with `e.<prop>` or
+**outgoing**, from the stored source. A GoGraph v0.16.0 or later build directs
+both to the relationship the statement bound. Verify an edge write with `e.<prop>` or
 `properties(e)`, never with `RETURN e`, whose projected map could carry another
 relationship's properties on the older engine.
 

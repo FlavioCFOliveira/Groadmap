@@ -103,9 +103,12 @@ func (b *blockingWriter) records() [][]byte {
 // The number of rounds is not fixed, and that is the repair of rmp task #600.
 // How many ERROR records one statement produces is the engine's, not this
 // test's: it was MEASURED at 1.19 per statement when this test was written and
-// at 0.45 under GoGraph v0.16.0 (about 430 records from 960 statements). A
-// single round then filled the pipe (~297 records) but not the pipe AND the
-// queue (logQueueDepth more), so nothing was dropped, no report was owed, and the
+// at 0.45 under GoGraph v0.16.0 (about 430 records from 960 statements).
+// GoGraph v0.17.0 did not move it: one round sent to a destination that is read,
+// five times per engine on the same machine, gave 0.25 to 0.32 records per
+// statement under v0.17.0 and 0.26 to 0.33 under v0.16.0. At 0.45, a single
+// round filled the pipe (~297 records) but not the pipe AND the queue
+// (logQueueDepth more), so nothing was dropped, no report was owed, and the
 // report assertion failed in 3 to 4 runs of 5 on a sink that was behaving
 // correctly. The test therefore sends rounds until the sink HAS dropped a record
 // while the destination is still blocked — the condition every assertion below

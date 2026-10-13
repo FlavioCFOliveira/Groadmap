@@ -281,10 +281,10 @@ changes can land without a major-version bump. The following residual risks rema
    change that the newer engine does not read would make an existing graph
    unreadable, and nothing in Groadmap could repair it.
 
-   Two format changes of this kind have occurred, and the engine absorbed both. In
-   the first, the snapshot's `labels.bin` component moved from format version 1 to
-   format version 2: the edge record gained a slot field, so that a relationship type
-   on parallel edges survives a checkpoint. The engine kept reading format version 1
+   Three format changes of this kind have occurred, and the engine absorbed all
+   three. In the first, the snapshot's `labels.bin` component moved from format
+   version 1 to format version 2: the edge record gained a slot field, so that a
+   relationship type on parallel edges survives a checkpoint. The engine kept reading format version 1
    as the deliberate upgrade path, and the first fold after the upgrade rewrote the
    component at format version 2, which the older release does not read.
 
@@ -305,7 +305,24 @@ changes can land without a major-version bump. The following residual risks rema
    [Graph Store Format Migration](#graph-store-format-migration) is canonical for
    the backup, the detection that triggers it, its removal, and the restore.
 
-   Both migrations are **one-way**. Reverting to an earlier pinned engine after a
+   In the third, the engine dropped undirected and simple graphs: every graph is a
+   directed multigraph, and the snapshot manifest moved to a new version, stamped
+   on every manifest the engine writes. The engine still reads the earlier manifest
+   versions, so a store written by the previous engine opens without conversion;
+   the first fold afterwards writes the new manifest version, which the older
+   release refuses. The write-ahead-log format did not change. The engine also
+   carries a one-way migration for a store whose manifest declares an undirected or
+   a simple graph: it folds each undirected edge into one directed relationship
+   and skips each duplicate insertion a simple graph skipped. That migration never
+   applies to a Groadmap store. The engine reads a store's shape from its snapshot
+   manifest alone, every manifest the engine has written for a Groadmap store
+   declares a directed multigraph, and a store with no manifest records no shape
+   and is replayed as a directed multigraph. Groadmap takes no backup for this
+   change: the rules of [Graph Store Format Migration](#graph-store-format-migration)
+   are unchanged, and a store still in the single-file format is backed up by them
+   before the conversion this engine still performs.
+
+   All three migrations are **one-way**. Reverting to an earlier pinned engine after a
    successful conversion is not an available recovery step at all. Naming
    these components records the evidence behind mitigation 4 below; the internal
    layout of the graph directory remains owned by GoGraph and is not specified by
@@ -390,11 +407,12 @@ Mitigations required by this specification:
    from release notes alone, because Groadmap has no migration path of its own for a
    graph it can no longer open. An upgrade that fails this check MUST NOT be released.
 
-   **Where the engine being adopted converts the store's format one way, the check
-   MUST also cover the backup.** The directory written under the previously pinned
-   version MUST be opened by `rmp graph serve` built against the new version, which
-   MUST take the backup [Graph Store Format Migration](#graph-store-format-migration)
-   requires and, once the conversion has succeeded, remove it. Because that removal
+   **Where the engine being adopted performs a conversion for which
+   [Graph Store Format Migration](#graph-store-format-migration) requires a backup,
+   the check MUST also cover the backup.** The directory written under the
+   previously pinned version MUST be opened by `rmp graph serve` built against the
+   new version, which MUST take the backup
+   [Graph Store Format Migration](#graph-store-format-migration) requires and, once the conversion has succeeded, remove it. Because that removal
    leaves no backup to check, the backup's fitness is verified on a failed
    conversion: with the open made to fail after the backup is taken, the backup
    that is kept, restored in place of the graph directory as that section
