@@ -248,6 +248,44 @@ func TestFullHeightShell_ChainFromTheViewportToTheBoardIsComplete(t *testing.T) 
 				"the height stops being passed down at that link", link.where, link.selector)
 		}
 	}
+
+	// The <main> landmark between the page wrapper and the page body is a link
+	// too (SPEC/WEB.md § UI Framework, rule 18). It carries no rule of its own in
+	// the vendored sheet: the three utilities on it make it a flex column that
+	// grows, and the project sheet frees it from its content-based minimum height,
+	// as it frees the page wrapper. Without that, the landmark would grow to the
+	// region's content and the region would end below the fold.
+	for _, utility := range []struct{ selector, prop, want string }{
+		{".d-flex", "display", "flex"},
+		{".flex-column", "flex-direction", "column"},
+	} {
+		block := strings.Join(cssRuleBlocks(vendored, utility.selector), ";")
+		found := false
+		for _, value := range cssDeclarations(block, utility.prop) {
+			if strings.TrimSpace(strings.TrimSuffix(value, "!important")) == utility.want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the vendored Tabler distribution: %q does not declare %s: %s, so the "+
+				"<main> landmark is not the flex column the chain needs", utility.selector, utility.prop, utility.want)
+		}
+	}
+	if fill := strings.Join(cssRuleBlocks(vendored, ".flex-fill"), ";"); fill == "" || cssFlexGrow(t, fill, ".flex-fill") < 1 {
+		t.Errorf("the vendored Tabler distribution: %q does not grow, so the <main> landmark "+
+			"stops passing the height down", ".flex-fill")
+	}
+	const landmark = ".full-height-page .page-wrapper > main"
+	freed := false
+	for _, block := range cssRuleBlocks(project, landmark) {
+		if containsValue(cssDeclarations(block, "min-height"), "0") {
+			freed = true
+		}
+	}
+	if !freed {
+		t.Errorf("the project stylesheet declares no min-height: 0 for %q, so the landmark "+
+			"keeps its content-based minimum and the full-height region overruns the viewport", landmark)
+	}
 }
 
 // TestTasksPage_IsNotAFullHeightRegion asserts the roadmap tasks page carries no
@@ -315,7 +353,8 @@ func TestGraphPage_CardSitsInTheFullHeightShellChain(t *testing.T) {
 		"body.full-height-page.layout-fluid",
 		"div.page",
 		"div.page-wrapper",
-		"main.page-body",
+		"main.d-flex.flex-column.flex-fill",
+		"div.page-body",
 		"div.container-xl",
 	}
 	got := ancestorChain(t, page, `class="card graph-card"`)

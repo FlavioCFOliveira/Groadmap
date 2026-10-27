@@ -609,7 +609,7 @@ func TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly(t *testing.T) {
 	// The page the card links to carries every long field, server-rendered, and is
 	// read-only too.
 	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.openTaskID))
-	mainAt := strings.Index(page, `<main class="page-body">`)
+	mainAt := strings.Index(page, `<div class="page-body">`)
 	if mainAt < 0 {
 		t.Fatal("the task page has no page body")
 	}

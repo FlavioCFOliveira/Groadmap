@@ -10,16 +10,17 @@ running HTTP server:
   machine-readable {"url": ...} startup object, and the graceful SIGINT/SIGTERM
   shutdown of acceptance criterion 24 — asserted as the OUTCOME the
   criterion's adverb names and not merely as the exit code, since runServer
-  returns nil on the signal path unconditionally. Each of step 7's four promises
-  is driven or explicitly declined: the listener refusing new connections while
-  the process is still alive, an in-flight response still arriving whole across
-  the signal, the drain giving up inside internal/web/server.go's shutdownGrace
-  when a client stops reading, and the store/database handles, whose closure at
-  shutdown is unobservable from outside the process and whose antecedent is
-  driven instead. The scope step 7 puts on those promises is driven on both
-  sides: after the URL the answer is a graceful exit 0, and before it — reached
-  by widening the startup migration sweep with a service estate of roadmaps — an
-  interruption exiting 130.
+  returns nil on the signal path unconditionally. Of step 7's four promises,
+  this module drives the clean exit after the signal and the listener gone with
+  the process, and declines the closure of the store/database handles, which is
+  unobservable from outside the process, driving its antecedent instead. The
+  listener refusing new connections while the server is still running, an
+  in-flight response arriving whole across the signal, and the drain giving up
+  at internal/web/server.go's shutdownGrace when a client stops reading are
+  driven in-process by internal/web/shutdown_drain_test.go. The scope step 7
+  puts on those promises is driven on both sides: after the URL the answer is a
+  graceful exit 0, and before it — reached by widening the startup migration
+  sweep with a service estate of roadmaps — an interruption exiting 130.
 - Routes and pages: index with discovery + empty state, the read-only
   dashboard landing page (GET /roadmaps/{name}), the read-only sprints page
   (GET /roadmaps/{name}/sprints: three sprint tabs, Actual active by default)
@@ -173,26 +174,12 @@ SHUTDOWN_EXIT_MARGIN_SECONDS = 3.0
 # servers. Cost is not what bounds this number. The rate is.
 #
 # AND NOTE WHAT THE REPETITION IS FOR. Only the DELIVERY of the signal is
-# stochastic. Everything the other cases assert about the outcome — the listener
-# refusing while the process is still alive, the in-flight body completing whole,
-# the bound holding — is deterministic, and one run settles each. The seventeen
-# are here for the single property that is a race.
+# stochastic. Everything else asserted about the outcome — the listener
+# refusing while the server is still running, the in-flight body completing
+# whole, the bound holding, all three in internal/web/shutdown_drain_test.go —
+# is deterministic, and one run settles each. The seventeen are here for the
+# single property that is a race.
 GRACEFUL_STOP_RUNS = 17
-
-# The asset used to hold a request IN FLIGHT across the signal, and the file it
-# is served from. It is chosen for its size: at nearly three megabytes it cannot
-# fit in the socket buffers at either end, so the handler is still writing when
-# the signal arrives. A small asset would be delivered into the kernel and be
-# over before anything could be signalled, and the case would pass while driving
-# nothing at all — which is why _asset_size asserts a floor on it.
-IN_FLIGHT_ASSET_PATH = "/static/vendor/tabler-icons/fonts/tabler-icons.ttf"
-IN_FLIGHT_ASSET_FILE = "internal/web/static/vendor/tabler-icons/fonts/tabler-icons.ttf"
-IN_FLIGHT_ASSET_MIN_BYTES = 1 << 20
-
-# The receive buffer given to a deliberately slow reader. The kernel rounds and
-# clamps it, and the server's own send buffer adds a few more kilobytes, but the
-# total stays four orders of magnitude below the asset's size.
-SLOW_READER_RCVBUF = 2048
 
 # The longest stdout the announcement reader will take before giving up. It
 # stands in for a deadline, which that reader deliberately cannot afford: the
@@ -561,27 +548,6 @@ class TestWebInterface:
             return True
         except OSError:
             return False
-
-    @classmethod
-    def _wait_refusing(cls, port, host="127.0.0.1", timeout=5.0):
-        """Wait until host:port refuses connections; return how long that took.
-
-        Used on a server that has been signalled but has NOT yet exited, which
-        is the only vantage point from which "stops accepting new connections"
-        is a real assertion: once the process is gone the kernel has closed the
-        listening socket whatever the code did.
-        """
-        start = time.time()
-        deadline = start + timeout
-        while time.time() < deadline:
-            if cls._connect_refused(port, host):
-                return time.time() - start
-            time.sleep(0.005)
-        raise AssertionError(
-            f"server on {host}:{port} was still accepting connections {timeout:.1f}s "
-            f"after it was signalled; SPEC/WEB.md section \"Server Lifecycle\" step 7 "
-            f"requires it to stop accepting new connections"
-        )
 
     @staticmethod
     def _drain(stream):
@@ -1201,11 +1167,11 @@ class TestWebInterface:
         """Return the markup of each column of the sprint page's board, in the
         order rendered.
 
-        The board lives inside <main class="page-body">, so slicing main keeps
+        The board lives inside <div class="page-body">, so slicing the page body keeps
         the page header and the scripts after it out of every card assertion.
         """
-        main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S)
-        assert main, 'the page has no <main class="page-body"> region'
+        main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S)
+        assert main, 'the page has no <div class="page-body"> region'
         region = main.group(1)
         assert 'data-role="task-board"' in region, "the page renders no Kanban board"
         return region, region.split('data-role="task-board-column"')[1:]
@@ -1511,7 +1477,7 @@ class TestWebInterface:
         headers, body, parsed = self._list(port, "/roadmaps/payments_catalogue/tasks?size=25")
 
         assert headers.get("cache-control") == "no-store", headers.get("cache-control")
-        main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+        main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S).group(1)
         assert main.count('<div class="card">') == 1, "the page renders more than one card"
         assert main.count("<table") == 1 and '<table class="table table-vcenter card-table">' in main
         for forbidden in ("task-board", "card-sm card-link", "table-selectable",
@@ -1521,7 +1487,7 @@ class TestWebInterface:
         form = body[body.index("<form"):body.index("</form>")]
         assert body.count('type="checkbox"') == form.count('type="checkbox"') == 15, "a checkbox outside the dropdowns"
         assert re.search(
-            r'<div class="card-header flex-wrap gap-2">\s*<div>\s*<h2 class="card-title">Task list</h2>\s*</div>\s*'
+            r'<div class="card-header flex-wrap gap-2">\s*<div>\s*<h2 id="task-list-title" class="card-title">Task list</h2>\s*</div>\s*'
             r'<div class="card-actions">\s*(?:\{\{.*?\}\}\s*)?<form class="row g-2 align-items-end justify-content-end" method="get" '
             r'action="/roadmaps/payments_catalogue/tasks">', main, re.S), "the card header is not the Tabler title block and card-actions form"
         assert "card-subtitle" not in main
@@ -1889,7 +1855,7 @@ class TestWebInterface:
             ("/roadmaps/archived_settlements/tasks", "No task matches the filters"),
         ):
             _, body, parsed = self._list(port, path)
-            main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+            main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S).group(1)
             assert parsed["empty"] == title, f"{path}: empty state {parsed['empty']!r}, want {title!r}"
             for gone in ("<table", '<div class="card-footer">', "Rows per page", "Task list pages"):
                 assert gone not in main, f"{path}: the empty list still carries {gone!r}"
@@ -2173,7 +2139,7 @@ class TestWebInterface:
             f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
         ):
             _, _, body = self._req(port, path)
-            main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+            main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S).group(1)
             tags = self._opening_tags(main)
             assert tags, f"{path}: no markup parsed; the extraction is broken"
 
@@ -2320,7 +2286,7 @@ class TestWebInterface:
             # The shell itself is untouched: the sidebar, the top navbar, the page
             # header and the main landmark keep their places.
             assert '<aside class="navbar navbar-vertical' in body, f"{path}: lost its sidebar"
-            assert '<main class="page-body">' in body, f"{path}: lost its main landmark"
+            assert '<main class="d-flex flex-column flex-fill">' in body, f"{path}: lost its main landmark"
 
     def test_serving_pages_writes_no_audit_entry(self):
         before = self._run(["audit", "stats", "-r", ROADMAP])[1]
@@ -4451,7 +4417,7 @@ class TestWebInterface:
         assert f'<time datetime="{cli["created_at"]}">' in page
         assert "end users must authenticate without a stored password" in page.lower()
         assert "specialists" not in page.lower(), "the removed specialists field reached the task page"
-        main = page[page.index('<main class="page-body">'):page.index("</main>")].lower()
+        main = page[page.index('<div class="page-body">'):page.index("</main>")].lower()
         for bad in ("<form", 'type="submit"', "<button", "<textarea", "<select", "<input"):
             assert bad not in main, f"the task page is read-only but carries {bad!r}"
         # The page loads no script of its own (Acceptance Criterion 98).
@@ -4510,7 +4476,7 @@ class TestWebInterface:
         assert '<h2 class="page-title">Rotate the signing keys</h2>' in page
         assert (f'<a class="nav-link" href="/roadmaps/{roadmap}/tasks" aria-current="page">' in page
                 and page.count('aria-current="page"') == 1), "the sidebar's Tasks entry is not the active one"
-        header = page[page.index('<div class="page-header d-print-none">'):page.index('<main class="page-body">')]
+        header = page[page.index('<div class="page-header d-print-none">'):page.index('<div class="page-body">')]
         actions = header[header.index('<div class="col-12 col-sm-auto ms-auto d-print-none">'):]
         assert actions.count("<a ") == 1 and f'href="/roadmaps/{roadmap}/tasks">' in actions, actions
         assert "Back to tasks</a>" in actions
@@ -4581,7 +4547,7 @@ class TestWebInterface:
         assert ">Position 10 of 10</div>" in moved_card and ">4 of 10 tasks completed</div>" in moved_card
 
         # AC225: the layout, in the served markup.
-        body = moved[moved.index('<main class="page-body">'):]
+        body = moved[moved.index('<div class="page-body">'):]
         order_marks = ['<div class="col-12 col-lg-4 order-lg-last">', 'data-role="task-sprint-card"',
                        'data-role="task-details-card"', '<div class="col-12 col-lg-8">',
                        ">Functional requirements</h3>", ">Technical requirements</h3>",
@@ -4640,7 +4606,7 @@ class TestWebInterface:
         assert f'<h2 class="page-title">{escaped}</h2>' in page, "the hostile title is not escaped in the header"
         title = re.search(r"<title>(.*?)</title>", page).group(1)
         assert "<b>" not in title and title.startswith(f"#{hostile_id} {escaped} - {ROADMAP}"), title
-        main = page[page.index('<main class="page-body">'):page.index("</main>")]
+        main = page[page.index('<div class="page-body">'):page.index("</main>")]
         for raw in ("<b>bold</b>", "<script", "<img", "onerror"):
             assert raw not in main, f"{raw!r} reached the task page as markup"
         assert page.count("<script") == 1
@@ -6421,12 +6387,12 @@ class TestWebInterface:
 
     @staticmethod
     def _page_header(path, body):
-        """Return the page-header block, from its opening div to the <main>."""
+        """Return the page-header block, from its opening div to the page body."""
         opening = '<div class="page-header d-print-none">'
         start = body.find(opening)
         assert start >= 0, f"page {path} renders no page header, so any assertion on it would be vacuous"
         rest = body[start:]
-        end = rest.find('<main class="page-body">')
+        end = rest.find('<div class="page-body">')
         assert end >= 0, f"page {path}: no page body follows the page header"
         return rest[:end]
 
@@ -6628,7 +6594,7 @@ class TestWebInterface:
         assert self._req(port, "/static/vendor/inter/files/inter-latin-wght-normal.woff2")[0] == 200, (
             "the Inter web font must be served"
         )
-        assert self._req(port, "/static/vendor/tabler-icons/fonts/tabler-icons.woff2")[0] == 200, (
+        assert self._req(port, "/static/vendor/tabler-icons/fonts/tabler-icons.core.woff2")[0] == 200, (
             "the Tabler Icons web font must be served"
         )
 
@@ -6772,28 +6738,28 @@ class TestWebInterface:
     #      tautological, because the kernel closes the listening socket at exit
     #      whatever the code did; the one thing it does still catch is a
     #      listener LEAKED to a child that outlived the server, so the repeated
-    #      case keeps it. The real assertion is in
-    #      test_{sigint,sigterm}_stops_accepting_while_a_request_is_in_flight,
-    #      which wedges a request open so the server is still running, and
-    #      requires a new connection to be refused while it is. Measured here:
-    #      the listener refuses about a millisecond after the signal, with the
-    #      process still alive.
+    #      case keeps it. The real assertion is in internal/web, in
+    #      TestRunServer_SignalDrainsAnInFlightResponse
+    #      (internal/web/shutdown_drain_test.go), which holds a response
+    #      mid-write so runServer is still running, and requires a new
+    #      connection to be refused while it is.
     #
     #   2. "allows in-flight requests a brief BOUNDED period to complete" — both
     #      words DRIVEN, by opposite cases, because they fail in opposite
     #      directions. A shutdown that cut its connections immediately would
     #      honour the bound and break "complete"; an unbounded one would honour
-    #      "complete" and break the bound. So
-    #      test_{sigint,sigterm}_lets_an_in_flight_request_finish stalls a
-    #      2.8 MB response across the signal and requires the whole body to
-    #      arrive with its declared Content-Length, while
-    #      test_{sigint,sigterm}_shutdown_is_bounded_by_the_grace_window wedges
-    #      the same response and never reads it, so Shutdown can never go
-    #      quiescent, and requires the process to exit between shutdownGrace and
-    #      shutdownGrace plus a margin. The floor proves it really waited; the
-    #      ceiling proves the wait was bounded. Measured: 5.05 s. Without the
-    #      bound that same case stops at the server's 30 s WriteTimeout instead,
-    #      so the two outcomes are eight margins apart and cannot be confused.
+    #      "complete" and break the bound. Both are driven in internal/web,
+    #      through runServer, by internal/web/shutdown_drain_test.go:
+    #      TestRunServer_SignalDrainsAnInFlightResponse holds a response
+    #      mid-write across the signal and requires the whole body to arrive
+    #      with its declared Content-Length, and
+    #      TestRunServer_SignalDrainIsBoundedByShutdownGrace wedges a response
+    #      that is never read, so Shutdown can never go quiescent, and requires
+    #      runServer to return at shutdownGrace and not before. They moved there
+    #      from this module because an end-to-end case can hold a response in
+    #      flight only with an asset larger than the kernel's socket buffers,
+    #      and no embedded asset is that large any more; in-process, the
+    #      response is held by construction.
     #
     #   3. "closes any graph store or database handle it opened" — the shutdown
     #      half is DECLINED as unobservable, with the reasoning and the
@@ -6870,55 +6836,6 @@ class TestWebInterface:
             f"take-over had not happened when the signal arrived, so a URL had been "
             f"published for a process that did not yet own its own shutdown"
         )
-
-    @classmethod
-    def _asset_size(cls):
-        """The on-disk size of the asset used to hold a request in flight.
-
-        The floor is the anti-vacuity guard for every in-flight case below: the
-        response has to be far larger than the socket buffers at both ends, or
-        the handler never blocks, the request is over before the signal is sent,
-        and the cases assert their properties against nothing.
-        """
-        size = (REPO_ROOT / IN_FLIGHT_ASSET_FILE).stat().st_size
-        assert size >= IN_FLIGHT_ASSET_MIN_BYTES, (
-            f"{IN_FLIGHT_ASSET_FILE} is {size} bytes, below the "
-            f"{IN_FLIGHT_ASSET_MIN_BYTES}-byte floor the in-flight cases need. A "
-            f"response that fits in the kernel's buffers completes before it can be "
-            f"signalled, so those cases would stop driving the drain"
-        )
-        return size
-
-    @staticmethod
-    def _slow_reader(port, host="127.0.0.1"):
-        """Open a connection whose receive buffer is far smaller than the reply.
-
-        The client's buffer and the server's send buffer hold a few tens of
-        kilobytes between them and the asset is megabytes, so the handler
-        genuinely blocks in Write and the request is still in flight when the
-        signal arrives. The request is sent here and deliberately NOT read.
-        """
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SLOW_READER_RCVBUF)
-        sock.settimeout(SHUTDOWN_GRACE_SECONDS + SHUTDOWN_EXIT_MARGIN_SECONDS)
-        sock.connect((host, port))
-        sock.sendall(
-            f"GET {IN_FLIGHT_ASSET_PATH} HTTP/1.1\r\n"
-            f"Host: {host}:{port}\r\n"
-            "Connection: close\r\n"
-            "\r\n".encode()
-        )
-        return sock
-
-    @staticmethod
-    def _declared_length(headers_blob):
-        """The Content-Length the server declared, as an int."""
-        match = re.search(rb"(?im)^Content-Length:[ \t]*(\d+)[ \t]*\r?$", headers_blob)
-        assert match, (
-            "the response carried no Content-Length, so there is nothing to hold the "
-            f"delivered body against: {headers_blob[:200]!r}"
-        )
-        return int(match.group(1))
 
     # ---- the four promises and the boundary ----------------------------
 
@@ -7004,133 +6921,6 @@ class TestWebInterface:
     def test_sigterm_stops_serving_gracefully_on_every_run(self):
         for run in range(1, GRACEFUL_STOP_RUNS + 1):
             self._graceful_stop_once(signal.SIGTERM, run)
-
-    def _in_flight_case(self, sig):
-        """Signal a server with a request still in flight and drain it after.
-
-        Drives promise 1 on a live process and promise 2's "complete" half: the
-        listener must already refuse while the server is still running, and the
-        response the server was midway through writing must still arrive whole.
-        """
-        label = f"{sig.name} with a request in flight"
-        size = self._asset_size()
-        proc, port = self._start(["--port", "0"])
-        sock = self._slow_reader(port)
-        try:
-            head = sock.recv(4096)
-            assert head.startswith(b"HTTP/1.1 200 OK"), (
-                f"{label}: the in-flight request was not answered 200: {head[:80]!r}"
-            )
-            assert len(head) < size, (
-                f"{label}: the whole {size}-byte response arrived in one read, so it was "
-                f"never in flight and this case drives nothing"
-            )
-
-            started = time.time()
-            proc.send_signal(sig)
-
-            # PROMISE 1, observed on a LIVE process: the listener is already
-            # gone while the server is still running, because the request it is
-            # draining has not finished.
-            refused_after = self._wait_refusing(port)
-            assert proc.poll() is None, (
-                f"{label}: the server exited before the in-flight response was drained, "
-                f"so the refusal observed {refused_after * 1000:.1f}ms after the signal "
-                f"proves only that the process is gone, not that it stopped accepting"
-            )
-
-            # PROMISE 2, "complete": read the rest and require the whole body.
-            buffered = bytearray(head)
-            while True:
-                try:
-                    chunk = sock.recv(65536)
-                except socket.timeout:
-                    raise AssertionError(
-                        f"{label}: the in-flight response never completed; "
-                        f"{len(buffered)} of {size} bytes arrived before the client's "
-                        f"own deadline. SPEC/WEB.md section \"Server Lifecycle\" step 7 "
-                        f"allows in-flight requests a bounded period to COMPLETE, not to "
-                        f"be cut"
-                    ) from None
-                if not chunk:
-                    break
-                buffered += chunk
-
-            code, elapsed = self._await_exit(proc, sig, started)
-        finally:
-            sock.close()
-
-        self._assert_clean_exit(code, sig, label)
-
-        headers_blob, separator, body = bytes(buffered).partition(b"\r\n\r\n")
-        assert separator, f"{label}: the response had no header terminator"
-        declared = self._declared_length(headers_blob)
-        assert declared == size, (
-            f"{label}: the server declared Content-Length {declared} for an asset of "
-            f"{size} bytes"
-        )
-        assert len(body) == declared, (
-            f"{label}: the in-flight response was CUT — {len(body)} of the declared "
-            f"{declared} bytes arrived. The shutdown stopped accepting new connections "
-            f"and took the live one with it, which is not the bounded drain step 7 "
-            f"specifies"
-        )
-        assert elapsed <= SHUTDOWN_GRACE_SECONDS + SHUTDOWN_EXIT_MARGIN_SECONDS, (
-            f"{label}: the server took {elapsed:.3f}s to stop"
-        )
-
-    def test_sigint_stops_accepting_while_a_request_is_in_flight(self):
-        self._in_flight_case(signal.SIGINT)
-
-    def test_sigterm_stops_accepting_while_a_request_is_in_flight(self):
-        self._in_flight_case(signal.SIGTERM)
-
-    def _bounded_case(self, sig):
-        """Wedge a response open and require the shutdown to give up on time.
-
-        The client stops reading and never resumes, so the handler stays blocked
-        in Write and http.Server.Shutdown can never go quiescent. The only thing
-        that can end this process is the deadline runServer put on it, which
-        makes the exit time a direct reading of shutdownGrace. Without that
-        deadline the same case would run to the server's 30 s WriteTimeout.
-        """
-        label = f"{sig.name} with a wedged response"
-        size = self._asset_size()
-        proc, port = self._start(["--port", "0"])
-        sock = self._slow_reader(port)
-        try:
-            head = sock.recv(4096)
-            assert head.startswith(b"HTTP/1.1 200 OK"), (
-                f"{label}: the wedged request was not answered 200: {head[:80]!r}"
-            )
-            assert len(head) < size, (
-                f"{label}: the whole {size}-byte response arrived in one read, so nothing "
-                f"is wedged and the grace window would never be reached"
-            )
-            started = time.time()
-            proc.send_signal(sig)
-            code, elapsed = self._await_exit(proc, sig, started)
-        finally:
-            sock.close()
-
-        self._assert_clean_exit(code, sig, label)
-        assert elapsed >= SHUTDOWN_GRACE_SECONDS, (
-            f"{label}: the server stopped {elapsed:.3f}s after the signal, before "
-            f"internal/web/server.go's shutdownGrace of {SHUTDOWN_GRACE_SECONDS:.0f}s "
-            f"had elapsed, with a request still in flight. It cut the connection instead "
-            f"of allowing the bounded period step 7 promises"
-        )
-        assert elapsed <= SHUTDOWN_GRACE_SECONDS + SHUTDOWN_EXIT_MARGIN_SECONDS, (
-            f"{label}: the server took {elapsed:.3f}s to stop, past shutdownGrace plus "
-            f"its margin. The period step 7 promises is BOUNDED, and a shutdown that "
-            f"waits on a client that never reads is bounded by nothing else"
-        )
-
-    def test_sigint_shutdown_is_bounded_by_the_grace_window(self):
-        self._bounded_case(signal.SIGINT)
-
-    def test_sigterm_shutdown_is_bounded_by_the_grace_window(self):
-        self._bounded_case(signal.SIGTERM)
 
     def _widened_startup_home(self):
         """A throwaway HOME whose startup sweep is wide enough to signal into.

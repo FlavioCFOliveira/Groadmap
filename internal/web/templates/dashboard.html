@@ -8,6 +8,7 @@
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
     <div class="page-wrapper">
+      <main class="d-flex flex-column flex-fill">
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -15,7 +16,7 @@
           </div>
         </div>
       </div>
-      <main class="page-body">
+      <div class="page-body">
         <div class="container-xl">
 
           {{/*
@@ -155,7 +156,7 @@
                     {{end}}{{end}}
                   </div>
                   {{/*
-                    Tabler 1.6.1's legend list: one entry per status, its dot in the
+                    Tabler 1.7.1's legend list: one entry per status, its dot in the
                     segment's colour, the status, and its count. The empty
                     <span class="legend"> dot of earlier releases is deprecated in
                     the vendored distribution and is not used.
@@ -185,10 +186,10 @@
             <div class="col-lg-6">
               <div class="card" data-role="work-in-progress">
                 <div class="card-header">
-                  <h3 class="card-title">Work in progress</h3>
+                  <h3 id="work-in-progress-title" class="card-title">Work in progress</h3>
                 </div>
                 {{if .InProgress}}
-                <div class="table-responsive">
+                <div class="table-responsive" tabindex="0" role="region" aria-labelledby="work-in-progress-title">
                   <table class="table card-table table-vcenter">
                     <thead>
                       <tr>
@@ -228,10 +229,10 @@
             <div class="col-lg-6">
               <div class="card" data-role="most-severe">
                 <div class="card-header">
-                  <h3 class="card-title">Highest-severity open tasks</h3>
+                  <h3 id="most-severe-title" class="card-title">Highest-severity open tasks</h3>
                 </div>
                 {{if .MostSevere}}
-                <div class="table-responsive">
+                <div class="table-responsive" tabindex="0" role="region" aria-labelledby="most-severe-title">
                   <table class="table card-table table-vcenter">
                     <thead>
                       <tr>
@@ -268,10 +269,10 @@
             <div class="col-12">
               <div class="card" data-role="upcoming-sprints">
                 <div class="card-header">
-                  <h3 class="card-title">Upcoming sprints</h3>
+                  <h3 id="upcoming-sprints-title" class="card-title">Upcoming sprints</h3>
                 </div>
                 {{if .Upcoming}}
-                <div class="table-responsive">
+                <div class="table-responsive" tabindex="0" role="region" aria-labelledby="upcoming-sprints-title">
                   <table class="table card-table table-vcenter">
                     <thead>
                       <tr>
@@ -308,13 +309,13 @@
             <div class="col-12">
               <div class="card" data-role="recent-activity">
                 <div class="card-header">
-                  <h3 class="card-title">Recent activity</h3>
+                  <h3 id="recent-activity-title" class="card-title">Recent activity</h3>
                   <div class="card-actions">
                     <a class="d-inline-block py-1" href="/roadmaps/{{.Name}}/audit">View audit log</a>
                   </div>
                 </div>
                 {{if .RecentAudit}}
-                <div class="table-responsive">
+                <div class="table-responsive" tabindex="0" role="region" aria-labelledby="recent-activity-title">
                   <table class="table card-table table-vcenter">
                     <thead>
                       <tr>
@@ -348,6 +349,7 @@
           </div>
 
         </div>
+      </div>
       </main>
     </div>
   </div>

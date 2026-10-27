@@ -8,6 +8,7 @@
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
     <div class="page-wrapper">
+      <main class="d-flex flex-column flex-fill">
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -15,7 +16,7 @@
           </div>
         </div>
       </div>
-      <main class="page-body">
+      <div class="page-body">
         <div class="container-xl">
 
           {{/*
@@ -27,11 +28,11 @@
           */}}
           <div class="card" id="audit">
             <div class="card-header">
-              <h3 class="card-title">Audit log</h3>
+              <h3 id="audit-log-title" class="card-title">Audit log</h3>
               <div class="card-actions text-secondary">Most recent first</div>
             </div>
             {{if .Entries}}
-            <div class="table-responsive">
+            <div class="table-responsive" tabindex="0" role="region" aria-labelledby="audit-log-title">
               <table class="table table-vcenter card-table">
                 <thead>
                   <tr>
@@ -110,6 +111,7 @@
           </div>
 
         </div>
+      </div>
       </main>
     </div>
   </div>

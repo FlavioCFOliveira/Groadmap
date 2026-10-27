@@ -8,6 +8,7 @@
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
     <div class="page-wrapper">
+      <main class="d-flex flex-column flex-fill">
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -27,12 +28,13 @@
           </div>
         </div>
       </div>
-      <main class="page-body">
+      <div class="page-body">
         <div class="container-xl">
 
 {{template "sprintDetail" .Detail}}
 
         </div>
+      </div>
       </main>
     </div>
   </div>

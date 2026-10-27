@@ -48,7 +48,7 @@ func TestSprintPage_RendersNoStatusSummaryLine(t *testing.T) {
 	// The presentation opens with the sprint summary row, whose first column
 	// holds the Sprint details card: it is the first thing the page body's
 	// container holds (Acceptance Criterion 287).
-	const container = `<main class="page-body">`
+	const container = `<div class="page-body">`
 	start := strings.Index(body, container)
 	if start < 0 {
 		t.Fatalf("the sprint page carries no %s", container)

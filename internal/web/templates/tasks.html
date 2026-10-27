@@ -8,6 +8,7 @@
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
     <div class="page-wrapper">
+      <main class="d-flex flex-column flex-fill">
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -15,7 +16,7 @@
           </div>
         </div>
       </div>
-      <main class="page-body">
+      <div class="page-body">
         <div class="container-xl">
 
           {{/*
@@ -37,7 +38,7 @@
           <div class="card">
             <div class="card-header flex-wrap gap-2">
               <div>
-                <h2 class="card-title">Task list</h2>
+                <h2 id="task-list-title" class="card-title">Task list</h2>
               </div>
               <div class="card-actions">
                 {{/*
@@ -98,7 +99,7 @@
               </div>
             </div>
             {{if .Rows}}
-            <div class="table-responsive">
+            <div class="table-responsive" tabindex="0" role="region" aria-labelledby="task-list-title">
               <table class="table table-vcenter card-table">
                 <thead>
                   <tr>
@@ -209,6 +210,7 @@
           </div>
 
         </div>
+      </div>
       </main>
     </div>
   </div>

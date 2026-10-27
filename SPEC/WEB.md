@@ -1545,7 +1545,9 @@ how the `rmp web` process itself terminates.
      **Pagination** below).
 - **The card header.** The list card's header is
   `<div class="card-header flex-wrap gap-2">` and holds, in this order:
-  1. the **title block**, `<div><h2 class="card-title">Task list</h2></div>`. The
+  1. the **title block**, `<div><h2 class="card-title">Task list</h2></div>`, the
+     `<h2>` also carrying the `id` that names the list's `table-responsive`
+     container (see [UI Framework](#ui-framework), rule 22). The
      block carries **no** `card-subtitle`: the number of tasks the filters admit is
      already stated by the footer's range text (see **Pagination** below), and a
      second statement of it in the header would be a copy that can disagree with
@@ -5827,9 +5829,9 @@ timestamp references this section and does not restate it.
    element order (rule 12), the single sidebar collapse, toggler, and brand
    (rule 13), `aria-current` on the active navigation link (rule 14), the labelled
    pagination wrapper (rule 15), the page-header actions column (rule 16), the
-   fluid-layout container idiom (rule 17), the `main` page-body landmark
-   (rule 18), and the top navbar's content (rule 19) — are concrete applications
-   of it.
+   fluid-layout container idiom (rule 17), the `main` content landmark
+   (rule 18), the top navbar's content (rule 19), and the focusable scroll
+   container of a card-table (rule 22) — are concrete applications of it.
 9. **Card tabs follow Tabler's "card with tabs" example.** The Roadmap Sprints
    Page tab control (the three tabs Próximos, Actual, Concluídos; see
    [Roadmap Sprints Page](#roadmap-sprints-page)) follows Tabler's "card with
@@ -6003,20 +6005,24 @@ timestamp references this section and does not restate it.
     top navbar, the page header, and the page body. The
     `container-fluid` inside the sidebar `<aside>` is Tabler's own vertical-navbar
     markup and stays exactly as Tabler ships it.
-18. **The page body is a `main` landmark.** Tabler's built admin shell renders the
-    page body as `<main class="page-body">`, so the region that holds each page's
-    own content is the document's `main` landmark and assistive technology can jump
-    straight to it past the sidebar, the top navbar, and the page header. The
-    templates MUST use that element for the page body, keeping the `page-body`
-    class, which is what the vendored stylesheet styles; the element carries no
-    identifier, because the one Tabler puts there exists only to anchor a skip link
-    whose styling lives in Tabler's demonstration stylesheet rather than in the
-    distributed one this project vendors, and this interface offers no skip link.
-    The change is behaviour-neutral: `.page-body` is a class selector, so the
-    element it sits on affects no layout rule. Tabler's older hand-written
-    page-layout snippet still shows a `<div>` here; where a documented snippet and
-    the framework's own built shell disagree, the built shell of the vendored
-    distribution governs, and the templates MUST NOT be reverted to the `<div>`.
+18. **The page's own content is a `main` landmark.** Tabler's built admin shell
+    renders `<main class="d-flex flex-column flex-fill">` as the child of
+    `<div class="page-wrapper">`, wrapping the page header and
+    `<div class="page-body">`, so the page's own content, header included, is the
+    document's single `main` landmark and assistive technology can jump straight to
+    it past the sidebar and the top navbar. The templates MUST use that element and
+    structure: exactly one `<main class="d-flex flex-column flex-fill">` as the
+    child of `<div class="page-wrapper">`, holding the page header followed by the
+    page body, and the page body a `<div>` keeping the `page-body` class, which is
+    what the vendored stylesheet styles. The three classes on `<main>` are flex
+    utilities the vendored distribution ships (rule 10); they make the landmark a
+    column flex container that fills the page wrapper. The `<main>` element carries
+    no identifier: the one Tabler puts there exists only as the target of a skip
+    link, and this interface offers no skip link. Where a documented Tabler snippet
+    and the framework's own built shell disagree, the built shell of the vendored
+    distribution governs: the templates MUST NOT render the page body as
+    `<main class="page-body">`, and MUST NOT place the page header outside the
+    `<main>`.
 19. **The top navbar names the selected roadmap.** The shell's top navbar carries
     one thing: the name of the roadmap whose data the current page shows. Every
     page but the roadmap index is scoped to a single roadmap — its dashboard, its
@@ -6078,7 +6084,7 @@ timestamp references this section and does not restate it.
     variation. Below the `lg` breakpoint the sidebar collapses to the off-canvas
     menu (rule 5) and this rule does not apply.
 21. **Keyboard focus is clearly visible on the header actions, the sidebar
-    links, the tasks list, and the sprint board.** The back link of a record page's header actions column — `Back to
+    links, the tasks list, the sprint board, and the scrollable tables.** The back link of a record page's header actions column — `Back to
     tasks` on the Roadmap Task Page and the link back to the roadmap's sprints page
     on the Roadmap Sprint Page, both rendered in the page-header idiom of rule 16 —
     and every `nav-link` of the sidebar show a clearly visible focus indicator
@@ -6110,14 +6116,43 @@ timestamp references this section and does not restate it.
     that fill as well. The rule is judged in the dark theme the interface serves
     (rule 2).
 
+    The same indicator, with the same thickness and the same 3:1 contrast, is
+    required of every `table-responsive` container that rule 22 makes focusable:
+    the one of the Roadmap Audit Log Page, the one of each of the Roadmap Dashboard
+    Page's four card-tables, and the one of the Roadmap Tasks Page's list. The
+    vendored distribution styles `.table-responsive:focus-visible` with a focus
+    ring of its own; wherever that ring falls short of this rule, the project
+    override stylesheet sets the indicator on `.table-responsive:focus-visible`
+    (rule 10).
+22. **A scrollable table is a named, focusable region.** Tabler's Tasks card
+    component gives its `table-responsive` container `tabindex="0"`, so a keyboard
+    user can move focus onto the container and scroll a table wider than its card
+    with the arrow keys; a container that holds no focusable element is otherwise
+    out of reach of the keyboard (WCAG 2.2 Success Criterion 2.1.1, Keyboard). Every
+    `table-responsive` container the templates render MUST carry `tabindex="0"`:
+    the one of the Roadmap Audit Log Page, the one of each of the Roadmap Dashboard
+    Page's four card-tables, and the one of the Roadmap Tasks Page's list. A card
+    that renders its empty state in place of its table renders no container and
+    therefore no focusable region.
+
+    Each such container MUST have an accessible name (WCAG 2.2 Success Criterion
+    4.1.2, Name, Role, Value). WAI-ARIA 1.2 prohibits naming an element of the
+    `generic` role, which a `<div>` without a `role` has, so the container also
+    carries `role="region"`. The name comes from the card title: the container
+    carries `aria-labelledby` whose value is the `id` of its card's `card-title`
+    element, and that element carries an `id` unique within the page. A container
+    whose card renders no visible title carries `aria-label` naming the table
+    instead; no container of the set above is in that case. The container shows the
+    focus indicator of rule 21.
+
 ### Full-Height Page Regions
 
 One page presents a region sized to the **viewport** rather than to its own
 content, so that the region's children scroll **inside** it and the page itself
 does not scroll to reach them: the graph card of the knowledge-graph page (see
 [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page), **Graph card
-layout**). It sits inside the `main.page-body` landmark of the admin shell (see
-[UI Framework](#ui-framework), rule 18). It is the whole set: this subsection
+layout**). It sits inside the `div.page-body` element that the admin shell's
+`main` landmark holds (see [UI Framework](#ui-framework), rule 18). It is the whole set: this subsection
 introduces no region and no page, and states only how a region of this kind is
 sized. The roadmap tasks page is not one of them: its task list is paginated, so
 the list card is sized to the rows of one page and the page scrolls vertically
@@ -7482,7 +7517,8 @@ Rules:
    the route's caching;
    Acceptance Criteria 82, 83, 89, 239 to 242, and 245 define the pagination;
    Acceptance Criteria 246 and 247 fix the contrast of the badges, of the search
-   placeholder, and of the focus indicator; and Acceptance Criteria 94 to 99 and 221 to 231 fix the task page the
+   placeholder, and of the focus indicator; Acceptance Criterion 295 makes the
+   list's `table-responsive` container a named, focusable region; and Acceptance Criteria 94 to 99 and 221 to 231 fix the task page the
    rows link to.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
@@ -8074,10 +8110,13 @@ Rules:
     page container uses `container-fluid`; the only `container-fluid` in
     the shell is the one inside the sidebar `<aside>`, which is Tabler's own
     vertical-navbar markup (see [UI Framework](#ui-framework), rule 17).
-80. Every page renders its page body as `<main class="page-body">`, the element
-    Tabler's built admin shell uses, so each page exposes exactly one `main`
-    landmark holding that page's own content. No page renders the page body as a
-    `<div>` (see [UI Framework](#ui-framework), rule 18).
+80. Every page renders exactly one `<main class="d-flex flex-column flex-fill">`,
+    carrying no `id`, as the child of `<div class="page-wrapper">`; it holds the
+    page header followed by the `<div class="page-body">`, the structure Tabler's
+    built admin shell uses, so each page exposes exactly one `main` landmark holding
+    that page's own content, header included. No page renders
+    `<main class="page-body">`, and no page header lies outside the `<main>` (see
+    [UI Framework](#ui-framework), rule 18).
 81. The roadmap tasks page presents its tasks as **one list and nothing else**: the
     served HTML carries exactly one list card — a `card` holding one
     `table-responsive` container whose one table carries the classes `table`,
@@ -8663,7 +8702,7 @@ Rules:
     satisfies **both** edges of
     [Full-Height Page Regions](#full-height-page-regions), rule 1, when the page is
     rendered in a browser: the region's bottom edge coincides with the bottom edge
-    of that page's `main.page-body` element, and that edge lies within the viewport,
+    of that page's `div.page-body` element, and that edge lies within the viewport,
     with the document scrolling vertically no further than the viewport height. The
     check asserts both edges, because either edge alone
     passes on a defective layout. A region that stops short of the page body's end
@@ -10290,13 +10329,16 @@ Rules:
     the mapping tables assign (Acceptance Criterion 61 continues to hold; see
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 5).
-247. **The focus indicator reaches 3:1 on the tasks list and the sprint board.** In
+247. **The focus indicator reaches 3:1 on the tasks list, the sprint board, and the
+    scrollable tables.** In
     a browser, in the dark theme the interface serves, moving keyboard focus with
     Tab onto each kind of focusable element that UI Framework rule 21 names for the
-    tasks page and for the sprint board — the search input, the sprint select, each
+    tasks page, for the sprint board, and for the scrollable tables — the search input, the sprint select, each
     dropdown toggle, a checkbox of an open dropdown menu, Apply, the
     no-match empty state's Reset link, a row's title link, a pagination link, the active and
-    an inactive rows-per-page link, a board card, and a column toggle — gives the
+    an inactive rows-per-page link, a board card, a column toggle, and the
+    `table-responsive` container of the audit log page, of each of the dashboard's
+    four card-tables, and of the tasks page's list — gives the
     element a computed `outline` whose style is `solid`, whose width is at least
     `2px`, and whose colour has a contrast ratio of at least 3:1 against the computed
     background of the element and against that of its container, computed as
@@ -10800,6 +10842,21 @@ Rules:
     link `tabler-vendors.min.css` nor load `apexcharts.min.js`,
     `dashboard.js`, or `sprint-progress.js`. `GET /static/sprint-progress.js` returns
     HTTP 200 from the embedded asset set.
+295. **Every scrollable table is a named, focusable region.** In the served HTML of
+    the audit log page with at least one entry, of the dashboard page with rows in
+    each of its four card-tables, and of the tasks page with at least one task, every
+    element carrying the class `table-responsive` carries `tabindex="0"`,
+    `role="region"`, and an `aria-labelledby` whose value is the `id` of exactly one
+    element in the page: the `card-title` element of the same card, whose text is
+    that card's title. No two elements of the page share an `id`, and no
+    `table-responsive` container carries a `tabindex` other than `0`. The audit log
+    page renders one such container, the dashboard four, and the tasks page one; a
+    card that renders its empty state renders none. In a browser, at a viewport
+    narrow enough that the table is wider than its card, Tab reaches the container,
+    its accessible name is the card title, and pressing the Right Arrow key with the
+    container focused increases its horizontal scroll offset. The focused container
+    shows the indicator Acceptance Criterion 247 fixes (see
+    [UI Framework](#ui-framework), rules 21 and 22).
 
 ## See Also
 

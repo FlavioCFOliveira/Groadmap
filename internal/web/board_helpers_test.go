@@ -31,16 +31,16 @@ func newSprint(t *testing.T, database *db.DB, title, description string) int {
 	return id
 }
 
-// boardRegion returns the page's <main> element, so slicing here keeps the page
+// boardRegion returns the page body, so slicing here keeps the page
 // header and the scripts after it out of every assertion about the page's content.
 func boardRegion(t *testing.T, body string) string {
 	t.Helper()
 
-	const open = `<main class="page-body">`
+	const open = `<div class="page-body">`
 	start := strings.Index(body, open)
 	end := strings.Index(body, "</main>")
 	if start < 0 || end < start {
-		t.Fatalf("the page has no <main class=\"page-body\"> region to slice")
+		t.Fatalf("the page has no <div class=\"page-body\"> region to slice")
 	}
 	return body[start+len(open) : end]
 }

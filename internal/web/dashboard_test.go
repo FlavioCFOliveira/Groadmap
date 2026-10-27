@@ -271,7 +271,7 @@ var (
 	dashRowRe   = regexp.MustCompile(`(?s)<tr>(.*?)</tr>`)
 	dashCellRe  = regexp.MustCompile(`(?s)<td[^>]*>(.*?)</td>`)
 	dashColRe   = regexp.MustCompile(`<div class="(col-[^"]+)">`)
-	dashTitleRe = regexp.MustCompile(`<h3 class="card-title">([^<]+)(?:<a [^>]*>([^<]*)</a>)?</h3>|<div class="subheader">([^<]+)</div>`)
+	dashTitleRe = regexp.MustCompile(`<h3(?: id="[a-z-]+-title")? class="card-title">([^<]+)(?:<a [^>]*>([^<]*)</a>)?</h3>|<div class="subheader">([^<]+)</div>`)
 	dashChartRe = regexp.MustCompile(`<div [^>]*id="(chart-[a-z-]+)"`)
 	dashDonutRe = regexp.MustCompile(`<div id="(chart-[a-z]+-by-type)" role="img" aria-label="([^"]*)"></div>`)
 )
@@ -360,7 +360,7 @@ func TestDashboard_IsTheLandingPage(t *testing.T) {
 	if !strings.Contains(body, "<title>settlement-platform - Dashboard - thinkpad</title>") {
 		t.Errorf("the document title is not <roadmap> - Dashboard - <hostname>")
 	}
-	header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<main class="page-body">`)
+	header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<div class="page-body">`)
 	if !strings.Contains(header, `<h2 class="page-title">Dashboard</h2>`) {
 		t.Errorf("the header title is not Dashboard; header=%q", header)
 	}
@@ -370,7 +370,7 @@ func TestDashboard_IsTheLandingPage(t *testing.T) {
 		}
 	}
 
-	main := regionBetween(t, body, `<main class="page-body">`, `</main>`)
+	main := regionBetween(t, body, `<div class="page-body">`, `</main>`)
 	if n := strings.Count(main, `<div class="row row-deck row-cards">`); n != 1 {
 		t.Fatalf("the page body holds %d row-deck row-cards grids, want 1", n)
 	}
@@ -696,7 +696,7 @@ func TestDashboard_CurrentSprintStatesItsProgress(t *testing.T) {
 		t.Errorf("the breakdown is not a progress-stacked bar")
 	}
 
-	// The Tabler 1.6.1 legend list; the deprecated empty <span class="legend">
+	// The Tabler 1.7.1 legend list; the deprecated empty <span class="legend">
 	// dot appears nowhere on the page.
 	if !strings.Contains(card, `<div class="legend-list mb-2" data-role="sprint-breakdown-legend">`) {
 		t.Errorf("the legend is not a Tabler legend-list")
@@ -875,7 +875,7 @@ func TestDashboard_CurrentSprintTakesTheFullWidth(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedDashFixture(t, "settlement-platform")
 	body := dashboardBody(t, f.name, dashNow)
-	main := regionBetween(t, body, `<main class="page-body">`, `</main>`)
+	main := regionBetween(t, body, `<div class="page-body">`, `</main>`)
 
 	assertOrdered(t, "the grid", main, []string{
 		`<div class="col-sm-6 col-lg-3">` + "\n" + `              <div class="card" data-role="kpi-velocity">`,
@@ -1107,7 +1107,7 @@ func TestDashboard_NoThroughputAndNoBurndown(t *testing.T) {
 
 	for _, name := range []string{f.name, "acquirer-feed"} {
 		body := dashboardBody(t, name, dashNow)
-		main := regionBetween(t, body, `<main class="page-body">`, `</main>`)
+		main := regionBetween(t, body, `<div class="page-body">`, `</main>`)
 		for _, absent := range []string{
 			`<h3 class="card-title">Throughput</h3>`, `data-role="throughput"`, "chart-lg",
 			"chart-burndown", "chart-throughput", "No activity in the last 12 weeks", "No completed task yet",
@@ -1319,7 +1319,8 @@ func TestDashboard_RecentActivityRepeatsTheAuditHead(t *testing.T) {
 	if !strings.Contains(card, `<a class="d-inline-block py-1" href="/roadmaps/`+name+`/audit">View audit log</a>`) {
 		t.Errorf("the card header lacks the View audit log link")
 	}
-	if !strings.Contains(card, `<div class="table-responsive">`) || !strings.Contains(card, `<table class="table card-table table-vcenter">`) {
+	if !strings.Contains(card, `<div class="table-responsive" tabindex="0" role="region" aria-labelledby="recent-activity-title">`) ||
+		!strings.Contains(card, `<table class="table card-table table-vcenter">`) {
 		t.Errorf("the card-table is not inside table-responsive")
 	}
 	got := dashRowRe.FindAllString(regionBetween(t, card, "<tbody>", "</tbody>"), -1)
@@ -1418,7 +1419,7 @@ func TestDashboard_EmptyRoadmapRendersEmptyStates(t *testing.T) {
 	}
 	for role, texts := range empties {
 		card := dashCard(t, body, role)
-		if !strings.Contains(card, `<h3 class="card-title">`+texts[0]+`</h3>`) {
+		if !strings.Contains(card, ` class="card-title">`+texts[0]+`</h3>`) {
 			t.Errorf("%s lost its header", role)
 		}
 		if !strings.Contains(card, `<div class="empty">`) || !strings.Contains(card, `<p class="empty-title">`+texts[1]+`</p>`) {
@@ -1604,7 +1605,7 @@ func TestDashboard_NoInlineScriptOrStyle(t *testing.T) {
 		if m := eventHandlerRe.FindString(body); m != "" {
 			t.Errorf("%s: an element carries an event-handler attribute: %s", name, m)
 		}
-		main := regionBetween(t, body, `<main class="page-body">`, `</main>`)
+		main := regionBetween(t, body, `<div class="page-body">`, `</main>`)
 		for _, absent := range []string{"<form", "<button", "<input", "method=\"post\""} {
 			if strings.Contains(strings.ToLower(main), absent) {
 				t.Errorf("%s: the read-only dashboard carries %s", name, absent)
@@ -1699,6 +1700,11 @@ var vendoredChartReleases = map[string]struct {
 		apexcharts:    "7.0.0",
 		apexSHA256:    "a2e892d841ef25f62517c1663ce6aaa759df51eff6f85a9a1105cba299075910",
 		vendorsSHA256: "351a2c128fecb8a640f8f11be39da19d75cde2ffd27cb30e3792a7c5b8f8cac2",
+	},
+	"1.7.1": {
+		apexcharts:    "7.0.0",
+		apexSHA256:    "a2e892d841ef25f62517c1663ce6aaa759df51eff6f85a9a1105cba299075910",
+		vendorsSHA256: "9c757eb14ad17e1344d191fb2857ed16f99b0a4807c77ccf8fb189ea5d2c7cbd",
 	},
 }
 
@@ -1873,10 +1879,11 @@ func TestDashboard_ResponsiveMarkup(t *testing.T) {
 	f := seedDashFixture(t, "settlement-platform")
 	seedRoadmapWithAudit(t, f.name, 3)
 	body := dashboardBody(t, f.name, dashNow)
-	main := regionBetween(t, body, `<main class="page-body">`, `</main>`)
+	main := regionBetween(t, body, `<div class="page-body">`, `</main>`)
 
 	tables := strings.Count(main, "<table")
-	wrapped := strings.Count(main, `<div class="table-responsive">`+"\n"+`                  <table class="table card-table table-vcenter">`)
+	wrapped := len(regexp.MustCompile(`<div class="table-responsive" tabindex="0" role="region" aria-labelledby="[a-z-]+-title">`+
+		"\n"+`                  <table class="table card-table table-vcenter">`).FindAllString(main, -1))
 	if tables != 4 || wrapped != tables {
 		t.Errorf("%d tables, %d of them directly in table-responsive; want 4 and 4", tables, wrapped)
 	}
