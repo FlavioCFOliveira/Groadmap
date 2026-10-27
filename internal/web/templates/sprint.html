@@ -37,6 +37,15 @@
     </div>
   </div>
 
+  {{/*
+    The Sprint progress card's chart data block: a data block, not a script. A
+    browser does not execute a script element whose type is not a JavaScript MIME
+    type, so the Content-Security-Policy stays unchanged. html/template serialises
+    the value as JSON and escapes <, >, and & in it, so its content can never
+    close the element (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7, Chart
+    data block; SPEC/DATA_FORMATS.md § Sprint Progress Chart Data, rule 7).
+  */}}
+  <script type="application/json" id="sprint-progress-data">{{.Progress.Chart}}</script>
   <script src="/static/vendor/tabler/tabler.min.js"></script>
   {{/*
     The member-tasks board's column collapse toggles. The sprint page is the only
@@ -45,5 +54,14 @@
     only; Acceptance Criterion 218).
   */}}
   <script src="/static/sprint-board.js"></script>
+  {{/*
+    The vendored ApexCharts library and then the gauge's page script, both
+    deferred and in that order, so the library is defined before the page script
+    runs. static/sprint-progress.js draws the gauge alone and does not touch the
+    board (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7, Page script;
+    Acceptance Criterion 294).
+  */}}
+  <script defer src="/static/vendor/apexcharts/apexcharts.min.js"></script>
+  <script defer src="/static/sprint-progress.js"></script>
 </body>
 </html>{{end}}

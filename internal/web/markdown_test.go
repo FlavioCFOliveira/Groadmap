@@ -928,6 +928,11 @@ func TestMarkdownSurfaces_CSPAndScriptsUnchanged(t *testing.T) {
 			t.Errorf("GET %s: Content-Security-Policy = %q", path, got)
 		}
 		for _, m := range scriptRe.FindAllStringSubmatch(rec.Body.String(), -1) {
+			// The sprint page's chart data block is a data block, not a script
+			// (Acceptance Criterion 293).
+			if m[0] == sprintProgressDataTag {
+				continue
+			}
 			if !strings.Contains(m[1], `src="/static/`) {
 				t.Errorf("GET %s: a script is not loaded from /static/: <script%s>", path, m[1])
 			}

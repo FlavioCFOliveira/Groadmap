@@ -457,7 +457,8 @@ Rules:
    JavaScript, and it is upgraded together with them, in the same change. Its
    `static/vendor/LICENSES.md` entry names the file, the Tabler project, and the
    MIT licence.
-8. **Vendored chart library: ApexCharts.** The dashboard page's charts use the
+8. **Vendored chart library: ApexCharts.** The charts of the dashboard page and of
+   the sprint page use the
    ApexCharts release that the vendored Tabler release pins, as an exact version,
    for its `apexcharts` development dependency in `core/package.json` of the
    Tabler repository. Its already-built single-file distribution, the file

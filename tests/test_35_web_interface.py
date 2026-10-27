@@ -2208,10 +2208,19 @@ class TestWebInterface:
             assert "<tr" not in main, f"{path}: a table row remains"
 
             # No script was added: the vendored bundle plus the page's own board
-            # script, all from /static/, under the unchanged policy.
-            scripts = re.findall(r"<script\b([^>]*)>", body)
+            # script and the Sprint progress card's chart library and gauge
+            # script, all from /static/, under the unchanged policy. The card's
+            # chart data block is a data block, not a script (SPEC/WEB.md
+            # § Sprint Detail Sub-Template, rule 7; Acceptance Criteria 293, 294).
+            data_block = ' type="application/json" id="sprint-progress-data"'
+            all_scripts = re.findall(r"<script\b([^>]*)>", body)
+            assert all_scripts.count(data_block) == 1, (
+                f"{path}: the page carries {all_scripts.count(data_block)} chart data blocks, want 1"
+            )
+            scripts = [s for s in all_scripts if s != data_block]
             srcs = {re.search(r'src="([^"]*)"', s).group(1) for s in scripts}
-            want_srcs = {"/static/vendor/tabler/tabler.min.js", "/static/sprint-board.js"}
+            want_srcs = {"/static/vendor/tabler/tabler.min.js", "/static/sprint-board.js",
+                         "/static/vendor/apexcharts/apexcharts.min.js", "/static/sprint-progress.js"}
             assert srcs == want_srcs and len(scripts) == len(want_srcs), (
                 f"{path}: unexpected scripts {srcs!r}"
             )
@@ -4347,6 +4356,10 @@ class TestWebInterface:
                 "frame-ancestors 'none'; base-uri 'self'"
             ), f"{path}: the Content-Security-Policy changed"
             for attrs in re.findall(r"<script([^>]*)>", page):
+                # The sprint page's chart data block is a data block, not a
+                # script (SPEC/WEB.md Acceptance Criterion 293).
+                if attrs == ' type="application/json" id="sprint-progress-data"':
+                    continue
                 assert 'src="/static/' in attrs, f"{path}: an inline or remote script"
         _, _, page = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
         assert '<pre class="chroma">' in page and '<span class="kd">func</span>' in page

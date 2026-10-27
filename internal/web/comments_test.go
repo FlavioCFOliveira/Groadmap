@@ -1388,6 +1388,13 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 		} else if strings.Contains(body, "/static/highlight.css") {
 			t.Errorf("page %s links highlight.css, but it renders no Markdown field", path)
 		}
+		// The sprint page also links the Tabler vendors stylesheet, which styles
+		// its Sprint progress card's gauge (SPEC/WEB.md § Dashboard Chart
+		// Library, rule 3; Acceptance Criterion 294).
+		if strings.Contains(path, "/sprints/") {
+			assets = append(assets, `<link rel="stylesheet" href="/static/vendor/tabler/tabler-vendors.min.css">`)
+			wantSheets++
+		}
 		for _, asset := range assets {
 			if !strings.Contains(body, asset) {
 				t.Errorf("page %s is missing the embedded asset %s", path, asset)
