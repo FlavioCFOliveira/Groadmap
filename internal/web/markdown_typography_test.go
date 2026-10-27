@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io/fs"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -477,85 +479,248 @@ func TestMarkdownTypography_EmphasisAndInterItalic(t *testing.T) {
 	}
 }
 
-// TestMarkdownTypography_SprintPageLineLength is Acceptance Criterion 202
-// outside the browser: exactly one rule sets max-width: 80ch, and the markup its
-// selector relies on holds — the sprint description and comment bodies sit in
-// the page body and outside any .card-link and any .task-page, a sprint card's
-// container sits in a .card-link, and every container of the task page — the
-// four Markdown fields and every comment body — sits in the .task-page row, so
-// none carries the limit and each spans its card's body.
-func TestMarkdownTypography_SprintPageLineLength(t *testing.T) {
-	sheet := servedProjectSheet(t)
-	const selector = ".page-body .markdown:not(.card-link .markdown):not(.task-page .markdown)"
-	if got := cssRulesDeclaring(sheet, "max-width"); !containsAll(got, selector) {
-		t.Fatalf("no rule %q sets a max-width; rules: %q", selector, got)
-	}
-	if got := cssDeclarationsOfValue(sheet, []string{"max-width"}, "80ch"); len(got) != 1 || got[0] != selector+" { max-width: 80ch }" {
-		t.Errorf("the 80ch line length is set by %q, want the one rule %q", got, selector)
+// TestMarkdownTypography_FullContainerWidth is Acceptance Criterion 202 outside
+// the browser. It reads every stylesheet served under /static/... and checks two
+// things. First, no rule, in any media condition, whose selector has a .markdown
+// element as its subject sets max-width to a value other than none; a rule whose
+// subject is a descendant of the container (.markdown table, .markdown pre) does
+// not style the container and is not counted. Second, every .markdown container
+// the interface renders — in a sprint card of the sprints page, the sprint
+// description and every sprint comment body of the sprint page, and the four
+// Markdown fields and every comment body of the task page — is described with
+// its served ancestors and matched against the rules at every width of
+// contrastWidths, and no matching rule sets max-width to a value other than
+// none. The width the container then takes is the browser's to compute.
+func TestMarkdownTypography_FullContainerWidth(t *testing.T) {
+	rules := servedStaticCascadeRules(t)
+
+	for i := range rules {
+		rule := &rules[i]
+		for _, decl := range rule.decls {
+			if decl.prop != "max-width" || strings.TrimSpace(decl.value) == "none" {
+				continue
+			}
+			for j := range rule.selectors {
+				if selectorSubjectIsMarkdown(&rule.selectors[j]) {
+					t.Errorf("a rule %s (media %q) whose subject is .markdown sets max-width: %s, want none or no declaration",
+						selectorClasses(&rule.selectors[j]), rule.media, decl.value)
+				}
+			}
+		}
 	}
 
 	t.Setenv("HOME", shortHome(t))
 	f := seedMarkdownFixture(t, "settlement-runbook")
 	mux := buildMux()
-	sprint := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openSprintID))
-	open, closing := strings.Index(sprint, `<main class="page-body">`), strings.Index(sprint, "</main>")
-	if open < 0 || closing < open {
-		t.Fatal("the sprint page has no page body")
+	surfaces := []struct {
+		name, path string
+		want       int // the number of .markdown containers the page renders; 0 means at least one
+		inside     string
+	}{
+		{"sprints page", "/roadmaps/" + f.name + "/sprints", 0, "card-link"},
+		{"sprint page", "/roadmaps/" + f.name + "/sprints/" + itoa(f.openSprintID), 1 + len(f.sprintCommentIDs), "card-body"},
+		{"task page", "/roadmaps/" + f.name + "/tasks/" + itoa(f.taskID), 4 + len(f.taskCommentIDs), "card-body"},
 	}
-	inside := sprint[open:closing]
-	if got, want := strings.Count(inside, `<div class="markdown`), 1+len(f.sprintCommentIDs); got != want ||
-		strings.Count(sprint, `<div class="markdown`) != want {
-		t.Errorf("%d Markdown containers in the sprint page body, want the description and %d comments, all of them there", got, len(f.sprintCommentIDs))
-	}
-	// The sprint page's board cards are card links, but hold no Markdown container:
-	// every container of the page is outside a card link and outside a task-page
-	// row, so the selector matches each of them.
-	for _, card := range strings.Split(inside, cardOpen)[1:] {
-		if end := strings.Index(card, "</a>"); end >= 0 && strings.Contains(card[:end], "markdown") {
-			t.Error("a board card of the sprint page holds a Markdown container")
+	for _, s := range surfaces {
+		containers := markdownContainers(t, servePage(t, mux, s.path))
+		if (s.want == 0 && len(containers) == 0) || (s.want > 0 && len(containers) != s.want) {
+			t.Errorf("%s: %d .markdown containers, want %d (0 means at least one)", s.name, len(containers), s.want)
 		}
-	}
-	if strings.Contains(inside, "task-page") {
-		t.Error("the sprint page body holds a task-page row, which the selector excludes")
-	}
-
-	sprints := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
-	cards := regexp.MustCompile(`(?s)<a href="[^"]*" class="card card-sm card-link text-reset">.*?</a>`).FindAllString(sprints, -1)
-	inCards := 0
-	for _, card := range cards {
-		inCards += strings.Count(card, `<div class="markdown`)
-	}
-	if total := strings.Count(sprints, `<div class="markdown`); total == 0 || total != inCards {
-		t.Errorf("%d Markdown containers on the sprints page, %d of them in a .card-link", total, inCards)
-	}
-
-	// The task page: every Markdown container sits inside the one task-page row of
-	// the page body, directly in its card's body, with nothing between them that
-	// could narrow it.
-	task := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.taskID))
-	row := task[strings.Index(task, `<div class="row row-cards task-page">`):strings.Index(task, "</main>")]
-	if got, want := strings.Count(row, `<div class="markdown">`), 4+len(f.taskCommentIDs); got != want ||
-		strings.Count(task, `<div class="markdown`) != want {
-		t.Errorf("%d Markdown containers in the task page's task-page row, want the 4 fields and %d comments, all of them there",
-			got, len(f.taskCommentIDs))
-	}
-	fieldBodies := regexp.MustCompile(`<div class="card-body">\s*<div class="markdown">`).FindAllString(row, -1)
-	if len(fieldBodies) != 4 {
-		t.Errorf("%d field containers sit directly in their card's body, want 4", len(fieldBodies))
+		for n, el := range containers {
+			if !elementWithin(el, s.inside) {
+				t.Errorf("%s: .markdown container %d is not inside a .%s", s.name, n, s.inside)
+			}
+			for _, width := range contrastWidths {
+				matches, err := newCSSCascade(rules, width).matching(el, "")
+				if err != nil {
+					t.Fatalf("%s at %vpx: %v", s.name, width, err)
+				}
+				// Falsifiability: a container described so that no rule matches it
+				// would pass the max-width check vacuously.
+				if !matchesClassRule(matches, "markdown") {
+					t.Fatalf("%s at %vpx: no .markdown rule matches container %d; the description is wrong", s.name, width, n)
+				}
+				for _, m := range matches {
+					for _, decl := range m.rule.decls {
+						if decl.prop == "max-width" && strings.TrimSpace(decl.value) != "none" {
+							t.Errorf("%s at %vpx: container %d is matched by a rule setting max-width: %s",
+								s.name, width, n, decl.value)
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
-func containsAll(list []string, want ...string) bool {
-	for _, w := range want {
-		found := false
-		for _, s := range list {
-			found = found || s == w
+// servedStaticCascadeRules fetches through the server every stylesheet the
+// embedded static set holds, so a sheet added under /static/... is read without
+// this list being edited, and parses them into one list of rules.
+func servedStaticCascadeRules(t *testing.T) []cascadeRule {
+	t.Helper()
+	mux := buildMux()
+	var rules []cascadeRule
+	sheets := 0
+	err := fs.WalkDir(staticSubFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".css") {
+			return err
 		}
-		if !found {
-			return false
+		sheets++
+		var perr error
+		if rules, perr = parseCascadeSheet(servePage(t, mux, "/static/"+path), rules); perr != nil {
+			return fmt.Errorf("parsing /static/%s: %w", path, perr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheets < 2 || len(rules) < 100 {
+		t.Fatalf("%d stylesheets parsed to %d rules; the check over them would be vacuous", sheets, len(rules))
+	}
+	return rules
+}
+
+// selectorSubjectIsMarkdown reports whether a selector's subject — its last
+// compound — requires the markdown class, directly or through an :is(),
+// :where(), or :matches() argument. A class named only inside :not() excludes
+// the container rather than selecting it.
+func selectorSubjectIsMarkdown(sel *cascadeSelector) bool {
+	if len(sel.compounds) == 0 {
+		return false
+	}
+	return compoundNamesClass(&sel.compounds[len(sel.compounds)-1], "markdown")
+}
+
+func compoundNamesClass(c *cascadeCompound, class string) bool {
+	if containsString(c.classes, class) {
+		return true
+	}
+	for i := range c.pseudos {
+		p := &c.pseudos[i]
+		if p.name != "is" && p.name != "where" && p.name != "matches" && p.name != "-webkit-any" {
+			continue
+		}
+		for j := range p.list {
+			if selectorSubjectIsMarkdown(&p.list[j]) {
+				return true
+			}
 		}
 	}
-	return true
+	return false
+}
+
+// selectorClasses renders a parsed selector's compounds by tag and classes, for
+// a failure message; pseudo-classes are elided.
+func selectorClasses(sel *cascadeSelector) string {
+	parts := make([]string, 0, len(sel.compounds))
+	for i := range sel.compounds {
+		c := &sel.compounds[i]
+		parts = append(parts, c.tag+strings.Join(append([]string{""}, c.classes...), "."))
+	}
+	return strings.Join(parts, " ")
+}
+
+// matchesClassRule reports whether any matching rule has a selector whose
+// subject is exactly the one class.
+func matchesClassRule(matches []cascadeMatch, class string) bool {
+	for _, m := range matches {
+		for _, sel := range m.rule.selectors {
+			if len(sel.compounds) == 1 && sel.compounds[0].tag == "" &&
+				len(sel.compounds[0].classes) == 1 && sel.compounds[0].classes[0] == class {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// elementWithin reports whether an ancestor of el carries class.
+func elementWithin(el *cssElement, class string) bool {
+	for p := el.parent; p != nil; p = p.parent {
+		if p.hasClass(class) {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	htmlTagPattern  = regexp.MustCompile(`(?s)<!--.*?-->|<(/?)([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>`)
+	htmlAttrPattern = regexp.MustCompile(`([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?`)
+	htmlVoidTags    = map[string]bool{"area": true, "base": true, "br": true, "col": true, "embed": true, "hr": true,
+		"img": true, "input": true, "link": true, "meta": true, "source": true, "track": true, "wbr": true}
+	htmlRawTextTags = map[string]bool{"script": true, "style": true, "textarea": true, "title": true}
+)
+
+// markdownContainers walks a served page's markup with a stack of open elements
+// and returns every element whose class list holds markdown, described as a
+// cssElement chain carrying each ancestor's tag, id, classes, and attributes, so
+// the cascade matches it in the context the page actually renders it in. The
+// served pages are well formed, so an end tag closes the innermost open element
+// of its name.
+func markdownContainers(t *testing.T, page string) []*cssElement {
+	t.Helper()
+	var (
+		stack []*cssElement
+		found []*cssElement
+	)
+	for i := 0; i < len(page); {
+		loc := htmlTagPattern.FindStringSubmatchIndex(page[i:])
+		if loc == nil {
+			break
+		}
+		whole := page[i+loc[0] : i+loc[1]]
+		next := i + loc[1]
+		if strings.HasPrefix(whole, "<!--") {
+			i = next
+			continue
+		}
+		closing := loc[3] > loc[2]
+		tag := strings.ToLower(page[i+loc[4] : i+loc[5]])
+		if closing {
+			for k := len(stack) - 1; k >= 0; k-- {
+				if stack[k].tag == tag {
+					stack = stack[:k]
+					break
+				}
+			}
+			i = next
+			continue
+		}
+		el := &cssElement{tag: tag, attrs: map[string]string{}, state: map[string]bool{}}
+		for _, a := range htmlAttrPattern.FindAllStringSubmatch(page[i+loc[6]:i+loc[7]], -1) {
+			name := strings.ToLower(a[1])
+			value := a[2] + a[3] + a[4]
+			el.attrs[name] = value
+			switch name {
+			case "class":
+				el.classes = strings.Fields(value)
+			case "id":
+				el.id = value
+			}
+		}
+		if len(stack) > 0 {
+			el.parent = stack[len(stack)-1]
+		}
+		if el.hasClass("markdown") {
+			found = append(found, el)
+		}
+		switch {
+		case htmlVoidTags[tag] || strings.HasSuffix(whole, "/>"):
+		case htmlRawTextTags[tag]:
+			end := strings.Index(strings.ToLower(page[next:]), "</"+tag)
+			if end < 0 {
+				t.Fatalf("unterminated <%s> element", tag)
+			}
+			next += end
+			stack = append(stack, el)
+		default:
+			stack = append(stack, el)
+		}
+		i = next
+	}
+	return found
 }
 
 // TestMarkdownTypography_ScopedAndMarkupUnchanged is Acceptance Criterion 203:

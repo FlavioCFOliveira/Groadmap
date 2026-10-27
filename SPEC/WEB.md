@@ -2612,7 +2612,7 @@ how the `rmp web` process itself terminates.
   [Markdown Rendering](#markdown-rendering)). A field whose value is empty or null
   keeps its card, which shows the em dash in place of the container. The Markdown
   container of each field card, and of every comment `body` in the Comments card,
-  spans the full width of its card's body: it carries no line-length limit (see
+  spans the full width of its card's body, as every Markdown container does (see
   [Markdown Rendering](#markdown-rendering), rule 13). The rendered
   content wraps within its card, and a wide table or code block scrolls inside its
   own box, so no forced horizontal scrolling of the page is introduced.
@@ -5608,16 +5608,14 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       italic `em` or `i` element in the Inter font is drawn from Inter's real
       italic face (see [UI Framework](#ui-framework), rule 4), never from a slant
       the browser synthesises from the upright face.
-    - **Line length.** On the [Roadmap Sprint Page](#roadmap-sprint-page), the
-      container of the sprint `description` and the container of every sprint
-      comment `body` have a `max-width` of `80ch`, so a line of rendered Markdown
-      holds at most about 80 characters: the width WCAG 2.2 Success Criterion
-      1.4.8 (Visual Presentation) names, and inside the 45 to 90 characters
-      Matthew Butterick's *Practical Typography* recommends. The sprint card is
-      already narrow and carries no such limit. On the
-      [Roadmap Task Page](#roadmap-task-page), the container of each of the four
-      task Markdown fields and of every task comment `body` carries no such limit
-      either: it spans the full width of its card's body.
+    - **Line length.** No maximum line length is applied to rendered Markdown.
+      On every surface that shows it — the sprint card, the
+      [Roadmap Sprint Page](#roadmap-sprint-page), and the
+      [Roadmap Task Page](#roadmap-task-page) alike — the container takes the
+      full content width of its parent, and no rule sets a `max-width` on it
+      other than `none`. The content still wraps within the container, and the
+      **Overflow** rule above continues to govern wide tables, code blocks, and
+      long words.
 
     This styling adds to the HTML the renderer emits only the fixed task-list
     classes of rules 3 and 14, which carry no text of the author's and change no
@@ -9712,17 +9710,14 @@ Rules:
     Markdown is drawn from the italic face, which the browser reports as a loaded
     `font-style: italic` face of `Inter` (see [UI Framework](#ui-framework),
     rule 4, and [Markdown Rendering](#markdown-rendering), rule 13).
-202. **The roadmap sprint page limits a Markdown line to 80 characters, and the
-    roadmap task page does not.** `static/style.css` carries a rule setting
-    `max-width: 80ch` whose selector matches the `.markdown` container of the
-    sprint `description` and of every sprint comment `body` on the roadmap sprint
-    page, and matches no `.markdown` container in a sprint card of the roadmap
-    sprints page and none on the roadmap task page. On a desktop-width viewport,
-    the sprint description's container on the roadmap sprint page has a computed
-    `max-width` equal to 80 times the width of its `0` glyph, while a sprint card's
-    container and the containers of the four Markdown fields and of every comment
-    `body` on the roadmap task page have a computed `max-width` of `none`, and each
-    task-page container's width equals the content width of its card's body (see
+202. **Rendered Markdown fills the width of its container on every surface.**
+    No rule in a stylesheet served under `/static/...` whose selector matches a
+    `.markdown` element sets `max-width` to a value other than `none`. On a
+    desktop-width viewport, every `.markdown` element — in a sprint card of the
+    roadmap sprints page, the sprint `description` and every sprint comment `body`
+    on the roadmap sprint page, and the four Markdown fields and every comment
+    `body` on the roadmap task page — has a computed `max-width` of `none`, and its
+    width equals the content width of its parent element (see
     [Markdown Rendering](#markdown-rendering), rule 13).
 203. **The typography adds only the task-list classes to the rendered HTML, and
     leaves the safety rules unchanged.** Every rule `static/style.css` adds for

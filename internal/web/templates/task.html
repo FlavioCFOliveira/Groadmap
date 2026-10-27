@@ -40,10 +40,7 @@
             breakpoint a narrow viewport meets the sprint context and the short
             fields before the long text; order-lg-last moves it to the right of
             the main column at lg and wider, where the main column takes two
-            thirds of the width. task-page is what static/style.css keys the
-            absence of the 80-character line length on: the Markdown containers of
-            this page span the full width of their card's body (SPEC/WEB.md
-            § Markdown Rendering, rule 13).
+            thirds of the width.
 
             Every value is rendered through html/template's contextual escaping;
             the only unescaped HTML is the Markdown renderer's output for the four
@@ -51,7 +48,7 @@
             its own and fetches nothing after it loads (SPEC/WEB.md § Roadmap Task
             Page, Rendered on the server, complete).
           */}}
-          <div class="row row-cards task-page">
+          <div class="row row-cards">
             <div class="col-12 col-lg-4 order-lg-last">
 
               {{/*
