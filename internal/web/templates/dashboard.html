@@ -122,25 +122,31 @@
             </div>
 
             {{/*
-              Block 2: Current sprint, across the full width. The OPEN sprint's
-              title, start, completion, status breakdown, legend, and capacity; the
-              card draws no chart. No deadline and no days remaining: a sprint
-              carries no end date. The
-              breakdown segments carry their share in data-percent and no style
-              attribute; the page script sizes them through the CSSOM, and without
-              JavaScript the completion line and the legend still state every
-              number the bar draws.
+              Block 2: Current sprint, across the full width. While a sprint is
+              OPEN, the card title reads "Current sprint: <title>" with only the
+              sprint's title a link to its page; the body holds the progress row
+              (completion and start), the status breakdown, the legend, and the
+              capacity. With no OPEN sprint the title reads "Current sprint"
+              alone. The card draws no chart. No deadline and no days remaining:
+              a sprint carries no end date. The breakdown segments carry their
+              share in data-percent and no style attribute; the page script sizes
+              them through the CSSOM, and without JavaScript the completion text
+              and the legend still state every number the bar draws.
             */}}
             <div class="col-12">
               <div class="card" data-role="current-sprint">
                 <div class="card-header">
-                  <h3 class="card-title">Current sprint</h3>
+                  <h3 class="card-title">Current sprint{{with .Sprint}}: <a href="/roadmaps/{{$.Name}}/sprints/{{.ID}}" data-role="current-sprint-link">{{.Title}}</a>{{end}}</h3>
                 </div>
                 <div class="card-body">
                   {{with .Sprint}}
-                  <a class="h3 d-inline-block py-1 mb-1" href="/roadmaps/{{$.Name}}/sprints/{{.ID}}" data-role="current-sprint-link">{{.Title}}</a>
-                  <div class="text-secondary mb-1" data-role="current-sprint-started">Started {{timestamp .StartedAt}}{{with .Elapsed}}, {{.}} elapsed{{end}}</div>
-                  <div class="mb-2" data-role="current-sprint-complete">{{.CompletePercent}}% complete</div>
+                  {{/*
+                    The progress row: Tabler's label-and-value row above a
+                    progress bar, the completion text at the leading edge and the
+                    start text pushed to the trailing edge by ms-auto. Utility
+                    classes alone lay it out; no style attribute.
+                  */}}
+                  <div class="d-flex mb-2"><div>{{.CompletePercent}}% complete</div><div class="ms-auto">Started {{timestamp .StartedAt}}{{with .Elapsed}}, {{.}} elapsed{{end}}</div></div>
                   <div class="progress-stacked mb-2" data-role="sprint-breakdown">
                     {{range .Segments}}{{if .Percent}}
                     <div class="progress" role="progressbar" aria-label="{{.Status}} {{.Count}}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.Percent}}" data-percent="{{.Percent}}">

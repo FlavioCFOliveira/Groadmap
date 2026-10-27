@@ -1087,7 +1087,9 @@ how the `rmp web` process itself terminates.
   at every viewport width, so the seven columns of Recent activity fit a desktop-width card without
   scrolling. Every block
   other than a KPI card carries a `card-header` holding a
-  `<h3 class="card-title">` with the block's title as the table names it.
+  `<h3 class="card-title">` with the block's title as the table names it, with
+  one exception: while a sprint is `OPEN`, the Current sprint card's title also
+  names that sprint, as **Block 2: Current sprint** below states.
 - **Definitions shared by every block.** These terms have exactly one meaning on
   the page:
   1. An **open task** is a task whose status is `BACKLOG`, `SPRINT`, `DOING`, or
@@ -1171,21 +1173,40 @@ how the `rmp web` process itself terminates.
      card then reads exactly as a KPI card on a roadmap with no task, its value
      `0` stating that the set is empty (see **Empty states** below).
 - **Block 2: Current sprint.** The card presents the roadmap's `OPEN` sprint; at
-  most one sprint is `OPEN` at a time (see `DATABASE.md § sprints Table`). Its
-  `card-body` holds, in this order:
-  1. the sprint's `title`, as a link to that sprint's own page,
-     `/roadmaps/{name}/sprints/{id}`;
-  2. the line `Started <date>, <N> days elapsed`, where `<date>` is the sprint's
-     `started_at` in the display form of [Date and Time Display](#date-and-time-display),
-     in a `<time>` element, and `<N> days` the whole days elapsed since it (`1 day`
-     when `<N>` is `1`). When `started_at` is unset, the line reads
-     `Started —`, with the em dash that rule of
-     [Date and Time Display](#date-and-time-display) prescribes, and states no
-     elapsed days;
-  3. the completion line `<p>% complete`, where `<p>` is the percentage of the
-     sprint's member tasks whose status is `COMPLETED` in the sprint's member
-     tasks;
-  4. the **status breakdown**: a Tabler `progress-stacked` bar with one segment
+  most one sprint is `OPEN` at a time (see `DATABASE.md § sprints Table`).
+
+  **Card title.** While a sprint is `OPEN`, the card's `<h3 class="card-title">`
+  reads `Current sprint: <title>`, where `<title>` is the sprint's `title`. Only
+  `<title>` is a link, to that sprint's own page, `/roadmaps/{name}/sprints/{id}`;
+  the text `Current sprint: ` is plain text outside the link. The sprint's
+  `title` is the roadmap's data, not a label of the interface (see
+  **Interface language** above). When no sprint is `OPEN`, the
+  card title reads `Current sprint`, holds no link, and names no sprint.
+
+  While a sprint is `OPEN`, the card's `card-body` holds, in this order:
+  1. the **progress row**: one `<div class="d-flex mb-2">`, the label-and-value
+     row Tabler sets directly above a progress bar in its own dashboard cards,
+     holding exactly two `<div>` children, in this order:
+     - a `<div>` with no class, holding the **completion text** `<p>% complete`,
+       where `<p>` is the percentage of the sprint's member tasks whose status is
+       `COMPLETED` in the sprint's member tasks. It stands at the row's leading
+       edge;
+     - a `<div class="ms-auto">`, holding the **start text**
+       `Started <date>, <N> days elapsed`, where `<date>` is the sprint's
+       `started_at` in the display form of
+       [Date and Time Display](#date-and-time-display), in a `<time>` element, and
+       `<N> days` the whole days elapsed since it (`1 day` when `<N>` is `1`).
+       When `started_at` is unset, the start text reads `Started —`, with the em
+       dash that rule of [Date and Time Display](#date-and-time-display)
+       prescribes, and states no elapsed days. The `ms-auto` class, Bootstrap's
+       `margin-inline-start: auto` utility, places this `<div>` at the row's
+       trailing edge.
+
+     The row's layout comes from these utility classes alone; neither the row
+     nor its children carry a `style` attribute ([UI Framework](#ui-framework),
+     rule 10). The progress row is the element immediately before the status
+     breakdown;
+  2. the **status breakdown**: a Tabler `progress-stacked` bar with one segment
      per member-task status, in the order `SPRINT`, `DOING`, `TESTING`,
      `COMPLETED`, each segment a `<div class="progress">` carrying
      `role="progressbar"`, an `aria-label` reading the status and its count
@@ -1200,7 +1221,7 @@ how the `rmp web` process itself terminates.
      tasks, written with at most two decimal places. A status no member task holds
      renders no segment, and a sprint with no member task renders the bar with no
      segment;
-  5. the **legend**: Tabler's legend list,
+  3. the **legend**: Tabler's legend list,
      `<div class="legend-list">`, with one entry per status of the breakdown, in
      the same order, each entry
      `<span class="legend legend-<colour>"><span class="legend-dot"></span><STATUS><span class="legend-value"><n></span></span>`,
@@ -1210,7 +1231,7 @@ how the `rmp web` process itself terminates.
      Tabler releases is deprecated in the vendored distribution and is not used. A sprint member is never in
      `BACKLOG` (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`),
      so the breakdown and the legend name the four other statuses only;
-  6. the line `Capacity <active>/<max>`, only when the sprint's `max_tasks` is
+  4. the line `Capacity <active>/<max>`, only when the sprint's `max_tasks` is
      set, where `<active>` is the number of member tasks whose status is `SPRINT`,
      `DOING`, or `TESTING` and `<max>` is `max_tasks`: the `current_load` and
      `max_tasks` of `rmp sprint show` (see `MODELS.md § Sprint Show Result`).
@@ -1229,7 +1250,7 @@ how the `rmp web` process itself terminates.
   the CSSOM, which the Content-Security-Policy permits (see
   [Security Headers](#security-headers)); no template carries a `style`
   attribute ([UI Framework](#ui-framework), rule 10). Without JavaScript the
-  segments are not sized, and the completion line and the legend still state
+  segments are not sized, and the completion text and the legend still state
   every number the bar draws.
 
   When no sprint is `OPEN`, the card keeps its header and its body holds the
@@ -10325,10 +10346,16 @@ Rules:
 269. **The Current sprint card states the sprint's progress.** For the seeded
     roadmap of Acceptance Criterion 268 whose `OPEN` sprint has `max_tasks` 8,
     was started 3 days and 5 hours before the request, and holds 6 member tasks —
-    2 `SPRINT`, 2 `DOING`, 1 `TESTING`, and 1 `COMPLETED` — the Current sprint card
-    shows the sprint's `title` as a link to `/roadmaps/{name}/sprints/{id}`, the
-    line `Started <date>, 3 days elapsed` with `<date>` in a `<time>` element whose
-    `datetime` is the stored `started_at`, the line `16% complete`, a
+    2 `SPRINT`, 2 `DOING`, 1 `TESTING`, and 1 `COMPLETED` — the Current sprint
+    card's `<h3 class="card-title">` reads `Current sprint: <title>`, where the
+    text `Current sprint: ` lies outside any link and the sprint's `title` alone is
+    the content of an `<a>` whose `href` is `/roadmaps/{name}/sprints/{id}`; the
+    card's `card-body` holds no link to the sprint and holds, in this order, a
+    progress row `<div class="d-flex mb-2">` whose first child, a `<div>` with no
+    class, reads `16% complete` and whose second and last child, a
+    `<div class="ms-auto">`, reads `Started <date>, 3 days elapsed` with `<date>`
+    in a `<time>` element whose `datetime` is the stored `started_at`, with no
+    `style` attribute on the row or either child; immediately after that row, a
     `progress-stacked` bar of four segments in the order `SPRINT`, `DOING`,
     `TESTING`, `COMPLETED` whose `data-percent` values are `33.33`, `33.33`,
     `16.67`, and `16.67` and whose bars carry `bg-cyan`, `bg-blue`, `bg-yellow`,
@@ -10341,11 +10368,13 @@ Rules:
     With `max_tasks` unset the card renders no capacity line. The card contains no
     deadline, no end date, and no days-remaining figure.
 270. **No open sprint shows an empty state.** For a roadmap with no `OPEN`
-    sprint, the Current sprint card keeps its header and its body holds a
+    sprint, the Current sprint card keeps its header, whose
+    `<h3 class="card-title">` reads exactly `Current sprint` and holds no link,
+    and its body holds a
     `<div class="empty">` with the title `No open sprint` and an action link
     `View sprints` to `/roadmaps/{name}/sprints`, and the page renders no
     `progress-stacked` bar. For an `OPEN` sprint none of whose member tasks is
-    completed, the card shows the line `0% complete`, its status breakdown, and
+    completed, the card shows the completion text `0% complete`, its status breakdown, and
     its legend, and holds no `<div class="empty">`.
 271. **The donut data counts open, completed, and backlog tasks per type.** For
     the seeded roadmap of Acceptance Criterion 268 whose tasks are 6 `TASK`

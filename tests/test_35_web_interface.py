@@ -1083,10 +1083,32 @@ class TestWebInterface:
         assert cols[4:7] == ["col-12", "col-lg-6", "col-lg-6"], (
             f"the grid columns after the KPI row are {cols[4:7]}")
         sprint_card = self._kpi_card(body, "current-sprint")
+        # The card title names the OPEN sprint: "Current sprint: " is plain text
+        # and the sprint's title alone links to the sprint's page; the card body
+        # no longer carries that link and opens with the progress row: the
+        # completion text, then the start text in an ms-auto div, immediately
+        # followed by the status breakdown.
+        open_sprints = self.test.list_sprints("ledger-close", status="OPEN")
+        assert len(open_sprints) == 1, f"ledger-close must hold one OPEN sprint, got {open_sprints}"
+        sprint_href = f'/roadmaps/ledger-close/sprints/{open_sprints[0]["id"]}'
+        header = re.search(r'<h3 class="card-title">(.*?)</h3>', sprint_card, re.S)
+        assert header and header.group(1) == (
+            f'Current sprint: <a href="{sprint_href}" data-role="current-sprint-link">'
+            'Month-end ledger close</a>'), f"the Current sprint card title is {header and header.group(1)!r}"
+        card_body = sprint_card[sprint_card.index('<div class="card-body">'):]
+        for absent in ("<a ", sprint_href, "Month-end ledger close"):
+            assert absent not in card_body, f"the Current sprint card body carries {absent!r}"
+        assert re.match(
+            r'<div class="card-body">\s*<div class="d-flex mb-2"><div>50% complete</div>'
+            r'<div class="ms-auto">Started <time datetime="[^"]+">[^<]+</time>, 0 days elapsed</div></div>'
+            r'\s*<div class="progress-stacked mb-2" data-role="sprint-breakdown">',
+            card_body), f"the Current sprint card body does not open with the progress row: {card_body[:400]!r}"
+        assert "current-sprint-started" not in sprint_card and "current-sprint-complete" not in sprint_card, (
+            "the separate Started and completion lines must be gone")
         assert "COMPLETED<span class=\"legend-value\">2</span>" in sprint_card, (
             "the OPEN sprint must hold a COMPLETED member, or the no-burndown check is vacuous")
-        assert ">50% complete<" in sprint_card and "progress-stacked" in sprint_card, (
-            "the Current sprint card must keep its completion line and its status breakdown")
+        assert "<div>50% complete</div>" in sprint_card and "progress-stacked" in sprint_card, (
+            "the Current sprint card must keep its completion text and its status breakdown")
         for absent in ("chart-", 'role="img"', "burndown", "Burndown", '<div class="empty">'):
             assert absent not in sprint_card, f"the Current sprint card carries {absent!r}"
         charts = re.findall(r'<div [^>]*id="(chart-[a-z-]+)"', body)
@@ -1116,7 +1138,10 @@ class TestWebInterface:
             f"the empty roadmap's chart data block is {data}")
         assert "Throughput" not in body and "chart-lg" not in body, (
             "a roadmap with no OPEN sprint must render no Throughput card and no chart-lg")
-        assert "No open sprint" in self._kpi_card(body, "current-sprint")
+        empty_sprint_card = self._kpi_card(body, "current-sprint")
+        assert "No open sprint" in empty_sprint_card
+        assert re.search(r'<h3 class="card-title">(.*?)</h3>', empty_sprint_card, re.S).group(1) == (
+            "Current sprint"), "with no OPEN sprint the card title must read exactly Current sprint, with no link"
 
     def test_index_empty_state_when_no_roadmaps(self):
         proc, port = self._start(["--port", "0"], home=self._fresh_home())

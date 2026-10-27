@@ -271,7 +271,7 @@ var (
 	dashRowRe   = regexp.MustCompile(`(?s)<tr>(.*?)</tr>`)
 	dashCellRe  = regexp.MustCompile(`(?s)<td[^>]*>(.*?)</td>`)
 	dashColRe   = regexp.MustCompile(`<div class="(col-[^"]+)">`)
-	dashTitleRe = regexp.MustCompile(`<h3 class="card-title">([^<]+)</h3>|<div class="subheader">([^<]+)</div>`)
+	dashTitleRe = regexp.MustCompile(`<h3 class="card-title">([^<]+)(?:<a [^>]*>([^<]*)</a>)?</h3>|<div class="subheader">([^<]+)</div>`)
 	dashChartRe = regexp.MustCompile(`<div [^>]*id="(chart-[a-z-]+)"`)
 	dashDonutRe = regexp.MustCompile(`<div id="(chart-[a-z]+-by-type)" role="img" aria-label="([^"]*)"></div>`)
 )
@@ -390,10 +390,10 @@ func TestDashboard_IsTheLandingPage(t *testing.T) {
 	titleMatches := dashTitleRe.FindAllStringSubmatch(main, -1)
 	titles := make([]string, 0, len(titleMatches))
 	for _, m := range titleMatches {
-		titles = append(titles, m[1]+m[2])
+		titles = append(titles, m[1]+m[2]+m[3])
 	}
 	wantTitles := []string{
-		"Open tasks", "Completed", "Backlog", "Average velocity", "Current sprint",
+		"Open tasks", "Completed", "Backlog", "Average velocity", "Current sprint: Ledger cut-over",
 		"Work in progress", "Highest-severity open tasks", "Upcoming sprints", "Recent activity",
 	}
 	if strings.Join(titles, "|") != strings.Join(wantTitles, "|") {
@@ -611,16 +611,61 @@ func TestDashboard_CurrentSprintStatesItsProgress(t *testing.T) {
 	body := dashboardBody(t, f.name, dashNow)
 	card := dashCard(t, body, "current-sprint")
 
-	for _, want := range []string{
-		`<h3 class="card-title">Current sprint</h3>`,
-		`href="/roadmaps/` + f.name + `/sprints/` + itoa(f.openID) + `" data-role="current-sprint-link">Ledger cut-over</a>`,
-		`Started <time datetime="` + f.startedAt + `">`, `</time>, 3 days elapsed</div>`,
-		">16% complete<",
-		">Capacity 5/8<",
-	} {
-		if !strings.Contains(card, want) {
-			t.Errorf("the Current sprint card lacks %q; card=%q", want, card)
+	// The card title names the sprint: "Current sprint: " is plain text and the
+	// sprint's title alone is the link to the sprint's page.
+	sprintHref := `/roadmaps/` + f.name + `/sprints/` + itoa(f.openID)
+	wantHeader := `<h3 class="card-title">Current sprint: <a href="` + sprintHref +
+		`" data-role="current-sprint-link">Ledger cut-over</a></h3>`
+	if !strings.Contains(card, wantHeader) {
+		t.Errorf("the Current sprint card title is not %q; card=%q", wantHeader, card)
+	}
+	_, bodyPart, ok := strings.Cut(card, `<div class="card-body">`)
+	if !ok {
+		t.Fatalf("the Current sprint card has no card-body; card=%q", card)
+	}
+	for _, absent := range []string{"<a ", sprintHref, "Ledger cut-over"} {
+		if strings.Contains(bodyPart, absent) {
+			t.Errorf("the Current sprint card body carries %q; the sprint link lives in the card title; body=%q", absent, bodyPart)
 		}
+	}
+
+	// The body opens with the progress row, the completion text at its leading
+	// edge and the start text in its ms-auto child, immediately followed by the
+	// status breakdown; no element of the card carries a style attribute.
+	progressRow := regexp.MustCompile(`^\s*<div class="d-flex mb-2"><div>16% complete</div>` +
+		`<div class="ms-auto">Started <time datetime="` + regexp.QuoteMeta(f.startedAt) + `">[^<]+</time>, 3 days elapsed</div></div>` +
+		`\s*<div class="progress-stacked mb-2" data-role="sprint-breakdown">`)
+	if !progressRow.MatchString(bodyPart) {
+		t.Errorf("the card body does not open with the progress row followed by the breakdown; body=%q", bodyPart)
+	}
+	if strings.Contains(card, "style=") {
+		t.Errorf("the Current sprint card carries a style attribute; card=%q", card)
+	}
+	for _, gone := range []string{"text-secondary mb-1", `data-role="current-sprint-started"`, `data-role="current-sprint-complete"`} {
+		if strings.Contains(card, gone) {
+			t.Errorf("the Current sprint card still carries the separate line %q", gone)
+		}
+	}
+
+	// In order: the progress row, the breakdown, the legend, and the capacity
+	// line.
+	order := []string{
+		`<div class="d-flex mb-2">`,
+		`data-role="sprint-breakdown">`,
+		`data-role="sprint-breakdown-legend">`,
+		">Capacity 5/8<",
+	}
+	last := -1
+	for _, want := range order {
+		i := strings.Index(bodyPart, want)
+		if i < 0 {
+			t.Errorf("the Current sprint card body lacks %q; body=%q", want, bodyPart)
+			continue
+		}
+		if i < last {
+			t.Errorf("%q is out of order in the Current sprint card body", want)
+		}
+		last = i
 	}
 
 	segRe := regexp.MustCompile(`(?s)<div class="progress" role="progressbar" aria-label="([A-Z]+) (\d+)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="([0-9.]+)" data-percent="([0-9.]+)">\s*<div class="progress-bar ([a-z-]+)"></div>`)
@@ -682,6 +727,28 @@ func TestDashboard_CurrentSprintStatesItsProgress(t *testing.T) {
 	}
 }
 
+// TestDashboard_CurrentSprintTitleIsEscaped is the escaping half of Acceptance
+// Criterion 269: the sprint's title in the card title is the roadmap's data and
+// is HTML-escaped inside the link, never interpreted as markup.
+func TestDashboard_CurrentSprintTitleIsEscaped(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	f := seedDashFixture(t, "settlement-platform")
+	rw := openDashRoadmap(t, f.name)
+	const title = "Ledger <cut-over> & FX revaluation"
+	if _, err := rw.Exec(`UPDATE sprints SET title = ? WHERE id = ?`, title, f.openID); err != nil {
+		t.Fatalf("renaming the open sprint: %v", err)
+	}
+	card := dashCard(t, dashboardBody(t, f.name, dashNow), "current-sprint")
+	want := `<h3 class="card-title">Current sprint: <a href="/roadmaps/` + f.name + `/sprints/` + itoa(f.openID) +
+		`" data-role="current-sprint-link">Ledger &lt;cut-over&gt; &amp; FX revaluation</a></h3>`
+	if !strings.Contains(card, want) {
+		t.Errorf("the Current sprint card title is not %q; card=%q", want, card)
+	}
+	if strings.Contains(card, "<cut-over>") || strings.Contains(card, title) {
+		t.Errorf("the sprint title reaches the card unescaped; card=%q", card)
+	}
+}
+
 // TestDashboard_NoOpenSprintShowsAnEmptyState is Acceptance Criterion 270.
 func TestDashboard_NoOpenSprintShowsAnEmptyState(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -692,8 +759,13 @@ func TestDashboard_NoOpenSprintShowsAnEmptyState(t *testing.T) {
 	pending := addDashSprint(t, database, "Treasury close", 1, ids)
 	body := dashboardBody(t, "treasury-ops", dashNow)
 	card := dashCard(t, body, "current-sprint")
+	header := regionBetween(t, card, `<div class="card-header">`, `<div class="card-body">`)
+	if !strings.Contains(header, `<h3 class="card-title">Current sprint</h3>`) || strings.Contains(header, "<a ") ||
+		strings.Contains(header, "Treasury close") || strings.Contains(header, "/sprints/") {
+		t.Errorf("with no OPEN sprint the card title is not exactly \"Current sprint\" without a link; header=%q", header)
+	}
 	for _, want := range []string{
-		`<h3 class="card-title">Current sprint</h3>`, `<div class="empty">`,
+		`<div class="empty">`,
 		`<p class="empty-title">No open sprint</p>`,
 		`<p class="empty-subtitle text-secondary">Sprints are started with the CLI, rmp sprint start.</p>`,
 		`<div class="empty-action">`,
@@ -713,7 +785,10 @@ func TestDashboard_NoOpenSprintShowsAnEmptyState(t *testing.T) {
 	body = dashboardBody(t, "treasury-ops", dashNow)
 	card = dashCard(t, body, "current-sprint")
 	for _, want := range []string{
-		"Started <time", "2 days elapsed", ">0% complete<",
+		`<h3 class="card-title">Current sprint: <a href="/roadmaps/treasury-ops/sprints/` + itoa(pending) +
+			`" data-role="current-sprint-link">Treasury close</a></h3>`,
+		`<div class="d-flex mb-2"><div>0% complete</div><div class="ms-auto">Started <time`,
+		"</time>, 2 days elapsed</div></div>",
 		`<div class="progress-stacked mb-2" data-role="sprint-breakdown">`,
 		`aria-label="SPRINT 1" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" data-percent="100"`,
 		`<div class="legend-list mb-2" data-role="sprint-breakdown-legend">`,
@@ -735,7 +810,8 @@ func TestDashboard_NoOpenSprintShowsAnEmptyState(t *testing.T) {
 		t.Fatalf("clearing started_at: %v", err)
 	}
 	card = dashCard(t, dashboardBody(t, "treasury-ops", dashNow), "current-sprint")
-	if !strings.Contains(card, ">Started &mdash;</div>") || strings.Contains(card, "elapsed") {
+	if !strings.Contains(card, `<div class="d-flex mb-2"><div>0% complete</div><div class="ms-auto">Started &mdash;</div></div>`) ||
+		strings.Contains(card, "elapsed") {
 		t.Errorf("an unset started_at does not read \"Started —\" with no elapsed days; card=%q", card)
 	}
 }
