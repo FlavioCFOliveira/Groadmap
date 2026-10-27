@@ -1170,7 +1170,7 @@ func TestFocusVisible_BackLinksAndSidebarLinks(t *testing.T) {
 	mux := buildMux()
 	for path, back := range map[string]string{
 		taskPagePath(pageTaskID): `<a class="btn btn-outline-secondary" href="/roadmaps/payments/tasks">`,
-		"/roadmaps/" + pageRoadmap + "/sprints/" + itoa(pageSprintID): `<a class="btn btn-outline-secondary" href="/roadmaps/payments">`,
+		"/roadmaps/" + pageRoadmap + "/sprints/" + itoa(pageSprintID): `<a class="btn btn-outline-secondary" href="/roadmaps/payments/sprints">`,
 	} {
 		body := servePage(t, mux, path)
 		header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<main class="page-body">`)
@@ -1178,8 +1178,10 @@ func TestFocusVisible_BackLinksAndSidebarLinks(t *testing.T) {
 			t.Errorf("%s: the back link is not the a.btn the focus rule selects", path)
 		}
 		sidebar := regionBetween(t, body, `<aside class="navbar navbar-vertical`, "</aside>")
-		if got := strings.Count(sidebar, `class="nav-link"`); got != 5 {
-			t.Errorf("%s: %d sidebar nav-links, want 5", path, got)
+		// The roadmap index entry and the roadmap's five views (Acceptance
+		// Criterion 266).
+		if got := strings.Count(sidebar, `class="nav-link"`); got != 6 {
+			t.Errorf("%s: %d sidebar nav-links, want 6", path, got)
 		}
 		if strings.Contains(body, "style=") {
 			t.Errorf("%s carries an inline style attribute", path)

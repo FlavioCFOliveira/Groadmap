@@ -305,13 +305,13 @@ func TestBadgePrefix_NoOtherBadgeTakesAPrefix(t *testing.T) {
 
 	paths := []string{
 		"/",
-		"/roadmaps/" + board.name,
+		"/roadmaps/" + board.name + "/sprints",
 		"/roadmaps/" + board.name + "/tasks",
 		"/roadmaps/" + board.name + "/audit",
 		"/roadmaps/" + board.name + "/graph",
 		"/roadmaps/" + board.name + "/tasks/" + itoa(board.schema),
 		board.path(),
-		"/roadmaps/" + sprints.name,
+		"/roadmaps/" + sprints.name + "/sprints",
 		"/roadmaps/" + sprints.name + "/tasks",
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.openID),
 		"/roadmaps/" + sprints.name + "/sprints/" + itoa(sprints.pendingID),

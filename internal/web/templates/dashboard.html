@@ -1,0 +1,408 @@
+{{define "dashboard.html"}}<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+{{template "head" .}}
+</head>
+<body class="layout-fluid">
+  <div class="page">
+{{template "sidebar" .}}
+{{template "topnavbar" .}}
+    <div class="page-wrapper">
+      <div class="page-header d-print-none">
+        <div class="container-xl">
+          <div class="row g-2 align-items-center">
+{{template "pageTitle" .Chrome.Heading}}
+          </div>
+        </div>
+      </div>
+      <main class="page-body">
+        <div class="container-xl">
+
+          {{/*
+            The Roadmap Dashboard Page, the roadmap's landing page (SPEC/WEB.md
+            § Roadmap Dashboard Page). One grid, Tabler's own dashboard grid: row-deck
+            makes the cards of one row equal in height and row-cards sets the
+            gutter. It holds exactly the ten blocks, in the specified order and with
+            the specified column classes; below the sm breakpoint every block takes
+            the full width (§ Responsive and Mobile-First Design, rule 12).
+
+            Every number is rendered here, on the server, so the page states it
+            without JavaScript; static/dashboard.js only draws the charts from the
+            JSON data block at the end of the page and sizes the status breakdown
+            segments from their data-percent. Every block whose data is empty keeps
+            its card and its header and shows Tabler's empty state in place of its
+            chart or its table. READ-ONLY: no form and no control that submits a
+            change; every link navigates to a read-only page.
+          */}}
+          <div class="row row-deck row-cards">
+
+            {{/* Block 1: the KPI row, four Tabler stat cards with no card-header. */}}
+            <div class="col-sm-6 col-lg-3">
+              <div class="card" data-role="kpi-open">
+                <div class="card-body">
+                  <div class="subheader">Open tasks</div>
+                  <div class="h1 mb-3">{{.KPI.Open}}</div>
+                  <div class="text-secondary">{{.KPI.InProgress}} in progress, {{.KPI.Blocked}} blocked</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-sm-6 col-lg-3">
+              <div class="card" data-role="kpi-completed">
+                <div class="card-body">
+                  <div class="subheader">Completed</div>
+                  <div class="h1 mb-3">{{.KPI.Completed}}</div>
+                  <div class="d-flex mb-2">
+                    <div>{{.KPI.Completed}} of {{.KPI.Total}} tasks</div>
+                    <div class="ms-auto">{{.KPI.CompletedPercent}}%</div>
+                  </div>
+                  {{/*
+                    The native <progress> element under Tabler's progress classes,
+                    for the reason the task page's Sprint card uses it: Tabler's
+                    div form states its fill as an inline style width. A roadmap
+                    with no task carries value 0 and max 1, because a max of 0 is
+                    not a valid value of the attribute.
+                  */}}
+                  <progress class="progress progress-sm" value="{{.KPI.Completed}}" max="{{.KPI.ProgressMax}}" aria-label="Completed tasks"></progress>
+                </div>
+              </div>
+            </div>
+            <div class="col-sm-6 col-lg-3">
+              <div class="card" data-role="kpi-backlog">
+                <div class="card-body">
+                  <div class="subheader">Backlog</div>
+                  <div class="h1 mb-3">{{.KPI.Backlog}}</div>
+                  <div class="text-secondary">tasks in no sprint</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-sm-6 col-lg-3">
+              <div class="card" data-role="kpi-velocity">
+                <div class="card-body">
+                  <div class="subheader">Average velocity</div>
+                  <div class="h1 mb-3">{{.KPI.AverageVelocity}}</div>
+                  <div class="text-secondary">tasks per day, last 5 closed sprints</div>
+                </div>
+              </div>
+            </div>
+
+            {{/*
+              Block 2: Current sprint. The OPEN sprint's title, start, completion,
+              status breakdown, legend, capacity, and burndown. No deadline, no days
+              remaining, and no ideal line: a sprint carries no end date. The
+              breakdown segments carry their share in data-percent and no style
+              attribute; the page script sizes them through the CSSOM, and without
+              JavaScript the completion line and the legend still state every
+              number the bar draws.
+            */}}
+            <div class="col-lg-6">
+              <div class="card" data-role="current-sprint">
+                <div class="card-header">
+                  <h3 class="card-title">Current sprint</h3>
+                </div>
+                <div class="card-body">
+                  {{with .Sprint}}
+                  <a class="h3 d-inline-block py-1 mb-1" href="/roadmaps/{{$.Name}}/sprints/{{.ID}}" data-role="current-sprint-link">{{.Title}}</a>
+                  <div class="text-secondary mb-1" data-role="current-sprint-started">Started {{timestamp .StartedAt}}{{with .Elapsed}}, {{.}} elapsed{{end}}</div>
+                  <div class="mb-2" data-role="current-sprint-complete">{{.CompletePercent}}% complete</div>
+                  <div class="progress-stacked mb-2" data-role="sprint-breakdown">
+                    {{range .Segments}}{{if .Percent}}
+                    <div class="progress" role="progressbar" aria-label="{{.Status}} {{.Count}}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.Percent}}" data-percent="{{.Percent}}">
+                      <div class="progress-bar {{.Class}}"></div>
+                    </div>
+                    {{end}}{{end}}
+                  </div>
+                  {{/*
+                    Tabler 1.6.1's legend list: one entry per status, its dot in the
+                    segment's colour, the status, and its count. The empty
+                    <span class="legend"> dot of earlier releases is deprecated in
+                    the vendored distribution and is not used.
+                  */}}
+                  <div class="legend-list mb-2" data-role="sprint-breakdown-legend">
+                    {{range .Segments}}<span class="legend {{.Legend}}"><span class="legend-dot"></span>{{.Status}}<span class="legend-value">{{.Count}}</span></span>
+                    {{end}}
+                  </div>
+                  {{with .Capacity}}<div class="text-secondary mb-2" data-role="current-sprint-capacity">Capacity {{.Active}}/{{.Max}}</div>{{end}}
+                  {{if .BurndownLabel}}
+                  <div class="chart-lg" id="chart-burndown" role="img" aria-label="{{.BurndownLabel}}"></div>
+                  {{else}}
+                  <div class="empty">
+                    <p class="empty-title">No completed task yet</p>
+                    <p class="empty-subtitle text-secondary">The burndown starts when a task of this sprint is completed.</p>
+                  </div>
+                  {{end}}
+                  {{else}}
+                  <div class="empty">
+                    <p class="empty-title">No open sprint</p>
+                    <p class="empty-subtitle text-secondary">Sprints are started with the CLI, rmp sprint start.</p>
+                    <div class="empty-action">
+                      <a class="btn btn-primary" href="/roadmaps/{{.Name}}/sprints">View sprints</a>
+                    </div>
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+            </div>
+
+            {{/* Block 3: Tasks by type. */}}
+            <div class="col-lg-6">
+              <div class="card" data-role="tasks-by-type">
+                <div class="card-header">
+                  <h3 class="card-title">Tasks by type</h3>
+                </div>
+                <div class="card-body">
+                  {{if .TypeLabel}}
+                  <div class="chart-lg" id="chart-tasks-by-type" role="img" aria-label="{{.TypeLabel}}"></div>
+                  {{else}}
+                  <div class="empty">
+                    <p class="empty-title">No tasks yet</p>
+                    <p class="empty-subtitle text-secondary">Tasks are created with the CLI, rmp task create.</p>
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+            </div>
+
+            {{/* Block 4: Tasks by status. */}}
+            <div class="col-lg-6">
+              <div class="card" data-role="tasks-by-status">
+                <div class="card-header">
+                  <h3 class="card-title">Tasks by status</h3>
+                </div>
+                <div class="card-body">
+                  {{if .StatusLabel}}
+                  <div class="chart-lg" id="chart-tasks-by-status" role="img" aria-label="{{.StatusLabel}}"></div>
+                  {{else}}
+                  <div class="empty">
+                    <p class="empty-title">No tasks yet</p>
+                    <p class="empty-subtitle text-secondary">Tasks are created with the CLI, rmp task create.</p>
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+            </div>
+
+            {{/* Block 5: Tasks per sprint. */}}
+            <div class="col-lg-6">
+              <div class="card" data-role="tasks-per-sprint">
+                <div class="card-header">
+                  <h3 class="card-title">Tasks per sprint</h3>
+                </div>
+                <div class="card-body">
+                  {{if .PerSprintLabel}}
+                  <div class="chart-lg" id="chart-tasks-per-sprint" role="img" aria-label="{{.PerSprintLabel}}"></div>
+                  {{else}}
+                  <div class="empty">
+                    <p class="empty-title">No started sprint yet</p>
+                    <p class="empty-subtitle text-secondary">Sprints appear here once they are started.</p>
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+            </div>
+
+            {{/* Block 6: Throughput. */}}
+            <div class="col-12">
+              <div class="card" data-role="throughput">
+                <div class="card-header">
+                  <h3 class="card-title">Throughput</h3>
+                </div>
+                <div class="card-body">
+                  {{if .ThroughputLabel}}
+                  <div class="chart-lg" id="chart-throughput" role="img" aria-label="{{.ThroughputLabel}}"></div>
+                  {{else}}
+                  <div class="empty">
+                    <p class="empty-title">No activity in the last 12 weeks</p>
+                    <p class="empty-subtitle text-secondary">No task was created or completed in this period.</p>
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+            </div>
+
+            {{/*
+              Block 7: Work in progress. The ID, Title, and Status cells are those
+              of a row of the tasks page, cell for cell.
+            */}}
+            <div class="col-lg-6">
+              <div class="card" data-role="work-in-progress">
+                <div class="card-header">
+                  <h3 class="card-title">Work in progress</h3>
+                </div>
+                {{if .InProgress}}
+                <div class="table-responsive">
+                  <table class="table card-table table-vcenter">
+                    <thead>
+                      <tr>
+                        <th class="w-1">ID</th>
+                        <th>Title</th>
+                        <th>Status</th>
+                        <th>Age</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {{range .InProgress}}
+                      <tr>
+                        <td><span class="badge bg-black text-white">#{{.ID}}</span></td>
+                        <td class="task-list__title"><a href="/roadmaps/{{$.Name}}/tasks/{{.ID}}">{{.Title}}</a></td>
+                        <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
+                        {{if .Age}}<td class="text-nowrap">{{.Age}}</td>{{else}}{{with absentCell}}<td class="{{.Class}}">{{.Text}}</td>{{end}}{{end}}
+                      </tr>
+                      {{end}}
+                    </tbody>
+                  </table>
+                </div>
+                {{else}}
+                <div class="card-body">
+                  <div class="empty">
+                    <p class="empty-title">No task in progress</p>
+                    <p class="empty-subtitle text-secondary">Tasks in DOING or TESTING appear here.</p>
+                  </div>
+                </div>
+                {{end}}
+              </div>
+            </div>
+
+            {{/*
+              Block 8: Highest-severity open tasks. Every cell is that of the column
+              of the same heading in a row of the tasks page.
+            */}}
+            <div class="col-lg-6">
+              <div class="card" data-role="most-severe">
+                <div class="card-header">
+                  <h3 class="card-title">Highest-severity open tasks</h3>
+                </div>
+                {{if .MostSevere}}
+                <div class="table-responsive">
+                  <table class="table card-table table-vcenter">
+                    <thead>
+                      <tr>
+                        <th class="w-1">ID</th>
+                        <th>Title</th>
+                        <th>Severity</th>
+                        <th>Priority</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {{range .MostSevere}}
+                      <tr>
+                        <td><span class="badge bg-black text-white">#{{.ID}}</span></td>
+                        <td class="task-list__title"><a href="/roadmaps/{{$.Name}}/tasks/{{.ID}}">{{.Title}}</a></td>
+                        <td><span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span></td>
+                        <td><span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span></td>
+                      </tr>
+                      {{end}}
+                    </tbody>
+                  </table>
+                </div>
+                {{else}}
+                <div class="card-body">
+                  <div class="empty">
+                    <p class="empty-title">No open task</p>
+                    <p class="empty-subtitle text-secondary">{{if .KPI.Total}}Every task of this roadmap is completed.{{else}}Tasks are created with the CLI, rmp task create.{{end}}</p>
+                  </div>
+                </div>
+                {{end}}
+              </div>
+            </div>
+
+            {{/* Block 9: Upcoming sprints. Full width, before Recent activity. */}}
+            <div class="col-12">
+              <div class="card" data-role="upcoming-sprints">
+                <div class="card-header">
+                  <h3 class="card-title">Upcoming sprints</h3>
+                </div>
+                {{if .Upcoming}}
+                <div class="table-responsive">
+                  <table class="table card-table table-vcenter">
+                    <thead>
+                      <tr>
+                        <th>Sprint</th>
+                        <th>Tasks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {{range .Upcoming}}
+                      <tr>
+                        <td><a class="d-inline-block py-1" href="/roadmaps/{{$.Name}}/sprints/{{.ID}}">{{.Title}}</a></td>
+                        <td>{{.TaskCount}}</td>
+                      </tr>
+                      {{end}}
+                    </tbody>
+                  </table>
+                </div>
+                {{else}}
+                <div class="card-body">
+                  <div class="empty">
+                    <p class="empty-title">No upcoming sprint</p>
+                    <p class="empty-subtitle text-secondary">Sprints are planned with the CLI, rmp sprint create.</p>
+                  </div>
+                </div>
+                {{end}}
+              </div>
+            </div>
+
+            {{/*
+              Block 10: Recent activity. The head of page 1 of the audit log page,
+              each entry through the auditRow partial that page renders its entries
+              with, under the same seven column headings.
+            */}}
+            <div class="col-12">
+              <div class="card" data-role="recent-activity">
+                <div class="card-header">
+                  <h3 class="card-title">Recent activity</h3>
+                  <div class="card-actions">
+                    <a class="d-inline-block py-1" href="/roadmaps/{{.Name}}/audit">View audit log</a>
+                  </div>
+                </div>
+                {{if .RecentAudit}}
+                <div class="table-responsive">
+                  <table class="table card-table table-vcenter">
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Operation</th>
+                        <th>Entity Type</th>
+                        <th>Entity ID</th>
+                        <th>Related Entity ID</th>
+                        <th>Commit</th>
+                        <th>Performed At</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {{range .RecentAudit}}
+                      {{template "auditRow" .}}
+                      {{end}}
+                    </tbody>
+                  </table>
+                </div>
+                {{else}}
+                <div class="card-body">
+                  <div class="empty">
+                    <p class="empty-title">No activity yet</p>
+                    <p class="empty-subtitle text-secondary">Changes made with the CLI are recorded here.</p>
+                  </div>
+                </div>
+                {{end}}
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      </main>
+    </div>
+  </div>
+
+  {{/*
+    The chart data block: a data block, not a script. A browser does not execute a
+    script element whose type is not a JavaScript MIME type, so the
+    Content-Security-Policy stays unchanged. html/template serialises the value as
+    JSON and escapes <, >, and & in it, so its content can never close the element
+    (SPEC/DATA_FORMATS.md § Dashboard Chart Data, rule 7).
+  */}}
+  <script type="application/json" id="dashboard-data">{{.Charts}}</script>
+  <script src="/static/vendor/tabler/tabler.min.js"></script>
+  <script defer src="/static/vendor/apexcharts/apexcharts.min.js"></script>
+  <script defer src="/static/dashboard.js"></script>
+</body>
+</html>{{end}}

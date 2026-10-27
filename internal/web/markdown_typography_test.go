@@ -519,7 +519,7 @@ func TestMarkdownTypography_SprintPageLineLength(t *testing.T) {
 		t.Error("the sprint page body holds a task-page row, which the selector excludes")
 	}
 
-	sprints := servePage(t, mux, "/roadmaps/"+f.name)
+	sprints := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 	cards := regexp.MustCompile(`(?s)<a href="[^"]*" class="card card-sm card-link text-reset">.*?</a>`).FindAllString(sprints, -1)
 	inCards := 0
 	for _, card := range cards {

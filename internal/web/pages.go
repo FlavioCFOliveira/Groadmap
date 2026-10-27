@@ -33,12 +33,18 @@ const (
 // makes the head partial link the syntax-highlighting stylesheet
 // /static/highlight.css; the roadmap tasks page renders none and does not link it
 // (SPEC/WEB.md § Markdown Rendering, rule 7; Acceptance Criterion 182).
+//
+// Charts is set on the dashboard page alone, the one page that draws charts, and
+// makes the head partial link the vendored Tabler vendors stylesheet, which
+// carries Tabler's ApexCharts styling, after the Tabler stylesheet (SPEC/WEB.md
+// § Dashboard Chart Library, rule 3).
 type chrome struct {
 	Title    string
 	Roadmap  string
 	Active   string
 	Heading  pageHeading
 	Markdown bool
+	Charts   bool
 }
 
 // titleSeparator joins the segments of a page's document title: one space,
@@ -157,7 +163,38 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSprints renders a roadmap's sprints landing page: the roadmap's
+// handleDashboard renders a roadmap's dashboard, the roadmap's landing page: the
+// four key figures, the current sprint card, the four charts, and the four
+// card-tables, all from one consistent read of the roadmap database (SPEC/WEB.md
+// § Roadmap Dashboard Page). The {name} is validated and confirmed to exist
+// before any data read; an invalid or unknown name yields 404 (handled by
+// resolveRoadmap), an internal read error yields 500.
+//
+// The request instant is read once here, and every figure that depends on the
+// current time uses that one value (SPEC/WEB.md § Roadmap Dashboard Page,
+// definition 4).
+func handleDashboard(w http.ResponseWriter, r *http.Request) {
+	name, ok := resolveRoadmap(w, r)
+	if !ok {
+		return
+	}
+
+	data, err := loadDashboard(r.Context(), name, dashboardNow())
+	if err != nil {
+		failServer(w, r, "dashboard load failed", err, slog.String("roadmap", name))
+		return
+	}
+	data.Chrome = chrome{
+		Title:   documentTitle(name, "Dashboard", serverHostname),
+		Roadmap: name,
+		Active:  "dashboard",
+		Heading: pageHeading{Title: "Dashboard"},
+		Charts:  true,
+	}
+	renderHTML(w, r, "dashboard.html", data)
+}
+
+// handleSprints renders a roadmap's sprints page: the roadmap's
 // sprints grouped into the three tabs (Próximos / Actual / Concluídos), with
 // the Actual tab active by default. Every sprint, the OPEN one included, is
 // rendered through the shared sprintCard partial as a card with NO member tasks

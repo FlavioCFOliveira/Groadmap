@@ -129,7 +129,7 @@ type titleCase struct {
 	want string
 }
 
-// titleCases returns the seven pages of criterion 173 with their expected titles
+// titleCases returns the eight pages of criterion 173 (the dashboard of criterion 265 included) with their expected titles
 // for hostname; an empty hostname yields the titles of criterion 176.
 func titleCases(hostname string) []titleCase {
 	suffix := ""
@@ -140,7 +140,8 @@ func titleCases(hostname string) []titleCase {
 	rdm := titleFixtureRoadmap + " - "
 	return []titleCase{
 		{"/", "Roadmaps" + suffix},
-		{base, rdm + "Sprints" + suffix},
+		{base, rdm + "Dashboard" + suffix},
+		{base + "/sprints", rdm + "Sprints" + suffix},
 		{base + "/tasks", rdm + "Tasks" + suffix},
 		{base + "/audit", rdm + "Audit" + suffix},
 		{base + "/graph", rdm + "Knowledge graph" + suffix},

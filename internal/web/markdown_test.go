@@ -554,7 +554,7 @@ func TestHighlightCSS_OneStylesheetServedAndLinked(t *testing.T) {
 		t.Error("the tasks page links highlight.css, but it renders no Markdown field")
 	}
 	for _, path := range []string{
-		"/roadmaps/" + f.name,
+		"/roadmaps/" + f.name + "/sprints",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openSprintID),
 		"/roadmaps/" + f.name + "/tasks/" + itoa(f.taskID),
 	} {
@@ -685,7 +685,7 @@ func sprintCardSlice(t *testing.T, body, name string, sprintID int) (card, pane 
 func TestMarkdownSurfaces_SprintCardsAreNonInteractive(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedMarkdownFixture(t, "settlement-runbook")
-	body := servePage(t, buildMux(), "/roadmaps/"+f.name)
+	body := servePage(t, buildMux(), "/roadmaps/"+f.name+"/sprints")
 
 	for sprintID, wantPane := range map[int]string{
 		f.upcomingSprintID: "tab-upcoming",
@@ -912,7 +912,7 @@ func TestMarkdownSurfaces_CSPAndScriptsUnchanged(t *testing.T) {
 	h := handler()
 	scriptRe := regexp.MustCompile(`<script([^>]*)>`)
 	for _, path := range []string{
-		"/roadmaps/" + f.name,
+		"/roadmaps/" + f.name + "/sprints",
 		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openSprintID),
 		"/roadmaps/" + f.name + "/tasks/" + itoa(f.taskID),

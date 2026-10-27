@@ -353,7 +353,7 @@ func TestSprintsPage_TabCountBadgesCarryTheirTabStatusColour(t *testing.T) {
 	pending, open, closed := sprintTabColours(t)
 
 	mux := buildMux()
-	header := cardHeaderSlice(t, servePage(t, mux, "/roadmaps/"+f.name))
+	header := cardHeaderSlice(t, servePage(t, mux, "/roadmaps/"+f.name+"/sprints"))
 
 	cases := []struct {
 		label  string
@@ -390,7 +390,7 @@ func TestSprintsPage_EmptyTabKeepsItsStatusColour(t *testing.T) {
 	pending, open, closed := sprintTabColours(t)
 
 	mux := buildMux()
-	header := cardHeaderSlice(t, servePage(t, mux, "/roadmaps/"+name))
+	header := cardHeaderSlice(t, servePage(t, mux, "/roadmaps/"+name+"/sprints"))
 
 	cases := []struct {
 		label string

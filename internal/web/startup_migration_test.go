@@ -485,10 +485,11 @@ func TestReadOnlyInvariant_PerRequestLoadersUseOpenReadOnly(t *testing.T) {
 
 	mux := buildMux()
 
-	// Drive the three read-path pages — sprints landing, tasks, and the
+	// Drive the read-path pages — the dashboard, sprints, tasks, and the
 	// graph-data endpoint — to exercise all per-request loader code paths.
 	readPaths := []string{
 		"/roadmaps/" + roadmapName,
+		"/roadmaps/" + roadmapName + "/sprints",
 		"/roadmaps/" + roadmapName + "/tasks",
 		"/roadmaps/" + roadmapName + "/graph/data",
 	}

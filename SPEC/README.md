@@ -15,7 +15,11 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Help text structure | `HELP.md` |
 | Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
 | Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
-| Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
+| Web roadmap dashboard page / landing (`/roadmaps/{name}`, the four key figures, the current sprint card with its status breakdown and burndown, the four charts, the work-in-progress, highest-severity, recent-activity, and upcoming-sprints card-tables, the empty states, and the one consistent read) | `WEB.md § Roadmap Dashboard Page` |
+| Web dashboard chart library (vendored ApexCharts, the Tabler vendors stylesheet, Tabler's chart options, series colours, no toolbar) | `WEB.md § Dashboard Chart Library` |
+| Web dashboard chart data JSON shape (the `dashboard-data` data block) | `DATA_FORMATS.md § Dashboard Chart Data` |
+| Web dashboard read statements (the eight aggregate and bounded reads, the three reads shared with `rmp stats`, `rmp sprint stats`, and the audit log page, the one read transaction, the fixed statement count) | `DATABASE.md § Dashboard Queries` |
+| Web roadmap sprints page (`/roadmaps/{name}/sprints`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
 | Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status and type multi-select dropdowns — the query parameters and their validation, the filter-state cookie and the default filter state, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
 | Web tasks-page search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, applied on the server) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
@@ -39,7 +43,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web status / priority / severity / task type badge colours (semantic Tabler `bg-*-lt` mapping, including the type badge on the sprint board's cards and in the tasks page's rows, and the count badges of the sprints-page tabs and of the sprint board's columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
-| Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
+| Vendored web assets / embedded Tabler framework (with its vendors stylesheet), D3.js (with d3-sankey), and ApexCharts | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Free-text UTF-8 encoding constraint (only valid UTF-8 is accepted and stored) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
 | What Groadmap does not check about a Cypher statement (five silent hazards, each reporting success; the relationship writes and reads the pinned engine is measured to get right; and the list value it refuses) | `GRAPH.md § What Groadmap Does Not Check` |
@@ -241,11 +245,15 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Query plan JSON (the recursive plan node, and which of its figures an `EXPLAIN` and a `PROFILE` each publish) | `DATA_FORMATS.md § Graph Plan Node` |
 | Write counters JSON (the eleven published keys, the rule that omits a zero, and the rule that omits the whole block for a statement that changed nothing) | `DATA_FORMATS.md § Graph Query Counters` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
+| Web dashboard chart data JSON shape | `DATA_FORMATS.md § Dashboard Chart Data` |
+| Web dashboard SQL statements | `DATABASE.md § Dashboard Queries` |
+| Web roadmap dashboard page (the landing page, its figures and their definitions) | `WEB.md § Roadmap Dashboard Page` |
+| Web dashboard chart library (ApexCharts, its options and colours) | `WEB.md § Dashboard Chart Library` |
 | One realisation of the graph value mapping (which surfaces are bound, what each still owns, why the Path rendering is not shared, and what preserves the byte identity) | `DATA_FORMATS.md § One Realisation of the Mapping` |
 | Tasks-page search text preparation (the trim, normalisation, and folding rules; the single server implementation of each) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
 | Markdown rendering of the web interface's long free-text fields (the one renderer, its safety boundary, the only HTML inserted unescaped) | `WEB.md § Markdown Rendering` |
-| Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
+| Vendored web assets / embedded Tabler framework (with its vendors stylesheet), D3.js (with d3-sankey), and ApexCharts | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
 | Graph server socket (`graph.sock`), its mode, and what a leftover one means | `GRAPH.md § Socket Path and Permissions` (layout in `GRAPH.md § Persistence Layout`) |

@@ -71,7 +71,8 @@ func TestEmbeddedStaticFS_ContainsVendoredAssets(t *testing.T) {
 
 // pagePaths returns the HTML page routes against a seeded roadmap so a test can
 // assert a property across every page the interface serves: the index, the
-// roadmap sprints landing page, the roadmap tasks page, and the graph page.
+// roadmap dashboard (the landing page), the roadmap tasks page, and the graph
+// page.
 func pagePaths(name string) []string {
 	return []string{
 		"/",
@@ -159,12 +160,14 @@ func TestPages_RoadmapSidebarLinks(t *testing.T) {
 
 	// Roadmap pages: the roadmap-scoped sidebar links resolve to the real
 	// endpoints, not to #tasks / #sprints anchors on a combined page.
-	for _, path := range []string{"/roadmaps/" + name, "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/graph"} {
+	for _, path := range []string{"/roadmaps/" + name, "/roadmaps/" + name + "/sprints", "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/graph"} {
 		body := servePage(t, mux, path)
 		for _, link := range []string{
-			`href="/roadmaps/` + name + `"`,       // Sprints (landing)
-			`href="/roadmaps/` + name + `/tasks"`, // Tasks
-			`href="/roadmaps/` + name + `/graph"`, // Graph
+			`href="/roadmaps/` + name + `"`,         // Dashboard (landing)
+			`href="/roadmaps/` + name + `/sprints"`, // Sprints
+			`href="/roadmaps/` + name + `/tasks"`,   // Tasks
+			`href="/roadmaps/` + name + `/audit"`,   // Audit
+			`href="/roadmaps/` + name + `/graph"`,   // Graph
 		} {
 			if !strings.Contains(body, link) {
 				t.Errorf("page %s missing roadmap sidebar link %q", path, link)
@@ -176,10 +179,10 @@ func TestPages_RoadmapSidebarLinks(t *testing.T) {
 				t.Errorf("page %s still references retired sidebar anchor %q", path, gone)
 			}
 		}
-		// In the sidebar, Sprints is listed before Tasks (SPEC order: Sprints,
-		// Tasks, Graph).
+		// The sidebar lists the five views in the SPEC order: Dashboard, Sprints,
+		// Tasks, Audit, Graph (Acceptance Criterion 266).
 		assertOrdered(t, path+" sidebar order", body, []string{
-			">Sprints<", ">Tasks<", ">Graph<",
+			">Dashboard<", ">Sprints<", ">Tasks<", ">Audit<", ">Graph<",
 		})
 	}
 
@@ -814,7 +817,7 @@ func TestSprintsPage_PreservesSprintCards(t *testing.T) {
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+name)
+	body := servePage(t, mux, "/roadmaps/"+name+"/sprints")
 
 	// The seeded sprint (PENDING) appears as a clickable card linking to its
 	// own page, with its description.

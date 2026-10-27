@@ -87,7 +87,7 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	f := seedSprintFixture(t, "web-shared-detail")
 	mux := buildMux()
 
-	sprintsPage := servePage(t, mux, "/roadmaps/"+f.name)
+	sprintsPage := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 	sprintPage := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
 
 	// Slice the Actual pane out of the sprints page so the absence assertions
@@ -170,7 +170,7 @@ func TestSprintsPage_SharedCardAcrossAllTabs(t *testing.T) {
 	f := seedSprintFixture(t, "web-shared-card")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	const cardMarker = `class="card card-sm card-link text-reset"`
 
@@ -230,7 +230,7 @@ func TestSprintsPage_ClosedCardsShowTaskCount(t *testing.T) {
 	f := seedSprintFixture(t, "web-closed-counts")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 	closed := paneSlice(t, body, `<div id="tab-closed"`)
 
 	// Both CLOSED sprints in the fixture have zero member tasks, so each card
@@ -252,7 +252,7 @@ func TestSprintsPage_UpcomingCardsShowTaskCount(t *testing.T) {
 	f := seedSprintFixture(t, "web-upcoming-counts")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 	upcoming := paneSlice(t, body, `<div id="tab-upcoming"`)
 
 	if got := strings.Count(upcoming, "task(s)"); got != 2 {
