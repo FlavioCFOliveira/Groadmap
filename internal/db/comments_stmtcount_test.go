@@ -47,6 +47,15 @@ type stmtCounter struct {
 	// before, when set, runs just before each counted execution, with the
 	// statement's text, outside mu.
 	before atomic.Pointer[func(query string)]
+
+	// begins counts the transactions begun, and outsideTx the executions that
+	// ran on a connection holding no open transaction. The flag is kept per
+	// connection (countingConn.inTx), so a statement sent through the pool to a
+	// second connection while a transaction is open elsewhere counts as outside.
+	// The dashboard's single-transaction rule is measured on them
+	// (SPEC/DATABASE.md § Dashboard Queries).
+	begins    atomic.Int64
+	outsideTx atomic.Int64
 }
 
 // setBeforeExecute installs fn to run just before each counted execution, or
@@ -64,17 +73,23 @@ func (c *stmtCounter) count() int { return int(c.n.Load()) }
 
 func (c *stmtCounter) reset() {
 	c.n.Store(0)
+	c.begins.Store(0)
+	c.outsideTx.Store(0)
 	c.mu.Lock()
 	c.prepares, c.execs = nil, nil
 	c.mu.Unlock()
 }
 
-// executedText counts one execution of the statement whose text is query.
-func (c *stmtCounter) executedText(query string) {
+// executedText counts one execution of the statement whose text is query, run
+// inside an open transaction of its connection when inTx is set.
+func (c *stmtCounter) executedText(query string, inTx bool) {
 	if fn := c.before.Load(); fn != nil {
 		(*fn)(query)
 	}
 	c.add()
+	if !inTx {
+		c.outsideTx.Add(1)
+	}
 	c.mu.Lock()
 	c.execs = append(c.execs, query)
 	c.mu.Unlock()
@@ -134,6 +149,7 @@ func (c countingConnector) Connect(ctx context.Context) (driver.Conn, error) {
 type countingConn struct {
 	driver.Conn
 	counter *stmtCounter
+	inTx    bool
 }
 
 func (c *countingConn) Prepare(query string) (driver.Stmt, error) {
@@ -142,7 +158,7 @@ func (c *countingConn) Prepare(query string) (driver.Stmt, error) {
 		return nil, err
 	}
 	c.counter.preparedText(query)
-	return &countingStmt{Stmt: stmt, counter: c.counter, query: query}, nil
+	return &countingStmt{Stmt: stmt, counter: c.counter, query: query, conn: c}, nil
 }
 
 func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
@@ -155,7 +171,7 @@ func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver
 		return nil, err
 	}
 	c.counter.preparedText(query)
-	return &countingStmt{Stmt: stmt, counter: c.counter, query: query}, nil
+	return &countingStmt{Stmt: stmt, counter: c.counter, query: query, conn: c}, nil
 }
 
 func (c *countingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -165,7 +181,7 @@ func (c *countingConn) QueryContext(ctx context.Context, query string, args []dr
 		// prepared path, which counts on the statement instead.
 		return nil, driver.ErrSkip
 	}
-	c.counter.executedText(query)
+	c.counter.executedText(query, c.inTx)
 	return queryer.QueryContext(ctx, query, args)
 }
 
@@ -174,16 +190,45 @@ func (c *countingConn) ExecContext(ctx context.Context, query string, args []dri
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	c.counter.executedText(query)
+	c.counter.executedText(query, c.inTx)
 	return execer.ExecContext(ctx, query, args)
 }
 
 func (c *countingConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	beginner, ok := c.Conn.(driver.ConnBeginTx)
-	if !ok {
-		return c.Conn.Begin()
+	var (
+		tx  driver.Tx
+		err error
+	)
+	if beginner, ok := c.Conn.(driver.ConnBeginTx); ok {
+		tx, err = beginner.BeginTx(ctx, opts)
+	} else {
+		tx, err = c.Conn.Begin() //nolint:staticcheck // the fallback database/sql itself takes
 	}
-	return beginner.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	c.counter.begins.Add(1)
+	c.inTx = true
+	return &countingTx{Tx: tx, conn: c}, nil
+}
+
+// countingTx marks the end of the transaction it wraps on its connection, so
+// the counter can tell an execution inside a transaction from one outside any.
+// database/sql uses a connection from one goroutine at a time, so the flag
+// needs no synchronisation.
+type countingTx struct {
+	driver.Tx
+	conn *countingConn
+}
+
+func (t *countingTx) Commit() error {
+	t.conn.inTx = false
+	return t.Tx.Commit()
+}
+
+func (t *countingTx) Rollback() error {
+	t.conn.inTx = false
+	return t.Tx.Rollback()
 }
 
 // countingStmt counts each execution of a prepared statement. Preparing is not an
@@ -192,16 +237,17 @@ func (c *countingConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driv
 type countingStmt struct {
 	driver.Stmt
 	counter *stmtCounter
+	conn    *countingConn
 	query   string
 }
 
 func (s *countingStmt) Query(args []driver.Value) (driver.Rows, error) {
-	s.counter.executedText(s.query)
+	s.counter.executedText(s.query, s.conn.inTx)
 	return s.Stmt.Query(args) //nolint:staticcheck // the deprecated form is what the embedded driver.Stmt offers
 }
 
 func (s *countingStmt) Exec(args []driver.Value) (driver.Result, error) {
-	s.counter.executedText(s.query)
+	s.counter.executedText(s.query, s.conn.inTx)
 	return s.Stmt.Exec(args) //nolint:staticcheck // the deprecated form is what the embedded driver.Stmt offers
 }
 
@@ -210,7 +256,7 @@ func (s *countingStmt) QueryContext(ctx context.Context, args []driver.NamedValu
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	s.counter.executedText(s.query)
+	s.counter.executedText(s.query, s.conn.inTx)
 	return queryer.QueryContext(ctx, args)
 }
 
@@ -219,7 +265,7 @@ func (s *countingStmt) ExecContext(ctx context.Context, args []driver.NamedValue
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	s.counter.executedText(s.query)
+	s.counter.executedText(s.query, s.conn.inTx)
 	return execer.ExecContext(ctx, args)
 }
 

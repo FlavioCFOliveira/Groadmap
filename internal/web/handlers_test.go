@@ -65,7 +65,7 @@ func seedRoadmap(t *testing.T, name string) string {
 	return name
 }
 
-// TestHandleSprints_HappyPath drives handleSprints (the landing page)
+// TestHandleSprints_HappyPath drives handleSprints (/roadmaps/{name}/sprints)
 // end-to-end against a populated roadmap: it must render 200 HTML whose body
 // reflects the seeded sprint membership and surfaces the sprint tabs, but does
 // NOT render the full tasks table. This covers loadSprints' read path (sprints
@@ -76,7 +76,7 @@ func TestHandleSprints_HappyPath(t *testing.T) {
 	name := seedRoadmap(t, "web-ui-rollout")
 
 	mux := buildMux()
-	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+name, nil)
+	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+name+"/sprints", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -152,7 +152,7 @@ func TestHandleSprintsAndTasks_Head(t *testing.T) {
 	name := seedRoadmap(t, "web-ui-rollout")
 	mux := buildMux()
 
-	for _, path := range []string{"/roadmaps/" + name, "/roadmaps/" + name + "/tasks"} {
+	for _, path := range []string{"/roadmaps/" + name, "/roadmaps/" + name + "/sprints", "/roadmaps/" + name + "/tasks"} {
 		req := httptest.NewRequest(http.MethodHead, path, nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -166,11 +166,12 @@ func TestHandleSprintsAndTasks_Head(t *testing.T) {
 }
 
 // TestHandleIndex_WithRoadmaps confirms the index renders 200, mentions a
-// roadmap that exists on disk, and links each roadmap to its sprints landing
-// page (/roadmaps/{name}) and its graph page (/roadmaps/{name}/graph) — and not
-// to a tasks endpoint, which is reached from the sidebar. The primary button is
-// labelled "Sprints", not the retired "Tasks & sprints" (SPEC/WEB.md § Roadmap
-// Index Page, Acceptance Criterion 6).
+// roadmap that exists on disk, and links each roadmap to its dashboard, the
+// landing page (/roadmaps/{name}), and its graph page (/roadmaps/{name}/graph) —
+// and not to a tasks endpoint, which is reached from the sidebar. The primary
+// button is labelled "Dashboard", the page it opens, not the retired "Tasks &
+// sprints" or "Sprints" (SPEC/WEB.md § Roadmap Index Page, Acceptance Criteria 6
+// and 265).
 func TestHandleIndex_WithRoadmaps(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "web-ui-rollout")
@@ -190,16 +191,19 @@ func TestHandleIndex_WithRoadmaps(t *testing.T) {
 	if contains(body, "No roadmaps found") {
 		t.Errorf("index still shows empty state despite a seeded roadmap")
 	}
-	// The card links to the sprints landing page and the graph page.
+	// The card links to the dashboard (the landing page) and the graph page.
 	if !contains(body, `href="/roadmaps/`+name+`"`) {
-		t.Errorf("index card does not link to the sprints landing page /roadmaps/%s", name)
+		t.Errorf("index card does not link to the dashboard landing page /roadmaps/%s", name)
 	}
 	if !contains(body, `href="/roadmaps/`+name+`/graph"`) {
 		t.Errorf("index card does not link to the graph page /roadmaps/%s/graph", name)
 	}
-	// The primary button is relabelled "Sprints"; the old combined label is gone.
-	if !contains(body, ">Sprints<") {
-		t.Errorf("index card primary button is not labelled \"Sprints\"")
+	// The primary button names the dashboard it opens; the old labels are gone.
+	if !contains(body, ">Dashboard</a>") {
+		t.Errorf("index card primary button is not labelled \"Dashboard\"")
+	}
+	if contains(body, ">Sprints</a>") {
+		t.Errorf("index card still labels the landing link \"Sprints\"")
 	}
 	if contains(body, "Tasks &amp; sprints") || contains(body, "Tasks & sprints") {
 		t.Errorf("index card still shows the retired \"Tasks & sprints\" label")

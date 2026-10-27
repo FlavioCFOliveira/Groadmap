@@ -379,11 +379,11 @@ Rules:
    embedded asset categories is:
    - HTML templates;
    - the stylesheet (all CSS, including the vendored Tabler CSS framework — the UI
-     framework — the syntax-highlighting stylesheet of rendered Markdown, and
-     any further vendored CSS);
-   - all client JavaScript, including the Tabler JavaScript and the D3.js
-     knowledge-graph visualisation library (and the d3-sankey plugin) and any of
-     their dependencies;
+     framework — the vendored Tabler vendors stylesheet, the syntax-highlighting
+     stylesheet of rendered Markdown, and any further vendored CSS);
+   - all client JavaScript, including the Tabler JavaScript, the D3.js
+     knowledge-graph visualisation library (and the d3-sankey plugin), and the
+     ApexCharts chart library, and any of their dependencies;
    - web fonts, including the Inter font, in its upright and its italic face, and
      the Tabler Icons webfont;
    - icons and images, including the Tabler Icons set;
@@ -435,14 +435,49 @@ Rules:
    them; every asset is in the binary. No page references a content delivery
    network, a remote font host such as Google Fonts, or any other remote origin
    for a script, stylesheet, font, icon, image, or API. This covers the vendored
-   Tabler CSS framework, the Tabler JavaScript, the Tabler Icons webfont, the
-   Inter font, and the D3.js library with the d3-sankey plugin: all are embedded,
-   locally-served assets with no remote origin. The interface renders and functions
+   Tabler CSS framework, the Tabler JavaScript, the Tabler vendors stylesheet, the
+   Tabler Icons webfont, the Inter font, the D3.js library with the d3-sankey
+   plugin, and the ApexCharts library: all are embedded, locally-served assets with
+   no remote origin. The interface renders and functions
    fully offline (see `WEB.md § Self-Contained Deliverable`).
 6. **Embedding does not change the build targets.** Embedded assets are part of
    the Go package, so every target in Supported Build Targets builds the web
    interface in without any per-target asset handling. `CGO_ENABLED=0` static
    linking is unaffected.
+7. **Vendored Tabler vendors stylesheet.** Tabler's ApexCharts styling, which
+   includes the `--apx-*` custom properties through which a chart follows the dark
+   theme, ships in a stylesheet of Tabler's distribution separate from the
+   framework CSS. That file, `dist/css/tabler-vendors.min.css` of the vendored
+   Tabler release's distribution (the npm package `@tabler/core`), is committed as
+   `internal/web/static/vendor/tabler/tabler-vendors.min.css`, embedded with
+   `go:embed`, and served only from `/static/...` (see
+   `WEB.md § Dashboard Chart Library`, rule 3). It is licensed under the MIT
+   licence, as the rest of Tabler is. It belongs to the Tabler release of rule 3:
+   it is always taken from the same Tabler release as the vendored Tabler CSS and
+   JavaScript, and it is upgraded together with them, in the same change. Its
+   `static/vendor/LICENSES.md` entry names the file, the Tabler project, and the
+   MIT licence.
+8. **Vendored chart library: ApexCharts.** The dashboard page's charts use the
+   ApexCharts release that the vendored Tabler release pins, as an exact version,
+   for its `apexcharts` development dependency in `core/package.json` of the
+   Tabler repository. Its already-built single-file distribution, the file
+   `package/dist/apexcharts.min.js` of that release's npm tarball
+   (`apexcharts-<release>.tgz`), is committed as
+   `internal/web/static/vendor/apexcharts/apexcharts.min.js`, embedded with
+   `go:embed`, and served only from `/static/...` (see
+   `WEB.md § Dashboard Chart Library`). It is never fetched from a content
+   delivery network or any remote origin. ApexCharts is distributed under the
+   ApexCharts dual licence — a Community licence, and Commercial and OEM licences
+   — and not under the MIT licence or any other permissive open-source licence;
+   that licence is accepted for this project. Its
+   `static/vendor/LICENSES.md` entry names the file, the ApexCharts project, and
+   that dual licence. ApexCharts follows the Tabler release: when the vendored
+   Tabler release is upgraded, ApexCharts is replaced, in the same change, by the
+   release the new Tabler release pins. No version number is pinned here; the
+   vendored ApexCharts and Tabler releases live in the committed distribution
+   under git, and each names its release in the banner at the head of its file.
+   Upgrading or replacing it is a change to the committed asset and to this
+   section, recorded in git.
 
 ## Supported Build Targets
 
@@ -1504,8 +1539,11 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every published archive holds exactly the three entries Artifact Structure lists, and nothing else. Listing a `.tar.gz` (`tar -tzf`) shows `rmp`, `LICENSE`, and `README.md`; listing a Windows `.zip` (`unzip -l`) shows `rmp.exe`, `LICENSE`, and `README.md`. Every entry is at the archive root, with no leading directory component
 - [ ] The `.sha256` file for each archive is published as a separate asset and is not an entry inside the archive
-- [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
+- [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework and the vendored Tabler vendors stylesheet, all client JS including the vendored Tabler JavaScript, D3.js with the d3-sankey plugin, and ApexCharts, and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
 - [ ] The vendored Tabler CSS and the vendored Tabler JavaScript come from the same Tabler release: the release named in the licence banner at the head of the committed CSS file equals the release named in the banner at the head of the committed JavaScript file (see Vendored Web Assets)
+- [ ] The vendored Tabler vendors stylesheet comes from the same Tabler release as the vendored Tabler CSS: the release named in the banner at the head of `internal/web/static/vendor/tabler/tabler-vendors.min.css` equals the release named in the banner at the head of the committed Tabler CSS file (see Vendored Web Assets, rule 7)
+- [ ] The vendored ApexCharts file is the release rule 8 names: the release named in the banner at the head of `internal/web/static/vendor/apexcharts/apexcharts.min.js` equals the exact `apexcharts` version that `core/package.json` of the vendored Tabler release (the release named in the banner of the committed Tabler CSS file) pins, and the file is byte for byte the `package/dist/apexcharts.min.js` of that release's npm tarball (see Vendored Web Assets, rule 8)
+- [ ] `internal/web/static/vendor/LICENSES.md` carries one entry for the Tabler vendors stylesheet, naming the MIT licence, and one for ApexCharts, naming the ApexCharts dual licence (see Vendored Web Assets, rules 7 and 8)
 - [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
 
 ### Architecture Verification

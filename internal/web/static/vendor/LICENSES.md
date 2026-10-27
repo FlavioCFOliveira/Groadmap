@@ -7,10 +7,12 @@ from `/static/...` and never from a remote origin (see `SPEC/BUILD.md
 | Asset | Location | Project | Licence |
 |-------|----------|---------|---------|
 | Tabler (CSS framework + JS) | `tabler/tabler.min.css`, `tabler/tabler.min.js` | Tabler | MIT |
+| Tabler vendors stylesheet (ApexCharts styling) | `tabler/tabler-vendors.min.css` | Tabler | MIT |
 | Tabler Icons (webfont + CSS) | `tabler-icons/tabler-icons.min.css`, `tabler-icons/fonts/*` | Tabler Icons | MIT |
 | Inter (variable webfont, upright and italic faces) | `inter/inter.css`, `inter/files/inter-latin-wght-normal.woff2`, `inter/files/inter-latin-wght-italic.woff2` | Inter (Rasmus Andersson), via `@fontsource-variable/inter` | SIL Open Font License 1.1 |
 | D3.js (graph library) | `d3/d3.min.js` | D3 (Mike Bostock) | ISC |
 | d3-sankey (Sankey layout plugin) | `d3/d3-sankey.min.js` | d3-sankey (Mike Bostock) | ISC |
+| ApexCharts (dashboard chart library) | `apexcharts/apexcharts.min.js` | ApexCharts | ApexCharts dual licence (Community licence; Commercial and OEM licences) |
 
 These attributions are recorded as good practice for vendored assets; the full
 upstream licence texts ship with each project's distribution.

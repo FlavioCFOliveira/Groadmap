@@ -1599,6 +1599,67 @@ Rules:
    reached a statement does not decide the shape: an invalid `limit` and a
    plan-prefix refusal both carry it, and neither sends a statement.
 
+## Dashboard Chart Data
+
+The web interface's dashboard page (`GET /roadmaps/{name}`, see
+`WEB.md § Roadmap Dashboard Page`) carries the data of its charts as one JSON
+object, inside one `<script type="application/json" id="dashboard-data">` element
+of the page. The page's script reads it to draw the charts (see
+`WEB.md § Dashboard Chart Library`). No endpoint serves it: it exists only inside
+that page. `WEB.md § Roadmap Dashboard Page` is canonical for what each figure
+counts, for the order of each series, and for when a chart is shown; this section
+is canonical for the shape.
+
+### Shape
+
+```json
+{
+  "tasks_by_type": {
+    "types": ["TASK", "BUG", "CHORE"],
+    "open": [4, 3, 1],
+    "completed": [2, 1, 1],
+    "backlog": [2, 0, 1]
+  }
+}
+```
+
+Field reference:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tasks_by_type.types` | array of string | The task types that have at least one task, as the `TaskType` enum spells them, in the enum's declared order. |
+| `tasks_by_type.open` | array of integer | Per entry of `types`, the number of open tasks of that type. |
+| `tasks_by_type.completed` | array of integer | Per entry of `types`, the number of tasks of that type whose status is `COMPLETED`. |
+| `tasks_by_type.backlog` | array of integer | Per entry of `types`, the number of tasks of that type whose status is `BACKLOG`. Each entry is at most the corresponding entry of `open`, and may be `0`. |
+
+Rules:
+
+1. The object's one member, `tasks_by_type`, and its four arrays are always
+   present, in the order shown, whatever the roadmap holds. An array with nothing
+   to hold is `[]`, never `null`, and no member is ever omitted (see
+   [Implementation Notes](#implementation-notes)).
+2. The parallel arrays always have the same length: `tasks_by_type.open`,
+   `tasks_by_type.completed`, and `tasks_by_type.backlog` have one entry per entry
+   of `tasks_by_type.types`, which holds at most ten.
+3. For a roadmap with no task, `tasks_by_type.types` and its three count arrays are
+   `[]`.
+4. The object carries enum values and counts only. It carries
+   no task or sprint title, no description, no comment, and no other free text a
+   user authored.
+5. The object carries no date and no timestamp.
+6. Every number is a JSON integer.
+7. The object is written into the page by `html/template`, which serialises it as
+   JSON and escapes `<`, `>`, and `&` within it, so the element's content can never
+   close the element. Whitespace around the object is permitted, and the object is
+   not required to be pretty-printed: it is part of an HTML page, not output to
+   stdout.
+8. `tasks_by_type` is the data of the three type-breakdown donuts of the KPI row.
+   The `Open tasks` donut reads `open`, the
+   `Completed` donut `completed`, and the `Backlog` donut `backlog`; each takes
+   from its array, in the order of `types`, the entries greater than `0`, one
+   slice per entry, the type at the same index naming the slice (see
+   `WEB.md § Roadmap Dashboard Page`, **Type-breakdown donuts**).
+
 ---
 
 ## Implementation Notes

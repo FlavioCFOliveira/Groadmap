@@ -24,7 +24,10 @@
   (.Chrome.Markdown), which can render a Markdown field, also link the
   syntax-highlighting stylesheet, the CSS chroma produces for its github-dark
   style, before the override stylesheet (SPEC/WEB.md § Markdown Rendering,
-  rule 7).
+  rule 7). The dashboard page (.Chrome.Charts), the one page that draws charts,
+  also links the vendored Tabler vendors stylesheet, which carries Tabler's
+  ApexCharts styling, directly after the Tabler stylesheet (SPEC/WEB.md
+  § Dashboard Chart Library, rule 3).
 */}}
 
 {{define "head"}}  <meta charset="utf-8">
@@ -33,7 +36,8 @@
   <title>{{.Chrome.Title}}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/vendor/inter/inter.css">
-  <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">
+  <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">{{if .Chrome.Charts}}
+  <link rel="stylesheet" href="/static/vendor/tabler/tabler-vendors.min.css">{{end}}
   <link rel="stylesheet" href="/static/vendor/tabler-icons/tabler-icons.min.css">{{if .Chrome.Markdown}}
   <link rel="stylesheet" href="/static/highlight.css">{{end}}
   <link rel="stylesheet" href="/static/style.css">{{end}}
@@ -70,8 +74,14 @@
             Framework, rule 10).
           */}}
           <li class="nav-section-title">{{.}}</li>
+          <li class="nav-item{{if eq $.Chrome.Active "dashboard"}} active{{end}}">
+            <a class="nav-link" href="/roadmaps/{{.}}"{{if eq $.Chrome.Active "dashboard"}} aria-current="page"{{end}}>
+              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-layout-dashboard"></i></span>
+              <span class="nav-link-title">Dashboard</span>
+            </a>
+          </li>
           <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}"{{if eq $.Chrome.Active "sprints"}} aria-current="page"{{end}}>
+            <a class="nav-link" href="/roadmaps/{{.}}/sprints"{{if eq $.Chrome.Active "sprints"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-run"></i></span>
               <span class="nav-link-title">Sprints</span>
             </a>
@@ -154,12 +164,12 @@
 
 {{/*
   pageTitle is the ONE partial that renders a page header's title column, so the
-  seven pages cannot drift into seven conventions for saying the same kind of thing
+  eight pages cannot drift into eight conventions for saying the same kind of thing
   (SPEC/WEB.md § Shared Page-Header Partial; Acceptance Criterion 109). No page
   writes a page-pretitle or a page-title element of its own.
 
-  Dot is a web.pageHeading. The title names the VIEW — Roadmaps, Sprints, Tasks,
-  Audit, Knowledge graph — and never the roadmap: the shell states the roadmap
+  Dot is a web.pageHeading. The title names the VIEW — Roadmaps, Dashboard,
+  Sprints, Tasks, Audit, Knowledge graph — and never the roadmap: the shell states the roadmap
   twice already, in the sidebar's section label and in the top navbar, so a third
   statement here would repeat a fact the user can see while leaving the view they
   are actually looking at unnamed.
@@ -599,3 +609,35 @@
                 </li>
                 {{end}}
               </ul>{{end}}
+
+
+{{/*
+  auditRow renders ONE row of the audit log table, and is the single source of
+  that presentation: the Roadmap Audit Log Page renders every entry of its page
+  through it, and the Recent activity card of the Roadmap Dashboard Page renders
+  the head of that log through it, so the two show an entry with the same seven
+  cells, in the same order, under the same cell rules (SPEC/WEB.md § Roadmap
+  Audit Log Page; § Roadmap Dashboard Page, Block 9).
+
+  Dot is one models.AuditEntry. The two nullable columns are rendered by the
+  helpers in audit.go rather than by an {{if}} written here, so the rule that
+  decides "value or placeholder" — and the presentation each of the two answers
+  takes — has one source, shared with the task page's own commit hashes.
+
+  The Commit cell shows the stored hash verbatim: the page does not abbreviate
+  it, does not expand it, and links it to no repository. The Related Entity ID
+  cell shows the counterpart the entry itself carries and never one inferred
+  from the operation beside it. The Operation is rendered whatever value it
+  carries, and Performed At goes through the timestamp helper (SPEC/WEB.md
+  § Roadmap Audit Log Page; § Date and Time Display).
+*/}}
+{{define "auditRow"}}{{$related := auditRelatedEntityCell .RelatedEntityID}}{{$commit := auditCommitHashCell .CommitHash}}
+                  <tr>
+                    <td>{{.ID}}</td>
+                    <td>{{.Operation}}</td>
+                    <td>{{.EntityType}}</td>
+                    <td>{{.EntityID}}</td>
+                    <td{{with $related.Class}} class="{{.}}"{{end}}>{{$related.Text}}</td>
+                    <td{{with $commit.Class}} class="{{.}}"{{end}}>{{$commit.Text}}</td>
+                    <td class="text-nowrap text-secondary">{{timestamp .PerformedAt}}</td>
+                  </tr>{{end}}

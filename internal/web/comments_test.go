@@ -668,7 +668,7 @@ func TestSprintsLandingPage_RendersNoCommentLog(t *testing.T) {
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	for _, marker := range []string{
 		timelineList, timelineEvent, timelineIcon,
@@ -1088,6 +1088,7 @@ var wantRoutePatterns = []string{
 	"GET /roadmaps/{name}/audit",
 	"GET /roadmaps/{name}/graph",
 	"GET /roadmaps/{name}/graph/data",
+	"GET /roadmaps/{name}/sprints",
 	"GET /roadmaps/{name}/sprints/{id}",
 	"GET /roadmaps/{name}/tasks",
 	"GET /roadmaps/{name}/tasks/{id}",
@@ -1097,6 +1098,7 @@ var wantRoutePatterns = []string{
 	"HEAD /roadmaps/{name}/audit",
 	"HEAD /roadmaps/{name}/graph",
 	"HEAD /roadmaps/{name}/graph/data",
+	"HEAD /roadmaps/{name}/sprints",
 	"HEAD /roadmaps/{name}/sprints/{id}",
 	"HEAD /roadmaps/{name}/tasks",
 	"HEAD /roadmaps/{name}/tasks/{id}",
@@ -1186,6 +1188,7 @@ func TestCommentPages_AnswerReadMethodsOnly(t *testing.T) {
 
 	paths := []string{
 		"/roadmaps/" + f.name,
+		"/roadmaps/" + f.name + "/sprints",
 		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.sprintID),
 		"/roadmaps/" + f.name + "/tasks/" + itoa(f.loggedTaskID),

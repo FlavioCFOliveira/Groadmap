@@ -17,7 +17,11 @@ import (
 // roadmap index, the roadmap sprints landing page, the roadmap tasks page, a
 // roadmap sprint detail page, the roadmap audit log page, and the
 // knowledge-graph page — and asserts the rendered HTML contains the gutter
-// class on the page-header row and no longer contains the gutter-less variant.
+// class on the page-header row and that the page header no longer contains the
+// gutter-less variant. The absence is checked in the page header alone: the
+// dashboard's KPI cards carry `row align-items-center` by specification, the
+// row-and-column layout of Tabler's stat cards (SPEC/WEB.md § Roadmap Dashboard
+// Page, Block 1).
 func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
@@ -29,6 +33,7 @@ func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 	paths := []string{
 		"/",
 		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/sprints",
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
 		"/roadmaps/" + name + "/tasks/1",
@@ -41,7 +46,8 @@ func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 			t.Errorf("page %s: missing Tabler page-header gutter row "+
 				`<div class="row g-2 align-items-center">`, path)
 		}
-		if strings.Contains(body, `<div class="row align-items-center">`) {
+		header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<main class="page-body">`)
+		if strings.Contains(header, `<div class="row align-items-center">`) {
 			t.Errorf("page %s: page-header row regressed to the gutter-less "+
 				`<div class="row align-items-center">`, path)
 		}
@@ -173,8 +179,8 @@ func TestShell_CarriesNoFooterAnywhere(t *testing.T) {
 // so a divergence cannot come back unnoticed.
 
 // allPagePaths is every route that renders the admin shell: the four of
-// pagePaths plus the sprint detail page, the task page, and the audit log page.
-// The shell rules hold on all seven, so the fidelity guards below sweep the
+// pagePaths plus the sprints page, the sprint detail page, the task page, and the
+// audit log page. The shell rules hold on all eight, so the fidelity guards below sweep the
 // complete set rather than the subset pagePaths covers. The caller must have
 // seeded the roadmap with both seedRoadmap (which creates task 1 and sprint 1)
 // and seedRoadmapWithAudit.
@@ -182,6 +188,7 @@ func allPagePaths(name string) []string {
 	return []string{
 		"/",
 		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/sprints",
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
 		"/roadmaps/" + name + "/tasks/1",
@@ -804,18 +811,19 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	// The title names the VIEW. The roadmap is named by the sidebar and the top
 	// navbar; a third statement here would repeat what the user can already see.
 	titles := map[string]string{
-		"/":                            `<h2 class="page-title">Roadmaps</h2>`,
-		"/roadmaps/" + name:            `<h2 class="page-title">Sprints</h2>`,
-		"/roadmaps/" + name + "/tasks": `<h2 class="page-title">Tasks</h2>`,
-		"/roadmaps/" + name + "/audit": `<h2 class="page-title">Audit</h2>`,
-		"/roadmaps/" + name + "/graph": `<h2 class="page-title">Knowledge graph</h2>`,
+		"/":                              `<h2 class="page-title">Roadmaps</h2>`,
+		"/roadmaps/" + name:              `<h2 class="page-title">Dashboard</h2>`,
+		"/roadmaps/" + name + "/sprints": `<h2 class="page-title">Sprints</h2>`,
+		"/roadmaps/" + name + "/tasks":   `<h2 class="page-title">Tasks</h2>`,
+		"/roadmaps/" + name + "/audit":   `<h2 class="page-title">Audit</h2>`,
+		"/roadmaps/" + name + "/graph":   `<h2 class="page-title">Knowledge graph</h2>`,
 	}
 	for path, want := range titles {
 		body := servePage(t, mux, path)
 		if !strings.Contains(body, want) {
 			t.Errorf("page %s: header title is not %s", path, want)
 		}
-		// None of these five carries a pretitle: the sprint page and the task page
+		// None of these six carries a pretitle: the sprint page and the task page
 		// are the only hierarchical headers.
 		if strings.Contains(body, "page-pretitle") {
 			t.Errorf("page %s: renders a pretitle; only a sprint's or a task's own page carries one", path)
@@ -887,7 +895,7 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	// hierarchical back link. Never navigation the sidebar already carries.
 	withActions := map[string]string{
 		"/roadmaps/" + name + "/graph":     `id="layout-select"`,
-		"/roadmaps/" + name + "/sprints/1": `href="/roadmaps/` + name + `"`,
+		"/roadmaps/" + name + "/sprints/1": `href="/roadmaps/` + name + `/sprints"><i class="ti ti-arrow-left me-1"></i>Back to sprints</a>`,
 		"/roadmaps/" + name + "/tasks/1":   `href="/roadmaps/` + name + `/tasks"><i class="ti ti-arrow-left me-1"></i>Back to tasks</a>`,
 	}
 	// The two record pages' actions column is full width below sm, so it wraps
@@ -909,7 +917,7 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	}
 	// The tasks page's header carries no actions column content: its filter bar
 	// sits in the header of its task-list card (Acceptance Criteria 100 and 109).
-	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/audit"} {
+	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/sprints", "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/audit"} {
 		header := headerRegion(t, path, servePage(t, mux, path))
 		if strings.Contains(header, "col-auto ms-auto") || strings.Contains(header, "<input") ||
 			strings.Contains(header, "<select") {
@@ -958,8 +966,8 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 			}
 		}
 	}
-	if pages != 7 {
-		t.Fatalf("found %d page templates carrying a page header, want 7; the sweep is not covering what it claims", pages)
+	if pages != 8 {
+		t.Fatalf("found %d page templates carrying a page header, want 8; the sweep is not covering what it claims", pages)
 	}
 }
 

@@ -36,6 +36,7 @@ func TestPages_NoInlineStyleAttribute(t *testing.T) {
 	populated := []string{
 		"/",
 		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/sprints",
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
 		"/roadmaps/" + name + "/tasks/1",

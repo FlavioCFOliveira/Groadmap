@@ -31,9 +31,10 @@ func TestCachePolicy_NoStoreOnDataDerivedResponses(t *testing.T) {
 	h := handler()
 
 	paths := []string{
-		"/",                            // roadmap index
-		"/roadmaps/" + name,            // sprints landing page
-		"/roadmaps/" + name + "/tasks", // tasks page
+		"/",                              // roadmap index
+		"/roadmaps/" + name,              // dashboard (landing page)
+		"/roadmaps/" + name + "/sprints", // sprints page
+		"/roadmaps/" + name + "/tasks",   // tasks page
 		"/roadmaps/" + name + "/sprints/" + sprintID, // sprint page
 		"/roadmaps/" + name + "/tasks/1",             // task page
 		"/roadmaps/" + name + "/graph",               // graph page shell

@@ -21,8 +21,9 @@ running HTTP server:
   by widening the startup migration sweep with a service estate of roadmaps — an
   interruption exiting 130.
 - Routes and pages: index with discovery + empty state, the read-only
-  sprints landing page (GET /roadmaps/{name}: three sprint tabs, Actual
-  active by default) and the separate tasks page (GET /roadmaps/{name}/tasks:
+  dashboard landing page (GET /roadmaps/{name}), the read-only sprints page
+  (GET /roadmaps/{name}/sprints: three sprint tabs, Actual active by default)
+  and the separate tasks page (GET /roadmaps/{name}/tasks:
   one paginated task list in a Tabler card, narrowed on the server by the card
   header's GET filter bar — search, sprint, status, and type, with an Apply
   button and no Reset — which compose conjunctively and travel, with the page and
@@ -31,7 +32,7 @@ running HTTP server:
   growth, name validation / path-traversal guard, the knowledge-graph page
   and its JSON data endpoint, and the read-only proof that graph reads create
   no snapshot/ directory. Choosing a roadmap on the index lands the user on
-  the sprints page with the current (OPEN) sprint selected by default.
+  the dashboard; the sprints page selects the current (OPEN) sprint by default.
 - Read-only enforcement: non-read HTTP methods answered 405 (AC21).
 - Self-contained delivery: static assets served only from /static/, a
   missing asset 404s (AC22), the vendored D3.js bundle and the d3-sankey
@@ -934,29 +935,213 @@ class TestWebInterface:
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
         assert ROADMAP in body, "index must list the roadmap name"
-        assert f"/roadmaps/{ROADMAP}" in body, "index must link the sprints landing page"
+        assert f"/roadmaps/{ROADMAP}" in body, "index must link the dashboard landing page"
         assert f"/roadmaps/{ROADMAP}/graph" in body, "index must link the graph page"
 
-    def test_choosing_roadmap_lands_on_sprints_page(self):
-        """Selecting a roadmap on the index lands on the sprints page
-        (GET /roadmaps/{name}) with the current (OPEN) sprint selected by
-        default — the Actual tab is the active tab (SPEC/WEB.md § Roadmap Index
-        Page and § Roadmap Sprints Page)."""
+    def test_choosing_roadmap_lands_on_dashboard_page(self):
+        """Selecting a roadmap on the index lands on the dashboard page
+        (GET /roadmaps/{name}); the sprints page, reached at
+        /roadmaps/{name}/sprints, selects the current (OPEN) sprint by default —
+        the Actual tab is the active tab (SPEC/WEB.md § Roadmap Index Page,
+        § Roadmap Dashboard Page, and § Roadmap Sprints Page; Acceptance
+        Criteria 265 and 267)."""
         proc, port = self._start(["--port", "0"])
-        # The index card's primary link for the roadmap is the sprints landing
+        # The index card's primary link for the roadmap is the dashboard landing
         # page (href="/roadmaps/{name}" exactly, not the tasks or graph URL).
         _, _, index = self._req(port, "/")
         assert f'href="/roadmaps/{ROADMAP}"' in index, (
-            "index must link the roadmap to its sprints landing page"
+            "index must link the roadmap to its dashboard landing page"
         )
-        # Following that link lands on the sprints page with Actual active.
+        # Following that link lands on the dashboard.
         status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        assert status == 200
+        assert headers.get("content-type", "").startswith("text/html")
+        assert '<h2 class="page-title">Dashboard</h2>' in body, "landing must be the dashboard"
+        assert body.count('<script type="application/json" id="dashboard-data">') == 1, (
+            "the dashboard must carry its one chart data block"
+        )
+        # The sprints page, at /sprints, has Actual active.
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
         assert re.search(
             r'href="#tab-current"[^>]*\bclass="nav-link active"[^>]*aria-selected="true">Actual',
             body,
-        ), "landing must select the current (Actual/OPEN) sprint tab by default"
+        ), "the sprints page must select the current (Actual/OPEN) sprint tab by default"
+
+    def _seed_dashboard_roadmap(self, roadmap, tasks):
+        """Build a roadmap through the CLI from (title, type, status) triples and
+        return their ids. Every task that is not BACKLOG joins one sprint, which
+        is started so its members can move through DOING, TESTING, and
+        COMPLETED; a BACKLOG task belongs to no sprint."""
+        self._run(["roadmap", "create", roadmap])
+        ids = []
+        for title, task_type, _ in tasks:
+            _, out, _ = self._run([
+                "task", "create", "-r", roadmap, "-t", title, "-y", task_type,
+                "-fr", "Finance operations must see the state of the ledger close.",
+                "-tr", "Recorded in the roadmap database and read by the dashboard.",
+                "-ac", "The dashboard counts the task under its type and status.",
+            ])
+            ids.append(json.loads(out)["id"])
+        members = [i for i, (_, _, status) in zip(ids, tasks) if status != "BACKLOG"]
+        if members:
+            sprint = self.test.create_sprint(roadmap, "Close the month-end ledger",
+                                             title="Month-end ledger close")
+            self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(map(str, members))])
+            self._run(["sprint", "start", "-r", roadmap, str(sprint)])
+
+        def stat(status, wanted, *extra):
+            chosen = [i for i, (_, _, s) in zip(ids, tasks) if s in wanted]
+            if chosen:
+                self._run(["task", "stat", "-r", roadmap, ",".join(map(str, chosen)), status, *extra])
+
+        stat("DOING", ("DOING", "TESTING", "COMPLETED"), "--commit-open", "5d6a2cd")
+        stat("TESTING", ("TESTING", "COMPLETED"))
+        stat("COMPLETED", ("COMPLETED",), "--commit-close", "4999725")
+        return ids
+
+    @staticmethod
+    def _kpi_card(body, role):
+        """The markup of one dashboard KPI card, up to the next card."""
+        start = body.index(f'<div class="card" data-role="{role}">')
+        end = body.find('<div class="card" data-role="', start + 1)
+        return body[start:end]
+
+    def test_dashboard_kpi_type_donuts_and_removed_blocks(self):
+        """The Open tasks, Completed, and Backlog KPI cards each carry a donut of
+        their tasks by type, fed by tasks_by_type {types, open, completed,
+        backlog}; a card whose value is 0 renders no donut column; the Tasks by
+        type, Tasks by status, Tasks per sprint, and Throughput blocks are gone;
+        Current sprint takes a col-12 of its own and draws no chart; and the chart
+        data block holds tasks_by_type alone (SPEC/WEB.md § Roadmap Dashboard
+        Page; SPEC/DATA_FORMATS.md § Dashboard Chart Data; Acceptance Criteria
+        269, 270, 271, 272, 273, 274, 279, and 286)."""
+        self._seed_dashboard_roadmap("ledger-close", [
+            ("Draft the intercompany elimination entries", "TASK", "BACKLOG"),
+            ("Document the accrual reversal schedule", "TASK", "BACKLOG"),
+            ("Reconcile the suspense account balances", "TASK", "DOING"),
+            ("Publish the trial balance to the controllers", "TASK", "COMPLETED"),
+            ("FX revaluation posts to the wrong period", "BUG", "COMPLETED"),
+            ("Duplicate journal lines after a re-import", "BUG", "SPRINT"),
+            ("Archive the prior-year close workpapers", "CHORE", "BACKLOG"),
+        ])
+        self._seed_dashboard_roadmap("card-settlement", [
+            ("Settle the scheme fees for September", "TASK", "COMPLETED"),
+            ("Reprocess the rejected clearing file", "BUG", "COMPLETED"),
+        ])
+        self._run(["roadmap", "create", "treasury-greenfield"])
+        proc, port = self._start(["--port", "0"])
+
+        status, _, body = self._req(port, "/roadmaps/ledger-close")
+        assert status == 200
+        blocks = re.findall(
+            r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S)
+        assert len(blocks) == 1, "the dashboard must carry exactly one chart data block"
+        data = json.loads(blocks[0])
+        assert list(data) == ["tasks_by_type"], (
+            f"the chart data block's members are {list(data)}")
+        assert data["tasks_by_type"] == {
+            "types": ["TASK", "BUG", "CHORE"],
+            "open": [3, 1, 1], "completed": [1, 1, 0], "backlog": [2, 0, 1],
+        }, f"tasks_by_type = {data['tasks_by_type']}"
+
+        for role, chart, label in (
+            ("kpi-open", "chart-open-by-type",
+             "Open tasks by type: TASK 3 (60%), BUG 1 (20%), CHORE 1 (20%)"),
+            ("kpi-completed", "chart-completed-by-type",
+             "Completed tasks by type: TASK 1 (50%), BUG 1 (50%)"),
+            ("kpi-backlog", "chart-backlog-by-type",
+             "Backlog tasks by type: TASK 2 (66%), CHORE 1 (33%)"),
+        ):
+            card = self._kpi_card(body, role)
+            assert '<div class="row align-items-center">' in card and '<div class="col">' in card, (
+                f"{role} lacks the row-and-column layout")
+            assert re.search(
+                r'<div class="col-auto">\s*<div id="' + chart + r'" role="img" aria-label="'
+                + re.escape(label) + r'"></div>\s*</div>', card), (
+                f"{role} lacks its donut container labelled {label!r}; card={card!r}")
+        velocity = self._kpi_card(body, "kpi-velocity")
+        assert "col-auto" not in velocity and 'role="img"' not in velocity, (
+            "the Average velocity card must carry no donut")
+
+        for removed in ("Tasks by type", "Tasks by status", "Tasks per sprint",
+                        "tasks-by-type", "tasks-by-status", "tasks-per-sprint",
+                        "tasks_by_status", "tasks_per_sprint"):
+            assert removed not in body, f"the dashboard still carries {removed!r}"
+        for removed in ('<h3 class="card-title">Throughput</h3>', 'data-role="throughput"',
+                        "chart-lg", "chart-burndown", "chart-throughput",
+                        "No activity in the last 12 weeks", "No completed task yet"):
+            assert removed not in body, f"the dashboard still carries {removed!r}"
+        # Current sprint stands alone in a col-12, directly before Work in
+        # progress in its col-lg-6, and its card draws no chart although its
+        # OPEN sprint holds a COMPLETED member.
+        assert re.search(
+            r'<div class="col-12">\s*<div class="card" data-role="current-sprint">', body), (
+            "Current sprint must stand in a col-12")
+        cols = [c for c in re.findall(r'<div class="(col-[^"]+)">', body) if c != "col-auto"]
+        assert cols[4:7] == ["col-12", "col-lg-6", "col-lg-6"], (
+            f"the grid columns after the KPI row are {cols[4:7]}")
+        sprint_card = self._kpi_card(body, "current-sprint")
+        # The card title names the OPEN sprint: "Current sprint: " is plain text
+        # and the sprint's title alone links to the sprint's page; the card body
+        # no longer carries that link and opens with the progress row: the
+        # completion text, then the start text in an ms-auto div, immediately
+        # followed by the status breakdown.
+        open_sprints = self.test.list_sprints("ledger-close", status="OPEN")
+        assert len(open_sprints) == 1, f"ledger-close must hold one OPEN sprint, got {open_sprints}"
+        sprint_href = f'/roadmaps/ledger-close/sprints/{open_sprints[0]["id"]}'
+        header = re.search(r'<h3 class="card-title">(.*?)</h3>', sprint_card, re.S)
+        assert header and header.group(1) == (
+            f'Current sprint: <a href="{sprint_href}" data-role="current-sprint-link">'
+            'Month-end ledger close</a>'), f"the Current sprint card title is {header and header.group(1)!r}"
+        card_body = sprint_card[sprint_card.index('<div class="card-body">'):]
+        for absent in ("<a ", sprint_href, "Month-end ledger close"):
+            assert absent not in card_body, f"the Current sprint card body carries {absent!r}"
+        assert re.match(
+            r'<div class="card-body">\s*<div class="d-flex mb-2"><div>50% complete</div>'
+            r'<div class="ms-auto">Started <time datetime="[^"]+">[^<]+</time>, 0 days elapsed</div></div>'
+            r'\s*<div class="progress-stacked mb-2" data-role="sprint-breakdown">',
+            card_body), f"the Current sprint card body does not open with the progress row: {card_body[:400]!r}"
+        assert "current-sprint-started" not in sprint_card and "current-sprint-complete" not in sprint_card, (
+            "the separate Started and completion lines must be gone")
+        assert "COMPLETED<span class=\"legend-value\">2</span>" in sprint_card, (
+            "the OPEN sprint must hold a COMPLETED member, or the no-burndown check is vacuous")
+        assert "<div>50% complete</div>" in sprint_card and "progress-stacked" in sprint_card, (
+            "the Current sprint card must keep its completion text and its status breakdown")
+        for absent in ("chart-", 'role="img"', "burndown", "Burndown", '<div class="empty">'):
+            assert absent not in sprint_card, f"the Current sprint card carries {absent!r}"
+        charts = re.findall(r'<div [^>]*id="(chart-[a-z-]+)"', body)
+        assert charts == ["chart-open-by-type", "chart-completed-by-type", "chart-backlog-by-type"], (
+            f"the dashboard's charts are {charts}; only the three KPI donuts may remain")
+        assert 'style="' not in body, "the dashboard must carry no style attribute"
+
+        # Every task COMPLETED: Open tasks and Backlog read 0 and draw no donut.
+        _, _, body = self._req(port, "/roadmaps/card-settlement")
+        for role in ("kpi-open", "kpi-backlog"):
+            card = self._kpi_card(body, role)
+            assert '<div class="h1 mb-3">0</div>' in card, f"{role} must read 0"
+            assert '<div class="row align-items-center">' in card
+            for absent in ('<div class="col-auto">', 'role="img"', '<div class="empty">'):
+                assert absent not in card, f"{role}, whose value is 0, carries {absent!r}"
+        assert ('aria-label="Completed tasks by type: TASK 1 (50%), BUG 1 (50%)"'
+                in self._kpi_card(body, "kpi-completed")), "the Completed card must hold its donut"
+
+        # A roadmap with no task: no KPI card holds a donut.
+        status, _, body = self._req(port, "/roadmaps/treasury-greenfield")
+        assert status == 200
+        assert 'class="col-auto"' not in body and "-by-type" not in body, (
+            "an empty roadmap must render no type-breakdown donut")
+        data = json.loads(re.search(
+            r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S).group(1))
+        assert data == {"tasks_by_type": {"types": [], "open": [], "completed": [], "backlog": []}}, (
+            f"the empty roadmap's chart data block is {data}")
+        assert "Throughput" not in body and "chart-lg" not in body, (
+            "a roadmap with no OPEN sprint must render no Throughput card and no chart-lg")
+        empty_sprint_card = self._kpi_card(body, "current-sprint")
+        assert "No open sprint" in empty_sprint_card
+        assert re.search(r'<h3 class="card-title">(.*?)</h3>', empty_sprint_card, re.S).group(1) == (
+            "Current sprint"), "with no OPEN sprint the card title must read exactly Current sprint, with no link"
 
     def test_index_empty_state_when_no_roadmaps(self):
         proc, port = self._start(["--port", "0"], home=self._fresh_home())
@@ -971,13 +1156,13 @@ class TestWebInterface:
     # ====================================================================
 
     def test_sprints_page_shows_sprint_cards_not_full_task_table(self):
-        """The sprints landing page renders every sprint as a compact shared
+        """The sprints page renders every sprint as a compact shared
         sprint card (header, description, task-count footer) but NOT the full
         task table and NOT any inline member-task list or modal — those live on
         the tasks page and the single sprint page (SPEC/WEB.md § Shared
         Sprint-Card Partial; Acceptance Criteria 8/38)."""
         proc, port = self._start(["--port", "0"])
-        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
         assert "authentication hardening sprint" in body.lower(), "must show sprint cards"
@@ -2324,7 +2509,7 @@ class TestWebInterface:
         """AC11: three tabs labelled Próximos / Actual / Concluídos, left to
         right, with Actual active by default on load."""
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
 
         # The exact Portuguese labels appear in the required left-to-right order.
         i_prox = body.find(">Próximos")
@@ -2380,7 +2565,7 @@ class TestWebInterface:
         """AC12/AC13: sprints are classified by status into the right tab and
         each links to its own page."""
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
 
         # Every sprint links to its page.
         for sid in (self.pending_sid, self.open_sid, self.closed_sid):
@@ -2494,7 +2679,7 @@ class TestWebInterface:
         }
 
         proc, port = self._start(["--port", "0"])
-        status, _, body = self._req(port, f"/roadmaps/{roadmap}")
+        status, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints")
         assert status == 200
 
         def pane(marker):
@@ -3965,7 +4150,7 @@ class TestWebInterface:
         self._run(["sprint", "start", "-r", roadmap, str(current)])
 
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{roadmap}")
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints")
         for sprint_id, want_pane in ((upcoming, "tab-upcoming"), (current, "tab-current"), (closed, "tab-closed")):
             card, pane = self._sprint_card(body, roadmap, sprint_id)
             assert pane == want_pane, f"sprint #{sprint_id} is under {pane}, want {want_pane}"
@@ -4122,7 +4307,7 @@ class TestWebInterface:
             self._assert_no_raw_html("sprint page", fragment)
             assert "alpha bravo charlie delta javascript:alert(1)" in fragment
         assert "<script>alert(1)" not in page and "<iframe" not in page
-        _, _, cards = self._req(port, f"/roadmaps/{roadmap}")
+        _, _, cards = self._req(port, f"/roadmaps/{roadmap}/sprints")
         card, _ = self._sprint_card(cards, roadmap, sprint_id)
         self._assert_no_raw_html("sprint card", card)
 
@@ -4152,7 +4337,7 @@ class TestWebInterface:
         # stylesheet (Acceptance Criterion 182).
         _, _, board_page = self._req(port, f"/roadmaps/{roadmap}/tasks")
         assert "/static/highlight.css" not in board_page, "the tasks page links highlight.css"
-        for path in (f"/roadmaps/{roadmap}", f"/roadmaps/{roadmap}/sprints/{sprint_id}",
+        for path in (f"/roadmaps/{roadmap}/sprints", f"/roadmaps/{roadmap}/sprints/{sprint_id}",
                      f"/roadmaps/{roadmap}/tasks/{hl_task}"):
             _, page_headers, page = self._req(port, path)
             assert page.count(link) == 1, f"{path} does not link the highlighting stylesheet once"
@@ -4618,16 +4803,21 @@ class TestWebInterface:
         )
 
     def test_roadmap_landing_page_renders_no_comment_log(self):
-        """The sprints landing page is the negative control: no comment surface.
+        """The dashboard and the sprints page are the negative controls: no
+        comment surface.
 
-        It renders compact sprint cards only, so neither the timeline, nor the
-        Comments card, nor any comment body may appear there.
+        They render figures and compact sprint cards only, so neither the
+        timeline, nor the Comments card, nor any comment body may appear there.
         """
         self._seed_comments()
         proc, port = self._start(["--port", "0"])
-        status, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
-        assert status == 200
+        for path in (f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/sprints"):
+            status, _, body = self._req(port, path)
+            assert status == 200
+            self._assert_no_comment_surface(body)
 
+    def _assert_no_comment_surface(self, body):
+        """No timeline, no Comments card, and no comment body in body."""
         assert '<ul class="timeline">' not in body
         assert '<li class="timeline-event">' not in body
         assert '<h3 class="card-title">Comments' not in body
@@ -6238,7 +6428,8 @@ class TestWebInterface:
 
         titles = {
             "/": "Roadmaps",
-            f"/roadmaps/{ROADMAP}": "Sprints",
+            f"/roadmaps/{ROADMAP}": "Dashboard",
+            f"/roadmaps/{ROADMAP}/sprints": "Sprints",
             f"/roadmaps/{ROADMAP}/tasks": "Tasks",
             f"/roadmaps/{ROADMAP}/audit": "Audit",
             f"/roadmaps/{ROADMAP}/graph": "Knowledge graph",
@@ -6374,19 +6565,23 @@ class TestWebInterface:
                 )
 
     def test_roadmap_pages_link_sprints_tasks_graph_in_sidebar(self):
-        """A roadmap's pages surface its Sprints/Tasks/Graph in the sidebar, each
+        """A roadmap's pages surface its five views in the sidebar, each
         resolving to its own endpoint (no #anchors on a combined page):
-        Sprints -> /roadmaps/{name}, Tasks -> /roadmaps/{name}/tasks,
-        Graph -> /roadmaps/{name}/graph (SPEC/WEB.md § UI Framework)."""
+        Dashboard -> /roadmaps/{name}, Sprints -> /roadmaps/{name}/sprints,
+        Tasks -> /roadmaps/{name}/tasks, Audit -> /roadmaps/{name}/audit,
+        Graph -> /roadmaps/{name}/graph (SPEC/WEB.md § UI Framework; Acceptance
+        Criterion 266)."""
         proc, port = self._start(["--port", "0"])
         for path in (
             f"/roadmaps/{ROADMAP}",
+            f"/roadmaps/{ROADMAP}/sprints",
             f"/roadmaps/{ROADMAP}/tasks",
             f"/roadmaps/{ROADMAP}/audit",
             f"/roadmaps/{ROADMAP}/graph",
         ):
             _, _, body = self._req(port, path)
-            assert f'href="/roadmaps/{ROADMAP}"' in body, "sidebar must link the roadmap's Sprints (landing)"
+            assert f'href="/roadmaps/{ROADMAP}"' in body, "sidebar must link the roadmap's Dashboard (landing)"
+            assert f'href="/roadmaps/{ROADMAP}/sprints"' in body, "sidebar must link the roadmap's Sprints"
             assert f'href="/roadmaps/{ROADMAP}/tasks"' in body, "sidebar must link the roadmap's Tasks"
             assert f'href="/roadmaps/{ROADMAP}/audit"' in body, "sidebar must link the roadmap's Audit"
             assert f'href="/roadmaps/{ROADMAP}/graph"' in body, "sidebar must link the roadmap's Graph"
@@ -7536,7 +7731,7 @@ class TestWebInterface:
             f"exactly one ERROR record expected; got {[r['raw'] for r in records]}"
         )
         rec = errors[0]
-        assert rec["msg"] == "sprints page load failed", f"msg = {rec['msg']!r}"
+        assert rec["msg"] == "dashboard load failed", f"msg = {rec['msg']!r}"
         for fragment in ("method=GET", f"path=/roadmaps/{ROADMAP}",
                          f"roadmap={ROADMAP}", "status=500", "err="):
             assert fragment in rec["raw"], (
