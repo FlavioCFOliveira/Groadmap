@@ -570,6 +570,17 @@ func TestDashboard_KPIRowStatesTheFourFigures(t *testing.T) {
 			t.Errorf("the Completed card lacks %q; card=%q", want, completed)
 		}
 	}
+	// The completion row is one d-flex mb-2 row of exactly two div children, a
+	// classless leading div and a trailing ms-auto div, with no style attribute
+	// on any of the three, and the progress bar is the element immediately after
+	// it. The pattern pins every tag in full, so an extra attribute, a third
+	// child, or a missing class fails it.
+	completionRow := regexp.MustCompile(`<div class="d-flex mb-2">\s*<div>4 of 12 tasks</div>\s*` +
+		`<div class="ms-auto">33%</div>\s*</div>\s*` +
+		`<progress class="progress progress-sm" value="4" max="12" aria-label="Completed tasks"></progress>`)
+	if !completionRow.MatchString(completed) {
+		t.Errorf("the Completed card's completion row is not the d-flex mb-2 row of a classless div and an ms-auto div, followed by the progress bar; card=%q", completed)
+	}
 	backlog := dashCard(t, body, "kpi-backlog")
 	for _, want := range []string{`<div class="subheader">Backlog</div>`, `<div class="h1 mb-3">3</div>`, ">tasks in no sprint<"} {
 		if !strings.Contains(backlog, want) {

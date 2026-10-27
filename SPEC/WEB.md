@@ -1129,9 +1129,19 @@ how the `rmp web` process itself terminates.
   | Label | Value | Subline |
   |---|---|---|
   | `Open tasks` | The number of open tasks. | `<a> in progress, <b> blocked`, where `<a>` is the number of tasks in progress and `<b>` the number of blocked tasks. |
-  | `Completed` | The number of tasks whose status is `COMPLETED`. | A line reading `<c> of <m> tasks`, with the percentage `<p>%` at its trailing edge, followed by a progress bar; `<c>` is the value, `<m>` the number of tasks of the roadmap, and `<p>` the percentage of `<c>` in `<m>`. |
+  | `Completed` | The number of tasks whose status is `COMPLETED`. | A completion row reading `<c> of <m> tasks`, with the percentage `<p>%` at its trailing edge, followed by a progress bar, both as stated below the table; `<c>` is the value, `<m>` the number of tasks of the roadmap, and `<p>` the percentage of `<c>` in `<m>`. |
   | `Backlog` | The number of tasks whose status is `BACKLOG`, the unscheduled work. | `tasks in no sprint` |
   | `Average velocity` | Exactly the `average_velocity` value `rmp stats` reports for the roadmap, written with one decimal place, rounded to the nearest tenth. | `tasks per day, last 5 closed sprints` |
+
+  The completion row of the `Completed` card is one `<div class="d-flex mb-2">`,
+  the same label-and-value row as the Current sprint progress row (Block 2,
+  item 1), holding exactly two `<div>` children, in this order: a `<div>` with no
+  class, holding the text `<c> of <m> tasks`, at the row's leading edge; and a
+  `<div class="ms-auto">`, holding the text `<p>%`, which the `ms-auto` class
+  places at the row's trailing edge. The row's layout comes from these utility
+  classes alone; neither the row nor its children carry a `style` attribute
+  ([UI Framework](#ui-framework), rule 10). The progress bar is the element
+  immediately after the completion row.
 
   The progress bar of the `Completed` card is the native `<progress>` element
   carrying Tabler's `progress` and `progress-sm` classes, with the `value`
@@ -10335,9 +10345,12 @@ Rules:
     one `SPRINT` task depends on a `DOING` task and one `BACKLOG` task depends on a
     `COMPLETED` task, the four KPI cards read, in order: `Open tasks` with the
     value `8` and the subline `3 in progress, 1 blocked`; `Completed` with the
-    value `4`, the line `4 of 12 tasks`, the percentage `33%`, and a `<progress>`
-    element carrying the classes `progress` and `progress-sm`, `value="4"`,
-    `max="12"`, and `aria-label="Completed tasks"`; `Backlog` with the value `3`
+    value `4`, a completion row `<div class="d-flex mb-2">` whose first child, a
+    `<div>` with no class, reads `4 of 12 tasks` and whose second and last child,
+    a `<div class="ms-auto">`, reads `33%`, with no `style` attribute on the row or
+    either child, and, immediately after that row, a `<progress>` element carrying
+    the classes `progress` and `progress-sm`, `value="4"`, `max="12"`, and
+    `aria-label="Completed tasks"`; `Backlog` with the value `3`
     and the subline `tasks in no sprint`; and `Average velocity` with the value
     `rmp stats -r <name>` reports as `average_velocity` for the same database,
     written with one decimal place, and the subline
