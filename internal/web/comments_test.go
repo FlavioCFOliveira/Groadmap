@@ -31,9 +31,9 @@ import (
 
 // Seeded comment bodies. They are declared as constants because most assertions
 // look for them verbatim in the rendered pages, and
-// because three of them carry authored line breaks, which the Markdown renderer
-// turns into <br>: the newline is written as the Go escape \n, never as a literal
-// control character in the source.
+// because three of them carry authored single newlines, which the Markdown
+// renderer keeps as soft line breaks (a newline and no <br>): the newline is
+// written as the Go escape \n, never as a literal control character in the source.
 const (
 	// The three comments of the "logged" task, oldest first.
 	bodyFinding = "The settlement reconciliation drifts by one cent on windows " +
@@ -369,9 +369,13 @@ func TestTaskPage_CommentLog(t *testing.T) {
 	if got := strings.Count(card, "edited "); got != 1 {
 		t.Errorf("the Comments card shows %d edited markers, want exactly 1", got)
 	}
-	// The authored line break of the hypothesis survives as a <br>.
-	if !strings.Contains(card, "should remove the drift.<br>") {
-		t.Errorf("the hypothesis body lost its authored line break")
+	// The authored single newline of the hypothesis is a soft line break: a
+	// newline in the HTML and no <br>.
+	if !strings.Contains(card, "should remove the drift.\nThe ledger export") {
+		t.Errorf("the hypothesis body does not render its single newline as a soft line break")
+	}
+	if strings.Contains(card, "should remove the drift.<br>") {
+		t.Errorf("the hypothesis body renders its single newline as <br>")
 	}
 
 	// The boards carry none of this: no comment body reaches either board page.
@@ -1387,6 +1391,13 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 			wantSheets = 5
 		} else if strings.Contains(body, "/static/highlight.css") {
 			t.Errorf("page %s links highlight.css, but it renders no Markdown field", path)
+		}
+		// The sprint page also links the Tabler vendors stylesheet, which styles
+		// its Sprint progress card's gauge (SPEC/WEB.md § Dashboard Chart
+		// Library, rule 3; Acceptance Criterion 294).
+		if strings.Contains(path, "/sprints/") {
+			assets = append(assets, `<link rel="stylesheet" href="/static/vendor/tabler/tabler-vendors.min.css">`)
+			wantSheets++
 		}
 		for _, asset := range assets {
 			if !strings.Contains(body, asset) {

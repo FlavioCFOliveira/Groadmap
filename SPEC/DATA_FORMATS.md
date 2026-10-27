@@ -1660,6 +1660,55 @@ Rules:
    slice per entry, the type at the same index naming the slice (see
    `WEB.md § Roadmap Dashboard Page`, **Type-breakdown donuts**).
 
+## Sprint Progress Chart Data
+
+The web interface's sprint page (`GET /roadmaps/{name}/sprints/{id}`, see
+`WEB.md § Roadmap Sprint Page`) carries the data of the Sprint progress card's
+gauge as one JSON object, inside one
+`<script type="application/json" id="sprint-progress-data">` element of the page.
+The page's script, `static/sprint-progress.js`, reads it to draw the gauge (see
+`WEB.md § Dashboard Chart Library`). No endpoint serves it: it exists only inside
+that page. `WEB.md § Sprint Detail Sub-Template` is canonical for what each figure
+counts and for the order of the series; this section is canonical for the shape.
+
+### Shape
+
+```json
+{
+  "tasks_by_column": {
+    "columns": ["WAITING", "DOING", "CLOSED"],
+    "counts": [5, 3, 4],
+    "percents": [41, 25, 33]
+  }
+}
+```
+
+Field reference:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tasks_by_column.columns` | array of string | The headings of the member-tasks board's three columns, always exactly `WAITING`, `DOING`, and `CLOSED`, in that order. |
+| `tasks_by_column.counts` | array of integer | Per entry of `columns`, the number of the sprint's member tasks in that column's group. The three entries sum to the sprint's total number of member tasks. |
+| `tasks_by_column.percents` | array of integer | Per entry of `columns`, the percentage of that group's count in the sprint's total number of member tasks, rounded down, and `0` when that total is `0`. The entry for `CLOSED` is the completed percentage the gauge's centre shows. |
+
+Rules:
+
+1. The object's one member, `tasks_by_column`, and its three arrays are always
+   present, in the order shown, whatever the sprint holds; no member is ever
+   omitted (see [Implementation Notes](#implementation-notes)).
+2. Each of the three arrays always holds exactly three entries, in the order of
+   `columns`.
+3. For a sprint with no member task, `counts` and `percents` are `[0, 0, 0]`.
+4. The object carries enum values and counts only. It carries no task or sprint
+   title, no description, no comment, and no other free text a user authored.
+5. The object carries no date and no timestamp.
+6. Every number is a JSON integer.
+7. The object is written into the page by `html/template`, which serialises it as
+   JSON and escapes `<`, `>`, and `&` within it, so the element's content can never
+   close the element. Whitespace around the object is permitted, and the object is
+   not required to be pretty-printed: it is part of an HTML page, not output to
+   stdout.
+
 ---
 
 ## Implementation Notes

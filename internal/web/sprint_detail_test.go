@@ -45,8 +45,9 @@ func TestSprintPage_RendersNoStatusSummaryLine(t *testing.T) {
 		t.Errorf("the sprint page carries summary-line text %q", m)
 	}
 
-	// The presentation opens with the Sprint details card: it is the first thing
-	// the page body's container holds.
+	// The presentation opens with the sprint summary row, whose first column
+	// holds the Sprint details card: it is the first thing the page body's
+	// container holds (Acceptance Criterion 287).
 	const container = `<main class="page-body">`
 	start := strings.Index(body, container)
 	if start < 0 {
@@ -59,9 +60,11 @@ func TestSprintPage_RendersNoStatusSummaryLine(t *testing.T) {
 		t.Fatalf("the page body holds no %s", opening)
 	}
 	first := strings.TrimSpace(rest[at+len(opening):])
-	const detailsCard = `<div class="card mb-3">
-            <div class="card-header">
-              <h3 class="card-title">Sprint details</h3>`
+	const detailsCard = `<div class="row row-deck row-cards mb-3">
+            <div class="col-12 col-lg">
+              <div class="card">
+                <div class="card-header">
+                  <h3 class="card-title">Sprint details</h3>`
 	if !strings.HasPrefix(first, detailsCard) {
 		t.Errorf("the sprint presentation does not open with the Sprint details card; it opens with %q",
 			first[:min(160, len(first))])

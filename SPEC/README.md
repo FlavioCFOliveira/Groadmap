@@ -16,17 +16,18 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
 | Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap dashboard page / landing (`/roadmaps/{name}`, the four key figures and the type-breakdown donuts of three of them, the current sprint card with its status breakdown, the work-in-progress, highest-severity, recent-activity, and upcoming-sprints card-tables, the empty states, and the one consistent read) | `WEB.md § Roadmap Dashboard Page` |
-| Web dashboard chart library (vendored ApexCharts, the Tabler vendors stylesheet, Tabler's chart options, series colours, no toolbar) | `WEB.md § Dashboard Chart Library` |
+| Web dashboard chart library (vendored ApexCharts, the Tabler vendors stylesheet, Tabler's chart options, series colours, no toolbar; also the sprint page's progress gauge) | `WEB.md § Dashboard Chart Library` |
 | Web dashboard chart data JSON shape (the `dashboard-data` data block) | `DATA_FORMATS.md § Dashboard Chart Data` |
+| Web sprint progress chart data JSON shape (the `sprint-progress-data` data block of the sprint page) | `DATA_FORMATS.md § Sprint Progress Chart Data` |
 | Web dashboard read statements (the six aggregate and bounded statements, the three reads shared with `rmp stats`, `rmp sprint stats`, and the audit log page, the one read transaction, the fixed statement count) | `DATABASE.md § Dashboard Queries` |
 | Web roadmap sprints page (`/roadmaps/{name}/sprints`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
 | Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status and type multi-select dropdowns — the query parameters and their validation, the filter-state cookie and the default filter state, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
 | Web tasks-page search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, applied on the server) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
-| Web sprint detail sub-template (metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
+| Web sprint detail sub-template (sprint summary row, metadata datagrid, Sprint progress card and its gauge, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
 | Web task page (`/roadmaps/{name}/tasks/{id}`, every task field, the comments timeline, the sprint context card with position and progress, the way back to the tasks page) | `WEB.md § Roadmap Task Page` |
-| Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting through the generated, lazily built lexer registry, and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the sprint page's 80-character line length, which the task page does not carry) | `WEB.md § Markdown Rendering` |
+| Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting through the generated, lazily built lexer registry, and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the full container width with no maximum line length) | `WEB.md § Markdown Rendering` |
 | Date-range filter values (`--created-since`/`--created-until`, `--since`/`--until`): the two accepted forms, the 1970-01-01 through 9999-12-31 range, and the refusal | `DATA_FORMATS.md § Date Filter Values` |
 | Web date and time display (the `YYYY-MM-DD HH:mm:ss` form every page shows, in UTC as stored, truncated to the second; the one Go formatter; the `<time datetime>` value; the surfaces it governs and the JSON it leaves in ISO 8601) | `WEB.md § Date and Time Display` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
@@ -246,9 +247,10 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Write counters JSON (the eleven published keys, the rule that omits a zero, and the rule that omits the whole block for a statement that changed nothing) | `DATA_FORMATS.md § Graph Query Counters` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | Web dashboard chart data JSON shape | `DATA_FORMATS.md § Dashboard Chart Data` |
+| Web sprint progress chart data JSON shape | `DATA_FORMATS.md § Sprint Progress Chart Data` |
 | Web dashboard SQL statements | `DATABASE.md § Dashboard Queries` |
 | Web roadmap dashboard page (the landing page, its figures and their definitions) | `WEB.md § Roadmap Dashboard Page` |
-| Web dashboard chart library (ApexCharts, its options and colours) | `WEB.md § Dashboard Chart Library` |
+| Web dashboard chart library (ApexCharts, its options and colours, for the dashboard and the sprint page) | `WEB.md § Dashboard Chart Library` |
 | One realisation of the graph value mapping (which surfaces are bound, what each still owns, why the Path rendering is not shared, and what preserves the byte identity) | `DATA_FORMATS.md § One Realisation of the Mapping` |
 | Tasks-page search text preparation (the trim, normalisation, and folding rules; the single server implementation of each) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |

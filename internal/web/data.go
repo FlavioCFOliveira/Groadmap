@@ -494,11 +494,168 @@ func closedAt(t *models.Task) *string { return t.ClosedAt }
 // Detail Sub-Template, Comments card scope; Acceptance Criterion 69). A board
 // card shows the NUMBER of a member task's comments and never their text, which
 // is read only by that task's own page, one task at a time.
+//
+// Progress is the Sprint progress card the sub-template renders beside the
+// Sprint details card: the sprint's total, the three column groups, and the
+// gauge's chart data block (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7).
 type sprintDetail struct {
 	Name     string
 	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
+	Progress sprintProgress
 	Sprint   models.Sprint
+}
+
+// sprintProgress is the Sprint progress card of the sprint page: the sprint's
+// total number of member tasks, the card's subheader stating that total, the
+// completed percentage at the gauge's centre, the gauge container's aria-label, one legend entry per board column, and the
+// JSON data block the page script draws the gauge from (SPEC/WEB.md § Sprint
+// Detail Sub-Template, rule 7; SPEC/DATA_FORMATS.md § Sprint Progress Chart
+// Data). Every figure is computed here, on the server, so the card states every
+// number it carries without JavaScript.
+type sprintProgress struct {
+	Subheader        string
+	Label            string
+	Groups           []sprintProgressGroup
+	Chart            sprintProgressChart
+	Total            int
+	CompletedPercent int
+}
+
+// sprintProgressGroup is one legend entry of the Sprint progress card: the board
+// column's heading, the Tabler colour name of its arc and legend dot, and the
+// number of member tasks the column's group holds.
+type sprintProgressGroup struct {
+	Heading string
+	Colour  string
+	Count   int
+}
+
+// sprintProgressChart is the gauge's JSON data block, in the shape and member
+// order SPEC/DATA_FORMATS.md § Sprint Progress Chart Data publishes. Every slice
+// holds exactly three entries, in the order of the board's columns, whatever the
+// sprint holds (rules 1 to 3).
+type sprintProgressChart struct {
+	TasksByColumn sprintProgressColumns `json:"tasks_by_column"`
+}
+
+// sprintProgressColumns is the tasks_by_column member of the gauge's data block:
+// per board column, its heading, its group's count, and that count's floor
+// percentage of the sprint's total.
+type sprintProgressColumns struct {
+	Columns  []string `json:"columns"`
+	Counts   []int    `json:"counts"`
+	Percents []int    `json:"percents"`
+}
+
+// newSprintProgress builds the Sprint progress card from the sprint summary
+// models.CalculateSprintShowResult produces over the member tasks the page has
+// already read, so the card adds no query (SPEC/WEB.md § Sprint Detail
+// Sub-Template, rule 7, The three groups).
+//
+// The groups are the board's three columns, taken from sprintBoardColumns, and
+// each takes its count from the summary counter of the category the column
+// holds: Pending for WAITING, InProgress for DOING, and Completed for CLOSED.
+// There is one categorisation, so the card's counts equal the board's column
+// count badges by construction.
+//
+// A group's colour is derived from the badge colour of its column's canonical
+// status, read through taskStatusBadge, the helper the column's count badge takes
+// its colour from: the solid colour name of the variant bg-<colour>-lt. So a
+// column reads in one colour on its badge, its arc, and its legend dot, and no
+// colour is written here (SPEC/WEB.md § Dashboard Chart Library, rule 5).
+func newSprintProgress(summary models.SprintSummary) sprintProgress {
+	n := len(sprintBoardColumns)
+	progress := sprintProgress{
+		Total:  summary.TotalTasks,
+		Groups: make([]sprintProgressGroup, n),
+		Chart: sprintProgressChart{TasksByColumn: sprintProgressColumns{
+			Columns:  make([]string, n),
+			Counts:   make([]int, n),
+			Percents: make([]int, n),
+		}},
+	}
+	byColumn := &progress.Chart.TasksByColumn
+	for i := range sprintBoardColumns {
+		column := &sprintBoardColumns[i]
+		count := summaryCount(summary, column.category)
+		percent := floorPercent(count, summary.TotalTasks)
+		progress.Groups[i] = sprintProgressGroup{
+			Heading: column.heading,
+			Colour:  badgeColourName(taskStatusBadge(column.canonical)),
+			Count:   count,
+		}
+		byColumn.Columns[i] = column.heading
+		byColumn.Counts[i] = count
+		byColumn.Percents[i] = percent
+		if column.category == models.CategoryCompleted {
+			progress.CompletedPercent = percent
+		}
+	}
+	progress.Subheader = sprintProgressSubheader(progress.Total)
+	progress.Label = sprintProgressLabel(progress.Total, progress.Groups, progress.CompletedPercent)
+	return progress
+}
+
+// summaryCount is the sprint summary counter of one status category: the
+// counter models.CalculateSprintShowResult increments for the tasks
+// models.CategorizeTaskStatus places in that category. CategoryOther counts no
+// task (it is unreachable from stored data).
+func summaryCount(summary models.SprintSummary, category models.TaskStatusCategory) int {
+	switch category {
+	case models.CategoryPending:
+		return summary.Pending
+	case models.CategoryInProgress:
+		return summary.InProgress
+	case models.CategoryCompleted:
+		return summary.Completed
+	default:
+		return 0
+	}
+}
+
+// badgeColourName is the Tabler colour name of a badge colour variant: "cyan"
+// for bg-cyan-lt. It is the colour whose solid counterpart, var(--tblr-<colour>),
+// the gauge draws an arc in and whose legend-<colour> class the legend dot takes.
+func badgeColourName(variant string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(variant, "bg-"), "-lt")
+}
+
+// sprintProgressSubheader is the Sprint progress card's subheader, the card's
+// only statement of the sprint's total: "<t> Tasks", with "1 Task" for a total
+// of one (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7, Markup).
+func sprintProgressSubheader(total int) string {
+	if total == 1 {
+		return "1 Task"
+	}
+	return strconv.Itoa(total) + " Tasks"
+}
+
+// sprintProgressLabel is the gauge container's aria-label:
+// "<t> tasks: <w> waiting, <d> doing, <c> closed; <p>% completed", with
+// "1 task" for a total of one; each group is named by its column heading in
+// lower case (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7, Accessible
+// label).
+func sprintProgressLabel(total int, groups []sprintProgressGroup, completedPercent int) string {
+	var b strings.Builder
+	b.WriteString(strconv.Itoa(total))
+	if total == 1 {
+		b.WriteString(" task: ")
+	} else {
+		b.WriteString(" tasks: ")
+	}
+	for i, g := range groups {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(strconv.Itoa(g.Count))
+		b.WriteByte(' ')
+		b.WriteString(strings.ToLower(g.Heading))
+	}
+	b.WriteString("; ")
+	b.WriteString(strconv.Itoa(completedPercent))
+	b.WriteString("% completed")
+	return b.String()
 }
 
 // sprintPageData is the view model handed to the roadmap sprint template. It
@@ -512,6 +669,7 @@ type sprintPageData struct {
 	Tasks    []taskView
 	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
+	Progress sprintProgress
 	Sprint   models.Sprint
 }
 
@@ -530,6 +688,7 @@ func (d sprintPageData) Detail() sprintDetail {
 		Sprint:   d.Sprint,
 		Columns:  d.Columns,
 		Comments: d.Comments,
+		Progress: d.Progress,
 	}
 }
 
@@ -1089,12 +1248,18 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 		return sprintPageData{}, err
 	}
 
+	// The Sprint progress card counts the rows already read, through the same
+	// categorisation the board groups them by; it issues no query of its own
+	// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7, The three groups).
+	show := models.CalculateSprintShowResult(sprint, orderedTasks)
+
 	return sprintPageData{
 		Name:     name,
 		Sprint:   *sprint,
 		Tasks:    views,
 		Columns:  groupIntoSprintBoardColumns(views),
 		Comments: comments,
+		Progress: newSprintProgress(show.Summary),
 	}, nil
 }
 

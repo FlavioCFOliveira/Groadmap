@@ -800,16 +800,6 @@
   font-weight: 700;
 }
 
-/* Line length: on the roadmap sprint page, the sprint description and every
-   sprint comment body hold at most about 80 characters a line. The selector
-   matches the .markdown containers in the page body, and excludes the sprint
-   card (a .card-link) of the sprints page and every container of the roadmap
-   task page (.task-page), whose containers span the full width of their card's
-   body (SPEC/WEB.md § Markdown Rendering, rule 13). */
-.page-body .markdown:not(.card-link .markdown):not(.task-page .markdown) {
-  max-width: 80ch;
-}
-
 /* ---- Knowledge-graph page (SPEC/WEB.md § Roadmap Knowledge-Graph Page, Graph
    card layout; § Full-Height Page Regions) ----
    The graph card holds two regions: the labels sidebar on the left and the

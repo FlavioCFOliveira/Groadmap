@@ -257,7 +257,9 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    is about, the `WAITING` column by the planned in-sprint execution order and the
    `DOING` and `CLOSED` columns by recency (`started_at` and `closed_at`
    descending), and whose three column counts sum to the sprint's total number of
-   member tasks, and the sprint's own
+   member tasks, a Sprint progress card beside the sprint's details that states
+   that total and draws a gauge of the three column groups with the percentage of
+   tasks completed, and the sprint's own
    comments in a Comments card, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
@@ -1360,7 +1362,9 @@ how the `rmp web` process itself terminates.
 - **Page script.** The page loads `/static/vendor/apexcharts/apexcharts.min.js`
   and then `/static/dashboard.js`, both as `<script defer>` elements in that
   order, so the library is defined before the page script runs. No other page
-  loads either. `dashboard.js` parses the chart data block, renders each chart
+  loads `dashboard.js`, and the only other page that loads the library is the
+  Roadmap Sprint Page (see [Dashboard Chart Library](#dashboard-chart-library),
+  rule 2). `dashboard.js` parses the chart data block, renders each chart
   into its container when the container is present, and sets the width of each
   segment of the status breakdown from its `data-percent` attribute. It fetches
   nothing: the data block is its only data source. The chart options it applies
@@ -2349,10 +2353,25 @@ how the `rmp web` process itself terminates.
   its card, so no forced horizontal scrolling of the page is introduced (see
   [Markdown Rendering](#markdown-rendering)). The page does not redefine these
   fields; `MODELS.md` and `DATABASE.md` remain canonical.
+- **Sprint progress card.** The Sprint details card and a Sprint progress card
+  share one row, `<div class="row row-deck row-cards mb-3">`, directly below the
+  page header: the Sprint details card in a `<div class="col-12 col-lg">` column,
+  at the row's leading edge, taking the width the other column leaves, and the
+  Sprint progress card in a `<div class="col-12 col-sm-6 col-lg-3">` column to its
+  right. Below the `lg` breakpoint the two stack, the Sprint details card first.
+  The Sprint progress card states the sprint's total number of member tasks in its
+  subheader and draws a horseshoe gauge of three concentric arcs, one per board column, with the
+  percentage of tasks completed at its centre and a legend of the three column
+  counts below it (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+  rule 7). The gauge is drawn in the browser by the vendored ApexCharts library
+  from one JSON data block the page carries, so the page also links the Tabler
+  vendors stylesheet and loads the ApexCharts library and the page script
+  `static/sprint-progress.js` (see
+  [Dashboard Chart Library](#dashboard-chart-library)).
 - **Member-tasks board.** The page presents the sprint's tasks as a Kanban board
   of three fixed columns — `WAITING`, `DOING`, and `CLOSED` — holding one card per
-  task, placed between the sprint details above it and the sprint's comments below
-  it. The columns group the tasks by one fixed categorisation of the task status —
+  task, placed between the row of the Sprint details and Sprint progress cards
+  above it and the sprint's comments below it. The columns group the tasks by one fixed categorisation of the task status —
   `WAITING` holds `SPRINT`, `DOING` holds `DOING` and `TESTING`, and
   `CLOSED` holds `COMPLETED` — so the three column counts sum to the sprint's total
   number of member tasks, and each column orders its own cards: the `WAITING`
@@ -2392,7 +2411,9 @@ how the `rmp web` process itself terminates.
   link that submits a change; there is no edit affordance of any kind. The task
   cards are links to read-only task pages, and the only buttons the board
   carries are the column collapse toggles, which change only the board's
-  presentation; neither submits anything or changes any data.
+  presentation; neither submits anything or changes any data. The Sprint
+  progress card's gauge offers no control: hovering one of its arcs changes only
+  the text at the gauge's centre.
 
 ### Roadmap Task Page
 
@@ -2591,7 +2612,7 @@ how the `rmp web` process itself terminates.
   [Markdown Rendering](#markdown-rendering)). A field whose value is empty or null
   keeps its card, which shows the em dash in place of the container. The Markdown
   container of each field card, and of every comment `body` in the Comments card,
-  spans the full width of its card's body: it carries no line-length limit (see
+  spans the full width of its card's body, as every Markdown container does (see
   [Markdown Rendering](#markdown-rendering), rule 13). The rendered
   content wraps within its card, and a wide table or code block scrolls inside its
   own box, so no forced horizontal scrolling of the page is introduced.
@@ -3049,6 +3070,15 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 
 2. **What the sub-template renders.** For one sprint, the sub-template renders, in
    order:
+   - the **sprint summary row**, one `<div class="row row-deck row-cards mb-3">`
+     holding exactly two columns, in this order: a `<div class="col-12 col-lg">`
+     column holding the Sprint details card, and a
+     `<div class="col-12 col-sm-6 col-lg-3">` column holding the **Sprint progress
+     card** (rule 7). From the `lg` breakpoint the two cards stand side by side,
+     the Sprint details card at the leading edge taking the width the Sprint
+     progress card leaves, and `row-deck` makes them equal in height; below `lg`
+     each column takes its own line, the Sprint details card first. The next two
+     items define the two cards the row holds, in the row's order;
    - the **Sprint details card**, which carries the sprint's `description`
      (rule 6) and the **sprint metadata datagrid**. The datagrid holds exactly
      three fields, in this order: `Created` (`created_at`), `Started`
@@ -3061,17 +3091,19 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      The datagrid carries no `ID`, `Title`, `Status`, `Order`, `Capacity`, or
      `Tasks` field. The page header already presents the sprint `title`,
      `Sprint #<ID>`, and the sprint's status badge (see
-     [Roadmap Sprint Page](#roadmap-sprint-page)), and the member-tasks board's
-     three column counts together give the sprint's total task count, so a
-     datagrid field for any of them would repeat what the page already shows. The
+     [Roadmap Sprint Page](#roadmap-sprint-page)), and the Sprint progress card
+     beside it states, in its subheader, the sprint's total task count, the sum of the member-tasks
+     board's three column counts, so a datagrid field for any of them would repeat
+     what the page already shows. The
      sprint's execution `order` and its capacity (`max_tasks`) are not shown on
      the page. The datagrid is rendered only by this sub-template, and so only on
      the Roadmap Sprint Page;
+   - the **Sprint progress card**, which states the sprint's total number of
+     member tasks and draws the gauge of its three column groups (rule 7);
    - the **member-tasks board**, a Kanban board of three fixed columns holding the
      sprint's tasks, one card per task (defined below). The board is the sprint's
-     member-task presentation and sits between the two cards that surround it:
-     directly below the Sprint details card and directly above the Comments
-     card;
+     member-task presentation and sits between what surrounds it: directly below
+     the sprint summary row and directly above the Comments card;
    - the **Comments card**, a separate card placed after the member-tasks board and
      rendered last in the sub-template (defined below).
 
@@ -3710,15 +3742,118 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      [Markdown Rendering](#markdown-rendering), rule 3).
 
 5. **Read-only.** The sub-template renders data only. It contains no form, button,
-   or link that submits a change. Its interactions are two, and neither changes
-   any data: following a board card to that task's read-only page, and
+   or link that submits a change. Its interactions are three, and none changes
+   any data: following a board card to that task's read-only page,
    collapsing or expanding a board column with that column's toggle, which
-   changes only the board's presentation.
+   changes only the board's presentation, and hovering an arc of the Sprint
+   progress card's gauge, which changes only the text at the gauge's centre
+   (rule 7).
 
 6. **Markdown fields.** Wherever the sub-template renders the sprint's
    `description` or a sprint comment's `body`, it renders the HTML the Markdown
    renderer produces from it, as specified in
    [Markdown Rendering](#markdown-rendering).
+
+7. **Sprint progress card.** The card stands to the right of the Sprint details
+   card in the sprint summary row (rule 2) and states how the sprint's member
+   tasks divide among the three columns of the member-tasks board. Its model is
+   the "Active Users" card of Tabler's preview dashboard, in the vendored Tabler
+   release: the card `shared/components/cards/charts/ActiveUsers2.astro`, whose
+   gauge is drawn by `shared/ui/ChartRadial.astro` of the Tabler repository.
+   - **Markup.** The card is a `<div class="card">` with no `card-header`, whose
+     `<div class="card-body">` holds exactly these three children, in this order:
+     1. `<div class="subheader"><t> Tasks</div>`, where `<t>` is the sprint's
+        total number of member tasks (`Summary.TotalTasks`, the sum of the
+        board's three column counts), written as a count (see
+        [Roadmap Dashboard Page](#roadmap-dashboard-page), **Definitions shared by
+        every block**, item 7); `<t> Tasks` is written `1 Task` when `<t>` is `1`.
+        The subheader is the card's only statement of the total: the card holds
+        no separate value element, so the value row the model places below its
+        subheader, and the trend indicator in it, are not reproduced;
+     2. the gauge container,
+        `<div id="chart-sprint-progress" class="position-relative" role="img" aria-label="<label>"></div>`,
+        empty in the served HTML, where `<label>` is the label given under
+        **Accessible label** below;
+     3. the legend (see **Legend** below).
+
+     No element of the card carries a `style` attribute
+     ([UI Framework](#ui-framework), rule 10).
+   - **The three groups.** The card counts exactly the three groups the board's
+     columns hold, with the categorisation of rule 3: `WAITING` (`SPRINT`,
+     `Summary.Pending`), `DOING` (`DOING` and `TESTING`, `Summary.InProgress`),
+     and `CLOSED` (`COMPLETED`, `Summary.Completed`), the counters
+     `models.CalculateSprintShowResult` produces. It introduces no other
+     categorisation, so its counts always equal the board's column count badges.
+     Its figures come from the read that fills the board; the card adds no query.
+   - **The gauge.** The gauge is an ApexCharts `radialBar` chart, a horseshoe of
+     three concentric arcs, one series per group, in the order `WAITING`,
+     `DOING`, `CLOSED`. Each series' label is its column heading,
+     and its value is the percentage of that group's count in the total
+     `floor(100 * count / total)`, and `0` when the total is `0` (see
+     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Definitions shared by
+     every block**, item 6). Each series' colour is the solid Tabler colour of the
+     badge colour of its column's canonical status, the status whose colour the
+     column's count badge takes (rule 3, **Column header**, and
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)):
+     `WAITING` takes `var(--tblr-cyan)`, the solid counterpart of `SPRINT`'s
+     `bg-cyan-lt`; `DOING` takes `var(--tblr-blue)`, that of `DOING`'s
+     `bg-blue-lt`; and `CLOSED` takes `var(--tblr-green)`, that of `COMPLETED`'s
+     `bg-green-lt`. No colour is written as a literal value. The gauge's options
+     are those of [Dashboard Chart Library](#dashboard-chart-library), rules 4
+     and 5.
+   - **Centre.** While no arc is hovered, the gauge's centre shows the label
+     `COMPLETED` and the value `<p>%`, where `<p>` is the percentage of the
+     sprint's member tasks in the `CLOSED` group, rounded down — the value of the
+     `CLOSED` series — and `0%` when the total is `0`. While an arc is hovered,
+     the centre shows that series' label and that group's task count, not its
+     percentage: hovering the `DOING` arc of a sprint with three tasks in `DOING`
+     or `TESTING` shows `DOING` and `3`.
+   - **Legend.** Below the gauge, Tabler's legend list, `<div class="legend-list">`,
+     holds exactly three entries, one per group, in the order of the series, each
+     `<span class="legend legend-<colour>"><span class="legend-dot"></span><HEADING><span class="legend-value"><n></span></span>`,
+     where `<colour>` is the series' colour name (`cyan`, `blue`, or `green`),
+     `<HEADING>` the column heading, and `<n>` the group's count, `0` included.
+     It is the legend idiom of the dashboard's Current sprint card (see
+     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Block 2: Current
+     sprint**). The legend is rendered on the server.
+   - **Accessible label.** The gauge container's `aria-label` reads exactly
+     `<t> tasks: <w> waiting, <d> doing, <c> closed; <p>% completed`, where `<t>`
+     is the total, `<w>`, `<d>`, and `<c>` the counts of `WAITING`, `DOING`, and
+     `CLOSED`, and `<p>` the completed percentage of **Centre**; `<t> tasks` is
+     written `1 task` when `<t>` is `1`. For a sprint of 12 member tasks, 5 in
+     `SPRINT`, 3 in `DOING` or `TESTING`, and 4 in `COMPLETED`, it reads
+     `12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed`.
+   - **Always rendered.** The card is rendered for every sprint, including a
+     sprint with no member task: its subheader reads `0 Tasks`, its gauge container is
+     present, its three arcs are empty, its centre reads `COMPLETED` and `0%`,
+     each legend entry reads `0`, and its `aria-label` reads
+     `0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed`. The card has no empty
+     state.
+   - **Chart data block.** The page emits the gauge's data in exactly one
+     `<script type="application/json" id="sprint-progress-data">` element, whose
+     content is the JSON object canonical in
+     `DATA_FORMATS.md § Sprint Progress Chart Data`. It is a data block, not a
+     script, exactly as the dashboard's chart data block is (see
+     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Chart data block**): a
+     browser does not execute it, the Content-Security-Policy of
+     [Security Headers](#security-headers) stays unchanged and still forbids every
+     inline script, and `html/template` escapes `<`, `>`, and `&` in it. The
+     object carries enum values and counts only, and no title, description, or
+     other free text a user authored. Every number the gauge draws is computed on
+     the server.
+   - **Page script.** The sprint page links
+     `/static/vendor/tabler/tabler-vendors.min.css` after the Tabler stylesheet,
+     and loads `/static/vendor/apexcharts/apexcharts.min.js` and then
+     `/static/sprint-progress.js`, both as `<script defer>` elements in that
+     order, so the library is defined before the page script runs.
+     `static/sprint-progress.js` parses the chart data block and renders the gauge
+     into its container. It fetches nothing: the data block is its only data
+     source. It does not touch the member-tasks board, whose behaviour belongs to
+     `static/sprint-board.js` alone (rule 3, **Column collapse**).
+   - **Without JavaScript.** The subheader with the total, the legend with its three
+     counts, and the gauge's `aria-label` are rendered on the server, so every
+     number the card states is readable without JavaScript. Only the drawing of
+     the gauge needs the script.
 
 ### Roadmap Knowledge-Graph Page
 
@@ -5052,14 +5187,15 @@ read from the host filesystem at runtime.
    framework, see [UI Framework](#ui-framework)), the syntax-highlighting
    stylesheet of rendered Markdown code blocks (see
    [Markdown Rendering](#markdown-rendering), rule 7), the vendored Tabler vendors
-   stylesheet that styles the dashboard charts (see
-   [Dashboard Chart Library](#dashboard-chart-library)), and any further vendored
+   stylesheet that styles the charts of the dashboard page and the sprint page
+   (see [Dashboard Chart Library](#dashboard-chart-library)), and any further vendored
    CSS the interface uses (see
    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 3. **JavaScript** — all client scripts, including the Tabler JavaScript (the UI
    framework's scripts), the D3.js knowledge-graph visualisation library (and
    the d3-sankey plugin), and the ApexCharts chart library of the dashboard page
-   (see [Dashboard Chart Library](#dashboard-chart-library)), and any of their
+   and the sprint page (see [Dashboard Chart Library](#dashboard-chart-library)),
+   and any of their
    dependencies, all in already-built (vendored) form.
 4. **Web fonts** — every font the interface uses, including the Inter font in
    its upright and its italic face (see [UI Framework](#ui-framework), rule 4)
@@ -5188,11 +5324,22 @@ the way out, on every request, and the CLI's output of these fields is unchanged
    The renderer does **not** enable raw HTML output, the attribute syntax that
    lets an author attach an `id`, a `class`, or any other attribute to an element,
    or automatic heading identifiers.
-4. **Plain text remains valid Markdown, and a single newline is a line break.**
+4. **Plain text remains valid Markdown, and line breaks follow CommonMark.**
    Text written without any Markdown syntax renders as paragraphs: a blank line
-   separates two paragraphs. A single newline inside a paragraph renders as a line
-   break (`<br>`), not as the space CommonMark's soft line break would produce,
-   so every line break the author entered stays visible.
+   separates two paragraphs. Line breaks inside a paragraph follow CommonMark
+   0.31.2 (https://spec.commonmark.org/0.31.2/), sections 6.7, Hard line breaks,
+   and 6.8, Soft line breaks, which GitHub Flavored Markdown inherits:
+   - A single newline inside a paragraph is a **soft line break**. It renders as
+     a newline in the HTML source and no `<br>` element, so the browser displays
+     it as a space and the two lines join into one wrapped line.
+   - A newline preceded by two or more spaces, or by a backslash (`\`), at the end
+     of the line is a **hard line break**. It renders as a `<br>` element, so the
+     author forces a visible line break with either form.
+
+   The renderer does not enable goldmark's hard-wraps option, which would turn
+   every soft line break into `<br>`. This rule governs the Markdown fields only:
+   plain multi-line free-text, which is not Markdown, keeps every authored line
+   break visible (see [Frontend Rules](#frontend-rules), rule 6).
 5. **Headings are demoted.** A heading in a Markdown field never outranks the
    structure of the page it appears in. A level-1 heading (`#`, or a
    Setext heading underlined with `=`) renders as `<h4>`, a level-2 heading (`##`,
@@ -5461,20 +5608,18 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       italic `em` or `i` element in the Inter font is drawn from Inter's real
       italic face (see [UI Framework](#ui-framework), rule 4), never from a slant
       the browser synthesises from the upright face.
-    - **Line length.** On the [Roadmap Sprint Page](#roadmap-sprint-page), the
-      container of the sprint `description` and the container of every sprint
-      comment `body` have a `max-width` of `80ch`, so a line of rendered Markdown
-      holds at most about 80 characters: the width WCAG 2.2 Success Criterion
-      1.4.8 (Visual Presentation) names, and inside the 45 to 90 characters
-      Matthew Butterick's *Practical Typography* recommends. The sprint card is
-      already narrow and carries no such limit. On the
-      [Roadmap Task Page](#roadmap-task-page), the container of each of the four
-      task Markdown fields and of every task comment `body` carries no such limit
-      either: it spans the full width of its card's body.
+    - **Line length.** No maximum line length is applied to rendered Markdown.
+      On every surface that shows it — the sprint card, the
+      [Roadmap Sprint Page](#roadmap-sprint-page), and the
+      [Roadmap Task Page](#roadmap-task-page) alike — the container takes the
+      full content width of its parent, and no rule sets a `max-width` on it
+      other than `none`. The content still wraps within the container, and the
+      **Overflow** rule above continues to govern wide tables, code blocks, and
+      long words.
 
     This styling adds to the HTML the renderer emits only the fixed task-list
     classes of rules 3 and 14, which carry no text of the author's and change no
-    visible text, and it changes nothing else in rules 1 to 12, 14, and 15: the line breaks of rule 4, the heading demotion of
+    visible text, and it changes nothing else in rules 1 to 12, 14, and 15: the soft and hard line breaks of rule 4, the heading demotion of
     rule 5, the Content-Security-Policy, and every safety property stay as they
     are.
 14. **The non-interactive form, for content placed inside a link.** The sprint
@@ -5494,7 +5639,7 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       the `task-list-item` class of rule 3, which the ordinary form gives it too,
       so one rule of rule 13 styles the task-list item in both forms.
 
-    Everything else — the accepted Markdown, the line breaks, the demoted
+    Everything else — the accepted Markdown, the soft and hard line breaks of rule 4, the demoted
     headings, the highlighting, the filtering, the footnote identifier prefix, and
     the container — is identical to the ordinary form. The sprint card is the only
     surface that uses the non-interactive form.
@@ -6381,14 +6526,17 @@ Rules:
 ### Dashboard Chart Library
 
 1. The charts of the [Roadmap Dashboard Page](#roadmap-dashboard-page), the three
-   KPI type-breakdown donuts, are drawn with **ApexCharts** (<https://apexcharts.com/>), the chart library Tabler's own
+   KPI type-breakdown donuts, and the chart of the
+   [Roadmap Sprint Page](#roadmap-sprint-page), the Sprint progress card's gauge
+   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), rule 7), are
+   drawn with **ApexCharts** (<https://apexcharts.com/>), the chart library Tabler's own
    dashboard examples use, inside the Tabler admin-shell (see
    [UI Framework](#ui-framework)).
 2. ApexCharts is **vendored**: its already-built single-file distribution is
    committed as `static/vendor/apexcharts/apexcharts.min.js`, embedded into the
    binary with `go:embed`, and served locally from `/static/...`. It is never
    loaded from a content delivery network or any remote origin. The dashboard page
-   is the only page that loads it. Its source, the rule that fixes its release,
+   and the Roadmap Sprint Page are the only pages that load it. Its source, the rule that fixes its release,
    and its licence —
    the ApexCharts dual licence, not a permissive open-source licence — are
    recorded in `BUILD.md § Vendored Web Assets` and in
@@ -6399,10 +6547,14 @@ Rules:
    same Tabler release as the vendored Tabler CSS and JavaScript, embedded, and
    served from `/static/...`. It carries Tabler's ApexCharts rules, among them the
    `--apx-*` custom properties through which the chart text, the grid, and the
-   tooltip follow the dark theme the interface serves. The dashboard page links
-   it after the Tabler stylesheet.
-4. **Tabler's chart options.** `static/dashboard.js` configures every chart with
-   the options Tabler's own chart component applies, so the charts read as the
+   tooltip follow the dark theme the interface serves, and the rule that strokes
+   the track of a `radialBar` chart, `.apexcharts-radialbar-track
+   .apexcharts-radialbar-area`, in `var(--tblr-border-color)`, from which the
+   gauge takes its track colour. The dashboard page and the Roadmap Sprint Page
+   are the only pages that link it, each after the Tabler stylesheet.
+4. **Tabler's chart options.** `static/dashboard.js` and
+   `static/sprint-progress.js` configure every chart with
+   the options Tabler's own chart components apply, so the charts read as the
    Tabler examples do:
    - for every chart, `chart.fontFamily` is `'inherit'`, so a chart uses the
      page's Inter face; `chart.parentHeightOffset` is `0`; `chart.toolbar.show` is `false`; and
@@ -6418,7 +6570,34 @@ Rules:
      **Type-breakdown donuts**), and `tooltip.y.formatter` writes a slice's value
      as `<n> (<p>%)`, so the tooltip reads `<TYPE>: <n> (<p>%)`, with `<p>`
      rounded down as that page's **Definitions shared by every block**, item 6,
-     states.
+     states;
+   - the Sprint progress card's gauge sets the options of the radial chart of
+     Tabler's "Active Users" card (`shared/ui/ChartRadial.astro`): `chart.type`
+     `'radialBar'`; `chart.height` the number `200`;
+     `plotOptions.radialBar.startAngle` `-120` and `endAngle` `120`;
+     `plotOptions.radialBar.hollow.margin` `15` and `hollow.size` `'70%'`;
+     `plotOptions.radialBar.dataLabels.name` with `show` `true`, `offsetY` `-20`,
+     `fontSize` `'14px'`, `fontFamily` `'inherit'`, `fontWeight` `400`, and
+     `color` `'var(--tblr-secondary)'`;
+     `plotOptions.radialBar.dataLabels.value` with `show` `true`, `fontSize`
+     `'30px'`, `fontWeight` `700`, `fontFamily` `'inherit'`, `offsetY` `0`, and
+     `color` `'var(--tblr-body-color)'`; and `stroke.lineCap` `'round'`. Beyond
+     the model, which draws one series, it sets
+     `plotOptions.radialBar.dataLabels.total` with `show` `true` and `label`
+     `'COMPLETED'`. Its series are the three series values and its `labels` the
+     three column headings, in series order (see
+     [Sprint Detail Sub-Template](#sprint-detail-sub-template), rule 7,
+     **The gauge**). `dataLabels.total.formatter` writes the completed
+     percentage as `<p>%`, and `dataLabels.value.formatter` writes the hovered
+     series' task count rather than its percentage, as that rule's **Centre**
+     states. ApexCharts calls the value formatter with the hovered arc's
+     percentage and the chart context alone, `(val, w)`, and no series index, so
+     the gauge also sets `chart.events.dataPointMouseEnter`, which ApexCharts
+     fires on an arc before it prints the centre labels and which receives the
+     arc's series index as `opts.dataPointIndex`, to record the hovered series,
+     and `chart.events.dataPointMouseLeave` to clear it; the value formatter
+     returns that series' entry of the chart data block's
+     `tasks_by_column.counts`.
 
    No option sets an ApexCharts `theme`, exactly as Tabler's own chart component
    sets none: the dark-theme styling comes from the vendored Tabler vendors
@@ -6431,6 +6610,7 @@ Rules:
    | Chart | Series and colour |
    |---|---|
    | Open tasks, Completed, and Backlog donuts | One colour per task type: `USER_STORY`: `var(--tblr-green)`; `TASK`: `var(--tblr-blue)`; `BUG`: `var(--tblr-red)`; `SUB_TASK`: `var(--tblr-azure)`; `EPIC`: `var(--tblr-purple)`; `REFACTOR`: `var(--tblr-indigo)`; `CHORE`: `var(--tblr-secondary)`; `SPIKE`: `var(--tblr-yellow)`; `DESIGN_UX`: `var(--tblr-pink)`; `IMPROVEMENT`: `var(--tblr-teal)` |
+   | Sprint progress gauge | One colour per board column: `WAITING`: `var(--tblr-cyan)`; `DOING`: `var(--tblr-blue)`; `CLOSED`: `var(--tblr-green)` |
 
    The type colours are the solid counterparts of the task type badges of
    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
@@ -6438,6 +6618,13 @@ Rules:
    in the colour of its badge across the interface. A slice's colour is keyed on
    its type, never on its position in the donut, so a type keeps its colour in all
    three donuts whatever types the others hold.
+
+   The gauge's colours are the solid counterparts of the badge colours of each
+   column's canonical status — `SPRINT`'s `bg-cyan-lt`, `DOING`'s `bg-blue-lt`,
+   and `COMPLETED`'s `bg-green-lt` — the colours the board's column count badges
+   take (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), rules 3
+   and 7), so a column reads in one colour on its badge, its arc, and its legend
+   dot.
 6. **No toolbar, no export.** The ApexCharts toolbar stays disabled (rule 4): no
    chart offers a download, an export, a zoom, a pan, or a selection control, and
    no chart makes a network request. A chart is a picture of numbers the page
@@ -7456,8 +7643,10 @@ Rules:
     every comment `body` shown in the task page's Comments card and in the sprint
     Comments card, and a sprint's `description` on the roadmap sprints page (across
     all three tabs) and on the roadmap sprint page — are not plain text: each renders
-    as Markdown, and its authored single newlines render as line breaks (Acceptance
-    Criterion 180).
+    as Markdown, under CommonMark's line-break semantics: an authored single newline
+    is a soft line break displayed as a space, and only a hard line break (two or
+    more trailing spaces, or a trailing backslash) renders as `<br>` (see
+    [Markdown Rendering](#markdown-rendering), rule 4, and Acceptance Criterion 180).
 33. Every HTML response carries the security headers: `Content-Security-Policy`
     with the value `default-src 'self'; script-src 'self'; style-src 'self'
     'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';
@@ -9283,8 +9472,8 @@ Rules:
 180. **Every Markdown field renders as Markdown, on every surface that shows it.**
     A field value holding a `**bold**` span, a bulleted list, and two lines
     separated by a single newline renders `<strong>`, `<ul>` with `<li>` items, and
-    a `<br>` between the two lines, inside a `<div class="markdown">`, and the
-    literal asterisks are not displayed. The check MUST cover each of the seven
+    the two lines in one paragraph separated by a newline and no `<br>`, inside a
+    `<div class="markdown">`, and the literal asterisks are not displayed. The check MUST cover each of the seven
     fields on each of its surfaces: the task `functional_requirements`,
     `technical_requirements`, `acceptance_criteria`, and `completion_summary` on
     the task page; a task comment `body` in the task page's Comments card;
@@ -9293,7 +9482,11 @@ Rules:
     Concluídos, and on the roadmap sprint page. A surface that still shows escaped
     text passes on every other surface, so no surface is left unchecked. A value
     written with no Markdown syntax renders as paragraphs, a blank line separating
-    two of them and a single newline rendering as `<br>`. A task `title` and a
+    two of them. Line breaks follow CommonMark: the value `a`, newline, `b` renders
+    exactly `<p>a\nb</p>` (a soft line break: a newline character in the HTML and
+    no `<br>`); the value `a`, two spaces, newline, `b` and the value `a`,
+    backslash, newline, `b` (hard line breaks) each render exactly
+    `<p>a<br>\nb</p>`, the trailing spaces and the backslash not displayed. A task `title` and a
     sprint `title` containing `**bold**` still display the asterisks as text (see
     [Markdown Rendering](#markdown-rendering), rules 1 to 4).
 181. **The GitHub Flavored Markdown extensions, footnotes, and definition lists
@@ -9517,24 +9710,21 @@ Rules:
     Markdown is drawn from the italic face, which the browser reports as a loaded
     `font-style: italic` face of `Inter` (see [UI Framework](#ui-framework),
     rule 4, and [Markdown Rendering](#markdown-rendering), rule 13).
-202. **The roadmap sprint page limits a Markdown line to 80 characters, and the
-    roadmap task page does not.** `static/style.css` carries a rule setting
-    `max-width: 80ch` whose selector matches the `.markdown` container of the
-    sprint `description` and of every sprint comment `body` on the roadmap sprint
-    page, and matches no `.markdown` container in a sprint card of the roadmap
-    sprints page and none on the roadmap task page. On a desktop-width viewport,
-    the sprint description's container on the roadmap sprint page has a computed
-    `max-width` equal to 80 times the width of its `0` glyph, while a sprint card's
-    container and the containers of the four Markdown fields and of every comment
-    `body` on the roadmap task page have a computed `max-width` of `none`, and each
-    task-page container's width equals the content width of its card's body (see
+202. **Rendered Markdown fills the width of its container on every surface.**
+    No rule in a stylesheet served under `/static/...` whose selector matches a
+    `.markdown` element sets `max-width` to a value other than `none`. On a
+    desktop-width viewport, every `.markdown` element — in a sprint card of the
+    roadmap sprints page, the sprint `description` and every sprint comment `body`
+    on the roadmap sprint page, and the four Markdown fields and every comment
+    `body` on the roadmap task page — has a computed `max-width` of `none`, and its
+    width equals the content width of its parent element (see
     [Markdown Rendering](#markdown-rendering), rule 13).
 203. **The typography adds only the task-list classes to the rendered HTML, and
     leaves the safety rules unchanged.** Every rule `static/style.css` adds for
     rendered Markdown has a selector scoped to `.markdown`, no template or
     renderer output carries a `style` attribute for it, and the only markup the
     typography adds to the renderer's output is the `task-list-item` class and
-    the `task-list-marker` span of Acceptance Criterion 200. Acceptance Criteria 180 to 194 continue to hold: the line breaks, the
+    the `task-list-marker` span of Acceptance Criterion 200. Acceptance Criteria 180 to 194 continue to hold: the soft and hard line breaks, the
     heading demotion, the Content-Security-Policy, and every safety property of
     rendered Markdown are unchanged (see
     [Markdown Rendering](#markdown-rendering), rule 13).
@@ -10475,8 +10665,9 @@ Rules:
 282. **The chart assets are vendored and served from `/static/`.** The dashboard
     page links `/static/vendor/tabler/tabler-vendors.min.css` after the Tabler
     stylesheet and loads `/static/vendor/apexcharts/apexcharts.min.js` and then
-    `/static/dashboard.js`, both as `<script defer>` elements, and no other page
-    loads either script. Each of the three returns HTTP 200 from the embedded asset
+    `/static/dashboard.js`, both as `<script defer>` elements; no other page loads
+    `dashboard.js`, and no page other than the dashboard page and the sprint page
+    loads `apexcharts.min.js` (Acceptance Criterion 294). Each of the three returns HTTP 200 from the embedded asset
     set and is cacheable; the licence banner at the head of
     `tabler-vendors.min.css` names the same Tabler release as the banner of
     `tabler.min.css`; the banner at the head of `apexcharts.min.js` names the
@@ -10526,6 +10717,89 @@ Rules:
       enum order and coloured `TASK` `var(--tblr-blue)`, `BUG` `var(--tblr-red)`,
       and `CHORE` `var(--tblr-secondary)` in every donut, and hovering the Backlog
       donut's `TASK` slice shows the tooltip `TASK: 2 (66%)`.
+287. **The Sprint details and Sprint progress cards share one row.** On the sprint
+    page of any sprint, the sprint presentation opens with exactly one
+    `<div class="row row-deck row-cards mb-3">` holding exactly two child columns,
+    in this order: a `<div class="col-12 col-lg">` holding the Sprint details card,
+    and a `<div class="col-12 col-sm-6 col-lg-3">` holding the Sprint progress
+    card. The member-tasks board follows the row, and the Comments card follows the
+    board. In a browser at a viewport width of `1440px` the two cards stand side by
+    side, the Sprint progress card to the right of the Sprint details card, with
+    equal heights; at `375px` the Sprint progress card stands below the Sprint
+    details card, each spans the width of the page body, and `<body>` does not
+    overflow horizontally (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), rules 2 and 7).
+288. **The Sprint progress card states the sprint's total.** For a sprint of 12
+    member tasks — 5 in `SPRINT`, 2 in `DOING`, 1 in `TESTING`, and 4 in
+    `COMPLETED` — the Sprint progress card has no `card-header`, and its
+    `card-body` holds exactly three children, in this order: a
+    `<div class="subheader">` reading `12 Tasks`; the gauge container
+    `<div id="chart-sprint-progress" class="position-relative" role="img">` with an
+    `aria-label` and no content; and one `<div class="legend-list">`. The card
+    holds no element carrying the class `h1` and no trend indicator, and the total
+    `12` its subheader states equals the sum of the board's three column count
+    badges, `5`, `3`, and `4`. For a sprint of one member task, the subheader reads
+    `1 Task`.
+289. **The gauge draws three series, in column order and column colours.** For the
+    sprint of Acceptance Criterion 288, the sprint page holds exactly one
+    `<script type="application/json" id="sprint-progress-data">` element, whose
+    content parses as JSON into an object with exactly the members, the order, and
+    the types `DATA_FORMATS.md § Sprint Progress Chart Data` gives, carrying the
+    columns `WAITING`, `DOING`, and `CLOSED`, the counts `5`, `3`, and `4`, and the
+    percents `41`, `25`, and `33`. In a browser, the configuration
+    `static/sprint-progress.js` passes to the gauge carries the options every chart
+    carries and the gauge options of
+    [Dashboard Chart Library](#dashboard-chart-library), rule 4, no `theme`
+    option, the series `41`, `25`, and `33` with the labels `WAITING`, `DOING`, and
+    `CLOSED`, and the colours `var(--tblr-cyan)`, `var(--tblr-blue)`, and
+    `var(--tblr-green)`, in that order; no colour is a literal value.
+290. **The centre shows the completed percentage rounded down, and a hovered arc
+    its count.** In a browser, with no arc hovered, the gauge's centre of the
+    sprint of Acceptance Criterion 288 shows `COMPLETED` and `33%`; that of a sprint
+    of 3 member tasks, 2 of them `COMPLETED`, shows `66%`, not `67%`; and that of a
+    sprint whose member tasks are all `COMPLETED` shows `100%`. Hovering the `DOING`
+    arc of the sprint of Acceptance Criterion 288 makes the centre show `DOING` and
+    `3`, the group's count, not its percentage.
+291. **The legend and the accessible label state the counts.** For the sprint of
+    Acceptance Criterion 288, the Sprint progress card's legend list holds exactly
+    three entries, in this order:
+    `<span class="legend legend-cyan"><span class="legend-dot"></span>WAITING<span class="legend-value">5</span></span>`,
+    `<span class="legend legend-blue"><span class="legend-dot"></span>DOING<span class="legend-value">3</span></span>`,
+    and
+    `<span class="legend legend-green"><span class="legend-dot"></span>CLOSED<span class="legend-value">4</span></span>`,
+    and the gauge container carries
+    `aria-label="12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed"`. For a
+    sprint of one member task in `SPRINT`, the container carries
+    `aria-label="1 task: 1 waiting, 0 doing, 0 closed; 0% completed"`.
+292. **A sprint with no member task renders the card.** For a sprint with no member
+    task, the sprint page returns HTTP 200 and renders the Sprint progress card
+    with the subheader `0 Tasks`, the gauge container carrying
+    `aria-label="0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed"`, three legend
+    entries each reading `0`, and a chart data block whose counts and percents are
+    all `0`. In a browser the gauge is drawn with three empty arcs and its centre
+    shows `COMPLETED` and `0%`.
+293. **The card's numbers need no JavaScript, and the page keeps its
+    Content-Security-Policy.** With scripting disabled, the sprint page of the
+    sprint of Acceptance Criterion 288 still shows the subheader `12 Tasks` and the
+    legend counts `5`, `3`, and `4`. Every `<script>` element of the
+    sprint page other than the chart data block carries a `src` attribute and no
+    content, no element of the Sprint progress card carries a `style` attribute,
+    and the response's `Content-Security-Policy` header is exactly the value of
+    [Security Headers](#security-headers); in a browser with JavaScript enabled,
+    loading the page reports no Content-Security-Policy violation and the gauge
+    container holds a drawn ApexCharts chart with no toolbar. For a sprint whose
+    title is `</script><script>alert(1)</script>`, the chart data block's content
+    contains no `</script` sequence and no unescaped `<`, `>`, or `&`.
+294. **The chart assets load only on the dashboard and sprint pages.** The sprint
+    page links `/static/vendor/tabler/tabler-vendors.min.css` after the Tabler
+    stylesheet and loads `/static/vendor/apexcharts/apexcharts.min.js` and then
+    `/static/sprint-progress.js`, both as `<script defer>` elements, and it does not
+    load `/static/dashboard.js`; the dashboard page does not load
+    `/static/sprint-progress.js`. The roadmap index page, the sprints page, the tasks
+    page, the task page, the audit log page, and the knowledge-graph page neither
+    link `tabler-vendors.min.css` nor load `apexcharts.min.js`,
+    `dashboard.js`, or `sprint-progress.js`. `GET /static/sprint-progress.js` returns
+    HTTP 200 from the embedded asset set.
 
 ## See Also
 

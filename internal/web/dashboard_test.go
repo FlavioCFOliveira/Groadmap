@@ -1747,8 +1747,12 @@ func TestVendoredChartAssets(t *testing.T) {
 		}
 	}
 
-	// The dashboard links and loads them, in order; no other page loads either
-	// script or the vendors stylesheet; each is served, cacheable, from /static/.
+	// The dashboard links and loads them, in order; no other page loads
+	// dashboard.js, and no page other than the dashboard and the sprint page
+	// loads the library or links the vendors stylesheet (the sprint page's own
+	// chart assets are pinned by Acceptance Criterion 294,
+	// TestSprintProgress_ChartAssetsLoadOnlyOnDashboardAndSprintPages); each is
+	// served, cacheable, from /static/.
 	t.Setenv("HOME", shortHome(t))
 	f := seedDashFixture(t, "settlement-platform")
 	body := dashboardBody(t, f.name, dashNow)
@@ -1762,14 +1766,18 @@ func TestVendoredChartAssets(t *testing.T) {
 	if !strings.Contains(head, "<link rel=\"stylesheet\" href=\"/static/vendor/tabler/tabler.min.css\">\n  <link rel=\"stylesheet\" href=\"/static/vendor/tabler/tabler-vendors.min.css\">") {
 		t.Errorf("the vendors stylesheet does not directly follow the Tabler stylesheet")
 	}
-	for _, path := range allPagePaths(f.name)[1:] {
-		if path == "/roadmaps/"+f.name || strings.HasSuffix(path, "/1") {
+	for _, path := range allPagePaths(f.name) {
+		if path == "/roadmaps/"+f.name {
 			continue
 		}
 		page := servePage(t, buildMux(), path)
-		for _, asset := range []string{"apexcharts.min.js", "dashboard.js", "tabler-vendors.min.css"} {
+		forbidden := []string{"apexcharts.min.js", "dashboard.js", "tabler-vendors.min.css"}
+		if strings.Contains(path, "/sprints/") {
+			forbidden = []string{"dashboard.js"}
+		}
+		for _, asset := range forbidden {
 			if strings.Contains(page, asset) {
-				t.Errorf("%s loads %s; only the dashboard does", path, asset)
+				t.Errorf("%s loads %s; only the dashboard (and, for the chart library, the sprint page) does", path, asset)
 			}
 		}
 	}

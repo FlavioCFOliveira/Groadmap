@@ -34,10 +34,10 @@ const (
 // /static/highlight.css; the roadmap tasks page renders none and does not link it
 // (SPEC/WEB.md § Markdown Rendering, rule 7; Acceptance Criterion 182).
 //
-// Charts is set on the dashboard page alone, the one page that draws charts, and
-// makes the head partial link the vendored Tabler vendors stylesheet, which
-// carries Tabler's ApexCharts styling, after the Tabler stylesheet (SPEC/WEB.md
-// § Dashboard Chart Library, rule 3).
+// Charts is set on exactly the two pages that draw charts — the dashboard page
+// and the roadmap sprint page — and makes the head partial link the vendored
+// Tabler vendors stylesheet, which carries Tabler's ApexCharts styling, after the
+// Tabler stylesheet (SPEC/WEB.md § Dashboard Chart Library, rules 2 and 3).
 type chrome struct {
 	Title    string
 	Roadmap  string
@@ -428,6 +428,10 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 			BadgeClass: sprintStatusBadge(data.Sprint.Status),
 		},
 		Markdown: true,
+		// The Sprint progress card's gauge is drawn with ApexCharts, styled by
+		// the Tabler vendors stylesheet (SPEC/WEB.md § Sprint Detail
+		// Sub-Template, rule 7, Page script).
+		Charts: true,
 	}
 	renderHTML(w, r, "sprint.html", data)
 }

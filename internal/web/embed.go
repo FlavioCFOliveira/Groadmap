@@ -25,7 +25,7 @@ var templatesFS embed.FS
 // staticFS holds every static asset served under /static/...: the
 // stylesheet, the client scripts, the vendored D3.js bundle (with the d3-sankey
 // plugin), and the vendored ApexCharts bundle and Tabler vendors stylesheet of
-// the dashboard page. Every asset the interface loads comes from this embedded
+// the dashboard page and the sprint page. Every asset the interface loads comes from this embedded
 // set; the server never serves an arbitrary host filesystem path (SPEC/WEB.md
 // § Static Assets and § Security and Constraints, rule 4).
 //

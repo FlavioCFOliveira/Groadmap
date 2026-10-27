@@ -24,10 +24,10 @@
   (.Chrome.Markdown), which can render a Markdown field, also link the
   syntax-highlighting stylesheet, the CSS chroma produces for its github-dark
   style, before the override stylesheet (SPEC/WEB.md § Markdown Rendering,
-  rule 7). The dashboard page (.Chrome.Charts), the one page that draws charts,
-  also links the vendored Tabler vendors stylesheet, which carries Tabler's
-  ApexCharts styling, directly after the Tabler stylesheet (SPEC/WEB.md
-  § Dashboard Chart Library, rule 3).
+  rule 7). The dashboard page and the sprint page (.Chrome.Charts), the two
+  pages that draw charts, also link the vendored Tabler vendors stylesheet,
+  which carries Tabler's ApexCharts styling, directly after the Tabler
+  stylesheet (SPEC/WEB.md § Dashboard Chart Library, rule 3).
 */}}
 
 {{define "head"}}  <meta charset="utf-8">
@@ -240,11 +240,13 @@
 
   Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Columns
   (the member tasks grouped into the member-tasks board's three fixed columns),
-  and .Comments (the sprint's own comments, oldest first). It renders, in
-  order: the Sprint details card, the member-tasks board with each card a link
-  to that task's own page, and the sprint's Comments card. It renders no sprint status summary line: the presentation opens with
-  the Sprint details card, directly below the page header (SPEC/WEB.md § Sprint
-  Detail Sub-Template, rule 2; Acceptance Criterion 39). A member task carries
+  .Comments (the sprint's own comments, oldest first), and .Progress (the
+  Sprint progress card). It renders, in order: the sprint summary row holding
+  the Sprint details card and the Sprint progress card, the member-tasks board
+  with each card a link to that task's own page, and the sprint's Comments card.
+  It renders no sprint status summary line: the presentation opens with the
+  sprint summary row, directly below the page header (SPEC/WEB.md § Sprint
+  Detail Sub-Template, rule 2; Acceptance Criteria 39 and 287). A member task carries
   the NUMBER of its comments and never their text, which only the task's own
   page shows.
 
@@ -257,29 +259,75 @@
   dash in place of an unset started_at or closed_at; each timestamp is displayed
   through the timestamp helper (SPEC/WEB.md § Date and Time Display). It carries no ID, Title,
   Status, Order, Capacity, or Tasks field: the page header already presents the
-  title, "Sprint #<ID>", and the status badge, the member-tasks board's three
-  column counts together give the total task count, and the page shows neither the execution
+  title, "Sprint #<ID>", and the status badge, the Sprint progress card beside it
+  states the total task count, and the page shows neither the execution
   order nor the capacity (SPEC/WEB.md § Sprint Detail Sub-Template, rule 2;
   Acceptance Criterion 14).
 */}}
-{{define "sprintDetail"}}          <div class="card mb-3">
-            <div class="card-header">
-              <h3 class="card-title">Sprint details</h3>
+{{define "sprintDetail"}}          {{/*
+            The sprint summary row: Tabler's dashboard grid row, row-deck making
+            its two cards equal in height and row-cards setting the gutter. The
+            Sprint details card takes the width the Sprint progress card leaves
+            from the lg breakpoint; below lg each column takes its own line, the
+            Sprint details card first (SPEC/WEB.md § Sprint Detail Sub-Template,
+            rule 2; Acceptance Criterion 287).
+          */}}
+          <div class="row row-deck row-cards mb-3">
+            <div class="col-12 col-lg">
+              <div class="card">
+                <div class="card-header">
+                  <h3 class="card-title">Sprint details</h3>
+                </div>
+                <div class="card-body">
+                  <div class="markdown mb-3">{{sprintDescriptionHTML .Sprint}}</div>
+                  <div class="datagrid">
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Created</div>
+                      <div class="datagrid-content text-secondary">{{timestamp .Sprint.CreatedAt}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Started</div>
+                      <div class="datagrid-content text-secondary">{{timestamp .Sprint.StartedAt}}</div>
+                    </div>
+                    <div class="datagrid-item">
+                      <div class="datagrid-title">Closed</div>
+                      <div class="datagrid-content text-secondary">{{timestamp .Sprint.ClosedAt}}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="card-body">
-              <div class="markdown mb-3">{{sprintDescriptionHTML .Sprint}}</div>
-              <div class="datagrid">
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Created</div>
-                  <div class="datagrid-content text-secondary">{{timestamp .Sprint.CreatedAt}}</div>
-                </div>
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Started</div>
-                  <div class="datagrid-content text-secondary">{{timestamp .Sprint.StartedAt}}</div>
-                </div>
-                <div class="datagrid-item">
-                  <div class="datagrid-title">Closed</div>
-                  <div class="datagrid-content text-secondary">{{timestamp .Sprint.ClosedAt}}</div>
+            {{/*
+              The Sprint progress card, modelled on the "Active Users" card of
+              Tabler's preview dashboard (ActiveUsers2.astro, its gauge drawn by
+              ChartRadial.astro): no card-header, and a card-body of exactly three
+              children — the subheader stating the sprint's total member-task
+              count ("<t> Tasks", "1 Task" for one), the gauge container, and the
+              legend. The subheader is the card's only statement of the total: the
+              model's value row and its trend indicator are not reproduced
+              (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7; Acceptance
+              Criteria 288 to 293).
+
+              The three groups are the board's three columns and their counts the
+              sprint summary counters models.CalculateSprintShowResult produces,
+              so they always equal the column count badges. Every number is
+              rendered here, on the server: the subheader's total, the legend counts, and the
+              gauge container's aria-label, so the card states them without
+              JavaScript. The container is empty in the served HTML;
+              static/sprint-progress.js draws the gauge into it from the chart
+              data block the page emits. Each legend entry's colour comes from the
+              model (newSprintProgress, from the column's canonical status badge),
+              never from a literal here. No element carries a style attribute.
+            */}}
+            <div class="col-12 col-sm-6 col-lg-3">
+              <div class="card">
+                <div class="card-body">
+                  <div class="subheader">{{.Progress.Subheader}}</div>
+                  <div id="chart-sprint-progress" class="position-relative" role="img" aria-label="{{.Progress.Label}}"></div>
+                  <div class="legend-list">
+                    {{range .Progress.Groups}}<span class="legend legend-{{.Colour}}"><span class="legend-dot"></span>{{.Heading}}<span class="legend-value">{{.Count}}</span></span>
+                    {{end}}
+                  </div>
                 </div>
               </div>
             </div>
@@ -287,8 +335,8 @@
 
           {{/*
             The member-tasks board: three FIXED columns — WAITING, DOING, CLOSED —
-            holding one card per member task, placed between the Sprint details
-            card above and the Comments card below (SPEC/WEB.md § Sprint Detail
+            holding one card per member task, placed between the sprint summary
+            row above and the Comments card below (SPEC/WEB.md § Sprint Detail
             Sub-Template, rule 3; Acceptance Criteria 130 to 139).
 
             It replaces the six-column member-tasks table. The table could not

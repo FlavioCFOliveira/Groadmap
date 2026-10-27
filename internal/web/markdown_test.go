@@ -15,6 +15,8 @@ import (
 
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/yuin/goldmark"
+	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -56,13 +58,14 @@ var (
 // ==================== THE RENDERER ====================
 
 // TestMarkdown_ParagraphsLineBreaksAndInlineMarkup is Acceptance Criterion 180 at
-// the renderer and rule 4: bold, a bulleted list, and a single newline render as
-// <strong>, <ul>/<li>, and <br>, and plain text renders as paragraphs.
+// the renderer and rule 4: bold and a bulleted list render as <strong> and
+// <ul>/<li>, a single newline is a soft line break (a newline and no <br>), and
+// plain text renders as paragraphs.
 func TestMarkdown_ParagraphsLineBreaksAndInlineMarkup(t *testing.T) {
 	out := md(t, "Settle the **ledger** first.\nThen reconcile.\n\n- export the day\n- compare the totals")
 	for _, want := range []string{
 		"<strong>ledger</strong>",
-		"first.<br>\nThen reconcile.",
+		"first.\nThen reconcile.",
 		"<ul>\n<li>export the day</li>\n<li>compare the totals</li>\n</ul>",
 	} {
 		if !strings.Contains(out, want) {
@@ -72,15 +75,59 @@ func TestMarkdown_ParagraphsLineBreaksAndInlineMarkup(t *testing.T) {
 	if strings.Contains(out, "**") {
 		t.Errorf("the literal asterisks are displayed:\n%s", out)
 	}
+	if strings.Contains(out, "<br") {
+		t.Errorf("a single newline renders as <br>:\n%s", out)
+	}
 
 	plain := md(t, "The first paragraph line.\nIts second line.\n\nThe second paragraph.")
-	want := "<p>The first paragraph line.<br>\nIts second line.</p>\n<p>The second paragraph.</p>\n"
+	want := "<p>The first paragraph line.\nIts second line.</p>\n<p>The second paragraph.</p>\n"
 	if plain != want {
 		t.Errorf("plain text renders as\n%q\nwant\n%q", plain, want)
 	}
 
 	if got := md(t, ""); got != "" {
 		t.Errorf("the empty string renders as %q, want the empty string", got)
+	}
+}
+
+// commonMarkLineBreakCases are the three exact outputs Acceptance Criterion 180
+// fixes for line breaks (SPEC/WEB.md § Markdown Rendering, rule 4): a single
+// newline is a soft line break, and two trailing spaces or a trailing backslash
+// is a hard line break.
+var commonMarkLineBreakCases = []struct {
+	name, source, want string
+}{
+	{"soft line break", "a\nb", "<p>a\nb</p>\n"},
+	{"hard line break, two trailing spaces", "a  \nb", "<p>a<br>\nb</p>\n"},
+	{"hard line break, trailing backslash", "a\\\nb", "<p>a<br>\nb</p>\n"},
+}
+
+// TestMarkdown_CommonMarkLineBreaks is the regression test for Acceptance
+// Criterion 180's line-break outputs, in both renderer forms. It also proves the
+// cases discriminate: a goldmark renderer with the hard-wraps option, the
+// behaviour this rule replaced, fails the soft-line-break case.
+func TestMarkdown_CommonMarkLineBreaks(t *testing.T) {
+	for _, tc := range commonMarkLineBreakCases {
+		for _, form := range []markdownForm{markdownInteractive, markdownNonInteractive} {
+			if got := mdForm(t, tc.source, "task-42-acceptance_criteria-", form); got != tc.want {
+				t.Errorf("%s, form %d: %q renders as %q, want %q", tc.name, form, tc.source, got, tc.want)
+			}
+		}
+	}
+
+	hardWraps := goldmark.New(goldmark.WithRendererOptions(goldmarkhtml.WithHardWraps()))
+	failed := 0
+	for _, tc := range commonMarkLineBreakCases {
+		var buf bytes.Buffer
+		if err := hardWraps.Convert([]byte(tc.source), &buf); err != nil {
+			t.Fatalf("hard-wraps renderer on %q: %v", tc.source, err)
+		}
+		if buf.String() != tc.want {
+			failed++
+		}
+	}
+	if failed == 0 {
+		t.Errorf("a hard-wraps renderer passes every line-break case, so the cases do not detect it")
 	}
 }
 
@@ -710,7 +757,7 @@ func TestMarkdownSurfaces_SprintCardsAreNonInteractive(t *testing.T) {
 			}
 		}
 		for _, text := range []string{
-			"<strong>settlement</strong>", "window.<br>\nKeep", "<li>export the day</li>",
+			"<strong>settlement</strong>", "window.\nKeep", "<li>export the day</li>",
 			"the runbook, https://example.org/status and flow chart.",
 			`<li class="task-list-item"><span class="task-list-marker">[x]</span> freeze announced</li>`,
 			`<li class="task-list-item"><span class="task-list-marker">[ ]</span> residual published</li>`,
@@ -827,7 +874,8 @@ func TestMarkdownSurfaces_TaskPage(t *testing.T) {
 		if card := fieldCardSlice(t, body, title); !strings.Contains(card, `<div class="markdown">`+want+`</div>`) {
 			t.Errorf("the %s card does not carry the renderer's output for the field", title)
 		}
-		if !strings.Contains(want, "<strong>ledger</strong>") || !strings.Contains(want, "<br>") {
+		if !strings.Contains(want, "<strong>ledger</strong>") || !strings.Contains(want, "balance.\nSecond line.") ||
+			strings.Contains(want, "<br") {
 			t.Errorf("%s is not rendered Markdown: %s", field, want)
 		}
 		assertNoAuthorMarkup(t, field, want)
@@ -928,6 +976,11 @@ func TestMarkdownSurfaces_CSPAndScriptsUnchanged(t *testing.T) {
 			t.Errorf("GET %s: Content-Security-Policy = %q", path, got)
 		}
 		for _, m := range scriptRe.FindAllStringSubmatch(rec.Body.String(), -1) {
+			// The sprint page's chart data block is a data block, not a script
+			// (Acceptance Criterion 293).
+			if m[0] == sprintProgressDataTag {
+				continue
+			}
 			if !strings.Contains(m[1], `src="/static/`) {
 				t.Errorf("GET %s: a script is not loaded from /static/: <script%s>", path, m[1])
 			}

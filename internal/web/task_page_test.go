@@ -861,7 +861,7 @@ func TestTaskPage_Layout(t *testing.T) {
 
 	body := servePage(t, buildMux(), taskPagePath(pageTaskID))
 	main := regionBetween(t, body, `<main class="page-body">`, "</main>")
-	if got := strings.Count(main, `<div class="row row-cards task-page">`); got != 1 {
+	if got := strings.Count(main, `<div class="row row-cards">`); got != 1 {
 		t.Fatalf("the page body holds %d task rows, want 1", got)
 	}
 	order := []string{

@@ -243,12 +243,22 @@ func TestTaskCards_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) {
 		}
 
 		// The vendored framework, plus, on the sprint page alone, the
-		// column-collapse script, which takes no part in following a card.
+		// column-collapse script and the Sprint progress card's chart library
+		// and gauge script, none of which takes part in following a card. The
+		// sprint page's chart data block is a data block, not a script
+		// (Acceptance Criteria 293 and 294).
 		wantScripts := map[string]bool{"/static/vendor/tabler/tabler.min.js": true}
 		if !strings.HasSuffix(path, "/tasks") {
 			wantScripts["/static/sprint-board.js"] = true
+			wantScripts["/static/vendor/apexcharts/apexcharts.min.js"] = true
+			wantScripts["/static/sprint-progress.js"] = true
 		}
-		scripts := reScript.FindAllStringSubmatch(rec.Body.String(), -1)
+		var scripts [][]string
+		for _, script := range reScript.FindAllStringSubmatch(rec.Body.String(), -1) {
+			if script[0] != sprintProgressDataTag {
+				scripts = append(scripts, script)
+			}
+		}
 		if len(scripts) != len(wantScripts) {
 			t.Errorf("%s: the page loads %d scripts, want %d", path, len(scripts), len(wantScripts))
 		}

@@ -2208,10 +2208,19 @@ class TestWebInterface:
             assert "<tr" not in main, f"{path}: a table row remains"
 
             # No script was added: the vendored bundle plus the page's own board
-            # script, all from /static/, under the unchanged policy.
-            scripts = re.findall(r"<script\b([^>]*)>", body)
+            # script and the Sprint progress card's chart library and gauge
+            # script, all from /static/, under the unchanged policy. The card's
+            # chart data block is a data block, not a script (SPEC/WEB.md
+            # § Sprint Detail Sub-Template, rule 7; Acceptance Criteria 293, 294).
+            data_block = ' type="application/json" id="sprint-progress-data"'
+            all_scripts = re.findall(r"<script\b([^>]*)>", body)
+            assert all_scripts.count(data_block) == 1, (
+                f"{path}: the page carries {all_scripts.count(data_block)} chart data blocks, want 1"
+            )
+            scripts = [s for s in all_scripts if s != data_block]
             srcs = {re.search(r'src="([^"]*)"', s).group(1) for s in scripts}
-            want_srcs = {"/static/vendor/tabler/tabler.min.js", "/static/sprint-board.js"}
+            want_srcs = {"/static/vendor/tabler/tabler.min.js", "/static/sprint-board.js",
+                         "/static/vendor/apexcharts/apexcharts.min.js", "/static/sprint-progress.js"}
             assert srcs == want_srcs and len(scripts) == len(want_srcs), (
                 f"{path}: unexpected scripts {srcs!r}"
             )
@@ -4155,13 +4164,14 @@ class TestWebInterface:
             card, pane = self._sprint_card(body, roadmap, sprint_id)
             assert pane == want_pane, f"sprint #{sprint_id} is under {pane}, want {want_pane}"
             assert '<div class="markdown mb-1">' in card, f"sprint #{sprint_id}: no markdown container"
-            for want in ("<strong>settlement</strong>", "window.<br>", "<li>export the settlement day</li>",
+            for want in ("<strong>settlement</strong>", "window.\nKeep the ledger frozen.", "<li>export the settlement day</li>",
                          "the runbook, https://example.org/status and flow chart.",
                          '<li class="task-list-item"><span class="task-list-marker">[x]</span> freeze announced</li>',
                          '<li class="task-list-item"><span class="task-list-marker">[ ]</span> residual published</li>',
                          "<h4>Runbook</h4>", '<pre class="chroma">',
                          "The last line of the description."):
                 assert want in card, f"sprint #{sprint_id}: the card lacks {want!r}"
+            assert "window.<br>" not in card, f"sprint #{sprint_id}: a single newline renders as <br>"
             assert "**" not in card.split("card-title")[1].split("</h4>")[1], (
                 f"sprint #{sprint_id}: literal asterisks are displayed in the description"
             )
@@ -4240,7 +4250,9 @@ class TestWebInterface:
         for label, card in (("functional", functional_card), ("technical", technical_card),
                             ("criteria", criteria_card), ("summary", summary_card)):
             assert card.count('<div class="markdown">') == 1, f"the {label} card has no single markdown container"
-        assert "<strong>residual</strong>" in functional_card and "<br>" in functional_card
+        assert "<strong>residual</strong>" in functional_card
+        assert "<strong>residual</strong>.\nPer settlement window" in functional_card
+        assert "<br" not in functional_card
         assert "<code>!time.Now().Before(exp)</code>" in technical_card
         self._assert_no_raw_html("technical requirements", technical_card)
         assert '<input checked="" disabled="" type="checkbox">' in criteria_card
@@ -4347,6 +4359,10 @@ class TestWebInterface:
                 "frame-ancestors 'none'; base-uri 'self'"
             ), f"{path}: the Content-Security-Policy changed"
             for attrs in re.findall(r"<script([^>]*)>", page):
+                # The sprint page's chart data block is a data block, not a
+                # script (SPEC/WEB.md Acceptance Criterion 293).
+                if attrs == ' type="application/json" id="sprint-progress-data"':
+                    continue
                 assert 'src="/static/' in attrs, f"{path}: an inline or remote script"
         _, _, page = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
         assert '<pre class="chroma">' in page and '<span class="kd">func</span>' in page
