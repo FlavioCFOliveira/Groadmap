@@ -507,13 +507,14 @@ type sprintDetail struct {
 }
 
 // sprintProgress is the Sprint progress card of the sprint page: the sprint's
-// total number of member tasks, the completed percentage at the gauge's centre,
-// the gauge container's aria-label, one legend entry per board column, and the
+// total number of member tasks, the card's subheader stating that total, the
+// completed percentage at the gauge's centre, the gauge container's aria-label, one legend entry per board column, and the
 // JSON data block the page script draws the gauge from (SPEC/WEB.md § Sprint
 // Detail Sub-Template, rule 7; SPEC/DATA_FORMATS.md § Sprint Progress Chart
 // Data). Every figure is computed here, on the server, so the card states every
 // number it carries without JavaScript.
 type sprintProgress struct {
+	Subheader        string
 	Label            string
 	Groups           []sprintProgressGroup
 	Chart            sprintProgressChart
@@ -591,6 +592,7 @@ func newSprintProgress(summary models.SprintSummary) sprintProgress {
 			progress.CompletedPercent = percent
 		}
 	}
+	progress.Subheader = sprintProgressSubheader(progress.Total)
 	progress.Label = sprintProgressLabel(progress.Total, progress.Groups, progress.CompletedPercent)
 	return progress
 }
@@ -617,6 +619,16 @@ func summaryCount(summary models.SprintSummary, category models.TaskStatusCatego
 // the gauge draws an arc in and whose legend-<colour> class the legend dot takes.
 func badgeColourName(variant string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(variant, "bg-"), "-lt")
+}
+
+// sprintProgressSubheader is the Sprint progress card's subheader, the card's
+// only statement of the sprint's total: "<t> Tasks", with "1 Task" for a total
+// of one (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7, Markup).
+func sprintProgressSubheader(total int) string {
+	if total == 1 {
+		return "1 Task"
+	}
+	return strconv.Itoa(total) + " Tasks"
 }
 
 // sprintProgressLabel is the gauge container's aria-label:

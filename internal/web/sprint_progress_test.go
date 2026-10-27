@@ -398,28 +398,24 @@ func TestSprintProgress_CardStatesTheTotal(t *testing.T) {
 	body := serveSprintProgress(t, f.path(f.twelve)).Body.String()
 
 	children := sprintProgressBody(t, body)
-	if len(children) != 4 {
-		t.Fatalf("the Sprint progress card-body holds %d children, want 4: %q", len(children), children)
+	if len(children) != 3 {
+		t.Fatalf("the Sprint progress card-body holds %d children, want 3: %q", len(children), children)
 	}
-	if children[0] != `<div class="subheader">Tasks</div>` {
-		t.Errorf("first child = %q, want the Tasks subheader", children[0])
-	}
-	if !strings.HasPrefix(children[1], `<div class="d-flex align-items-baseline mb-2">`) {
-		t.Errorf("second child = %q, want the d-flex value line", children[1])
-	}
-	value := childElements(t, children[1])
-	if len(value) != 1 || value[0] != `<div class="h1 mb-0 me-2">12</div>` {
-		t.Errorf("the value line holds %q, want exactly <div class=\"h1 mb-0 me-2\">12</div> and no trend indicator", value)
+	if children[0] != `<div class="subheader">12 Tasks</div>` {
+		t.Errorf("first child = %q, want the 12 Tasks subheader", children[0])
 	}
 	if !regexp.MustCompile(`^<div id="chart-sprint-progress" class="position-relative" role="img" aria-label="[^"]+"></div>$`).
-		MatchString(children[2]) {
-		t.Errorf("third child = %q, want the empty gauge container with an aria-label", children[2])
+		MatchString(children[1]) {
+		t.Errorf("second child = %q, want the empty gauge container with an aria-label", children[1])
 	}
-	if !strings.HasPrefix(children[3], `<div class="legend-list">`) {
-		t.Errorf("fourth child = %q, want the legend list", children[3])
+	if !strings.HasPrefix(children[2], `<div class="legend-list">`) {
+		t.Errorf("third child = %q, want the legend list", children[2])
 	}
 	card := sprintProgressCard(t, body)
-	for _, trend := range []string{"ti-trending", "<i ", "text-green", "text-red", "card-header"} {
+	if regexp.MustCompile(`class="(?:[^"]* )?h1(?: [^"]*)?"`).MatchString(card) {
+		t.Errorf("an element of the Sprint progress card carries the class h1: %q", card)
+	}
+	for _, trend := range []string{"ti-trending", "<i ", "text-green", "text-red", "card-header", "align-items-baseline"} {
 		if strings.Contains(card, trend) {
 			t.Errorf("the Sprint progress card carries %q", trend)
 		}
@@ -427,6 +423,11 @@ func TestSprintProgress_CardStatesTheTotal(t *testing.T) {
 
 	if got := strings.Join(boardColumnCounts(t, body), ","); got != "5,3,4" {
 		t.Errorf("the board's column counts are %s, want 5,3,4 (summing to the card's 12)", got)
+	}
+
+	one := sprintProgressBody(t, serveSprintProgress(t, f.path(f.one)).Body.String())
+	if len(one) != 3 || one[0] != `<div class="subheader">1 Task</div>` {
+		t.Errorf("the one-task sprint's card-body = %q, want three children opening with the 1 Task subheader", one)
 	}
 }
 
@@ -543,22 +544,23 @@ func TestSprintProgress_CompletedPercentIsRoundedDown(t *testing.T) {
 // TestSprintProgress_NewSprintProgress pins the derivation the card renders: the
 // summary counters per column, the floor percentages, the completed percentage,
 // the colours derived from each column's canonical status badge, and the
-// singular "1 task" of the label.
+// singular "1 task" of the label and "1 Task" of the subheader.
 func TestSprintProgress_NewSprintProgress(t *testing.T) {
 	for _, c := range []struct {
-		summary  models.SprintSummary
-		percents []int
-		done     int
-		label    string
+		summary   models.SprintSummary
+		percents  []int
+		done      int
+		label     string
+		subheader string
 	}{
 		{models.SprintSummary{TotalTasks: 12, Pending: 5, InProgress: 3, Completed: 4}, []int{41, 25, 33}, 33,
-			"12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed"},
+			"12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed", "12 Tasks"},
 		{models.SprintSummary{TotalTasks: 3, Pending: 1, Completed: 2}, []int{33, 0, 66}, 66,
-			"3 tasks: 1 waiting, 0 doing, 2 closed; 66% completed"},
+			"3 tasks: 1 waiting, 0 doing, 2 closed; 66% completed", "3 Tasks"},
 		{models.SprintSummary{TotalTasks: 1, Pending: 1}, []int{100, 0, 0}, 0,
-			"1 task: 1 waiting, 0 doing, 0 closed; 0% completed"},
+			"1 task: 1 waiting, 0 doing, 0 closed; 0% completed", "1 Task"},
 		{models.SprintSummary{}, []int{0, 0, 0}, 0,
-			"0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed"},
+			"0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed", "0 Tasks"},
 	} {
 		p := newSprintProgress(c.summary)
 		if !slices.Equal(p.Chart.TasksByColumn.Percents, c.percents) {
@@ -571,6 +573,9 @@ func TestSprintProgress_NewSprintProgress(t *testing.T) {
 		if p.CompletedPercent != c.done || p.Label != c.label || p.Total != c.summary.TotalTasks {
 			t.Errorf("%+v: completed %d label %q total %d, want %d, %q, %d",
 				c.summary, p.CompletedPercent, p.Label, p.Total, c.done, c.label, c.summary.TotalTasks)
+		}
+		if p.Subheader != c.subheader {
+			t.Errorf("%+v: subheader %q, want %q", c.summary, p.Subheader, c.subheader)
 		}
 		for i, g := range p.Groups {
 			if g.Heading != sprintBoardColumns[i].heading || g.Count != want[i] {
@@ -600,7 +605,7 @@ func TestSprintProgress_LegendAndLabelStateTheCounts(t *testing.T) {
 
 	body := serveSprintProgress(t, f.path(f.twelve)).Body.String()
 	children := sprintProgressBody(t, body)
-	entries := childElements(t, children[3])
+	entries := childElements(t, children[2])
 	want := []string{
 		`<span class="legend legend-cyan"><span class="legend-dot"></span>WAITING<span class="legend-value">5</span></span>`,
 		`<span class="legend legend-blue"><span class="legend-dot"></span>DOING<span class="legend-value">3</span></span>`,
@@ -609,8 +614,8 @@ func TestSprintProgress_LegendAndLabelStateTheCounts(t *testing.T) {
 	if strings.Join(entries, "\n") != strings.Join(want, "\n") {
 		t.Errorf("the legend holds\n%s\nwant\n%s", strings.Join(entries, "\n"), strings.Join(want, "\n"))
 	}
-	if !strings.Contains(children[2], `aria-label="12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed"`) {
-		t.Errorf("the gauge container = %q", children[2])
+	if !strings.Contains(children[1], `aria-label="12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed"`) {
+		t.Errorf("the gauge container = %q", children[1])
 	}
 
 	one := serveSprintProgress(t, f.path(f.one)).Body.String()
@@ -628,16 +633,16 @@ func TestSprintProgress_EmptySprintRendersTheCard(t *testing.T) {
 	body := serveSprintProgress(t, f.path(f.empty)).Body.String()
 
 	children := sprintProgressBody(t, body)
-	if len(children) != 4 {
-		t.Fatalf("the card-body holds %d children, want 4", len(children))
+	if len(children) != 3 {
+		t.Fatalf("the card-body holds %d children, want 3", len(children))
 	}
-	if innerText(children[1]) != "0" {
-		t.Errorf("the card's value = %q, want 0", innerText(children[1]))
+	if children[0] != `<div class="subheader">0 Tasks</div>` {
+		t.Errorf("the card's subheader = %q, want 0 Tasks", children[0])
 	}
-	if children[2] != `<div id="chart-sprint-progress" class="position-relative" role="img" aria-label="0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed"></div>` {
-		t.Errorf("the gauge container = %q", children[2])
+	if children[1] != `<div id="chart-sprint-progress" class="position-relative" role="img" aria-label="0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed"></div>` {
+		t.Errorf("the gauge container = %q", children[1])
 	}
-	entries := childElements(t, children[3])
+	entries := childElements(t, children[2])
 	if len(entries) != 3 {
 		t.Fatalf("the legend holds %d entries, want 3", len(entries))
 	}
@@ -655,7 +660,7 @@ func TestSprintProgress_EmptySprintRendersTheCard(t *testing.T) {
 // ==================== AC 293: NO JAVASCRIPT, SAME POLICY ====================
 
 // TestSprintProgress_NumbersNeedNoScriptAndCSPHolds is the server half of
-// Acceptance Criterion 293: the card's subheader, value, and legend counts are in
+// Acceptance Criterion 293: the card's subheader with the total, and the legend counts, are in
 // the served markup; every <script> other than the data block has a src and no
 // content; the card carries no style attribute; the policy is unchanged; and a
 // hostile sprint title never reaches the data block.
@@ -669,7 +674,7 @@ func TestSprintProgress_NumbersNeedNoScriptAndCSPHolds(t *testing.T) {
 		t.Errorf("Content-Security-Policy = %q, want %q", got, contentSecurityPolicy)
 	}
 	card := sprintProgressCard(t, body)
-	if got := strings.Join(strings.Fields(innerText(card)), " "); got != "Tasks 12 WAITING5 DOING3 CLOSED4" {
+	if got := strings.Join(strings.Fields(innerText(card)), " "); got != "12 Tasks WAITING5 DOING3 CLOSED4" {
 		t.Errorf("the card's served text is %q", got)
 	}
 	if strings.Contains(card, "style=") {

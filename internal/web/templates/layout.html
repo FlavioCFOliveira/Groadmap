@@ -300,16 +300,18 @@
             {{/*
               The Sprint progress card, modelled on the "Active Users" card of
               Tabler's preview dashboard (ActiveUsers2.astro, its gauge drawn by
-              ChartRadial.astro): no card-header, and a card-body of exactly four
-              children — the subheader, the sprint's total member-task count with
-              no trend indicator (a sprint has no prior period to compare with),
-              the gauge container, and the legend (SPEC/WEB.md § Sprint Detail
-              Sub-Template, rule 7; Acceptance Criteria 288 to 293).
+              ChartRadial.astro): no card-header, and a card-body of exactly three
+              children — the subheader stating the sprint's total member-task
+              count ("<t> Tasks", "1 Task" for one), the gauge container, and the
+              legend. The subheader is the card's only statement of the total: the
+              model's value row and its trend indicator are not reproduced
+              (SPEC/WEB.md § Sprint Detail Sub-Template, rule 7; Acceptance
+              Criteria 288 to 293).
 
               The three groups are the board's three columns and their counts the
               sprint summary counters models.CalculateSprintShowResult produces,
               so they always equal the column count badges. Every number is
-              rendered here, on the server: the total, the legend counts, and the
+              rendered here, on the server: the subheader's total, the legend counts, and the
               gauge container's aria-label, so the card states them without
               JavaScript. The container is empty in the served HTML;
               static/sprint-progress.js draws the gauge into it from the chart
@@ -320,10 +322,7 @@
             <div class="col-12 col-sm-6 col-lg-3">
               <div class="card">
                 <div class="card-body">
-                  <div class="subheader">Tasks</div>
-                  <div class="d-flex align-items-baseline mb-2">
-                    <div class="h1 mb-0 me-2">{{.Progress.Total}}</div>
-                  </div>
+                  <div class="subheader">{{.Progress.Subheader}}</div>
                   <div id="chart-sprint-progress" class="position-relative" role="img" aria-label="{{.Progress.Label}}"></div>
                   <div class="legend-list">
                     {{range .Progress.Groups}}<span class="legend legend-{{.Colour}}"><span class="legend-dot"></span>{{.Heading}}<span class="legend-value">{{.Count}}</span></span>

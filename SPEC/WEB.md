@@ -2359,8 +2359,8 @@ how the `rmp web` process itself terminates.
   at the row's leading edge, taking the width the other column leaves, and the
   Sprint progress card in a `<div class="col-12 col-sm-6 col-lg-3">` column to its
   right. Below the `lg` breakpoint the two stack, the Sprint details card first.
-  The Sprint progress card states the sprint's total number of member tasks and
-  draws a horseshoe gauge of three concentric arcs, one per board column, with the
+  The Sprint progress card states the sprint's total number of member tasks in its
+  subheader and draws a horseshoe gauge of three concentric arcs, one per board column, with the
   percentage of tasks completed at its centre and a legend of the three column
   counts below it (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
   rule 7). The gauge is drawn in the browser by the vendored ApexCharts library
@@ -3092,7 +3092,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      `Tasks` field. The page header already presents the sprint `title`,
      `Sprint #<ID>`, and the sprint's status badge (see
      [Roadmap Sprint Page](#roadmap-sprint-page)), and the Sprint progress card
-     beside it states the sprint's total task count, the sum of the member-tasks
+     beside it states, in its subheader, the sprint's total task count, the sum of the member-tasks
      board's three column counts, so a datagrid field for any of them would repeat
      what the page already shows. The
      sprint's execution `order` and its capacity (`max_tasks`) are not shown on
@@ -3761,20 +3761,20 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    release: the card `shared/components/cards/charts/ActiveUsers2.astro`, whose
    gauge is drawn by `shared/ui/ChartRadial.astro` of the Tabler repository.
    - **Markup.** The card is a `<div class="card">` with no `card-header`, whose
-     `<div class="card-body">` holds exactly these four children, in this order:
-     1. `<div class="subheader">Tasks</div>`;
-     2. one `<div class="d-flex align-items-baseline mb-2">` holding exactly one
-        child, `<div class="h1 mb-0 me-2"><t></div>`, where `<t>` is the sprint's
+     `<div class="card-body">` holds exactly these three children, in this order:
+     1. `<div class="subheader"><t> Tasks</div>`, where `<t>` is the sprint's
         total number of member tasks (`Summary.TotalTasks`, the sum of the
         board's three column counts), written as a count (see
         [Roadmap Dashboard Page](#roadmap-dashboard-page), **Definitions shared by
-        every block**, item 7). The trend indicator the model places after the
-        value is not reproduced: a sprint has no prior period to compare with;
-     3. the gauge container,
+        every block**, item 7); `<t> Tasks` is written `1 Task` when `<t>` is `1`.
+        The subheader is the card's only statement of the total: the card holds
+        no separate value element, so the value row the model places below its
+        subheader, and the trend indicator in it, are not reproduced;
+     2. the gauge container,
         `<div id="chart-sprint-progress" class="position-relative" role="img" aria-label="<label>"></div>`,
         empty in the served HTML, where `<label>` is the label given under
         **Accessible label** below;
-     4. the legend (see **Legend** below).
+     3. the legend (see **Legend** below).
 
      No element of the card carries a `style` attribute
      ([UI Framework](#ui-framework), rule 10).
@@ -3824,7 +3824,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      `SPRINT`, 3 in `DOING` or `TESTING`, and 4 in `COMPLETED`, it reads
      `12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed`.
    - **Always rendered.** The card is rendered for every sprint, including a
-     sprint with no member task: its value reads `0`, its gauge container is
+     sprint with no member task: its subheader reads `0 Tasks`, its gauge container is
      present, its three arcs are empty, its centre reads `COMPLETED` and `0%`,
      each legend entry reads `0`, and its `aria-label` reads
      `0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed`. The card has no empty
@@ -3850,7 +3850,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      into its container. It fetches nothing: the data block is its only data
      source. It does not touch the member-tasks board, whose behaviour belongs to
      `static/sprint-board.js` alone (rule 3, **Column collapse**).
-   - **Without JavaScript.** The subheader, the total, the legend with its three
+   - **Without JavaScript.** The subheader with the total, the legend with its three
      counts, and the gauge's `aria-label` are rendered on the server, so every
      number the card states is readable without JavaScript. Only the drawing of
      the gauge needs the script.
@@ -10720,14 +10720,14 @@ Rules:
 288. **The Sprint progress card states the sprint's total.** For a sprint of 12
     member tasks — 5 in `SPRINT`, 2 in `DOING`, 1 in `TESTING`, and 4 in
     `COMPLETED` — the Sprint progress card has no `card-header`, and its
-    `card-body` holds exactly four children, in this order: a
-    `<div class="subheader">` reading `Tasks`; one
-    `<div class="d-flex align-items-baseline mb-2">` whose only child is a
-    `<div class="h1 mb-0 me-2">` reading `12`; the gauge container
+    `card-body` holds exactly three children, in this order: a
+    `<div class="subheader">` reading `12 Tasks`; the gauge container
     `<div id="chart-sprint-progress" class="position-relative" role="img">` with an
     `aria-label` and no content; and one `<div class="legend-list">`. The card
-    holds no trend indicator, and its value `12` equals the sum of the board's
-    three column count badges, `5`, `3`, and `4`.
+    holds no element carrying the class `h1` and no trend indicator, and the total
+    `12` its subheader states equals the sum of the board's three column count
+    badges, `5`, `3`, and `4`. For a sprint of one member task, the subheader reads
+    `1 Task`.
 289. **The gauge draws three series, in column order and column colours.** For the
     sprint of Acceptance Criterion 288, the sprint page holds exactly one
     `<script type="application/json" id="sprint-progress-data">` element, whose
@@ -10761,15 +10761,15 @@ Rules:
     `aria-label="1 task: 1 waiting, 0 doing, 0 closed; 0% completed"`.
 292. **A sprint with no member task renders the card.** For a sprint with no member
     task, the sprint page returns HTTP 200 and renders the Sprint progress card
-    with the value `0`, the gauge container carrying
+    with the subheader `0 Tasks`, the gauge container carrying
     `aria-label="0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed"`, three legend
     entries each reading `0`, and a chart data block whose counts and percents are
     all `0`. In a browser the gauge is drawn with three empty arcs and its centre
     shows `COMPLETED` and `0%`.
 293. **The card's numbers need no JavaScript, and the page keeps its
     Content-Security-Policy.** With scripting disabled, the sprint page of the
-    sprint of Acceptance Criterion 288 still shows the subheader `Tasks`, the value
-    `12`, and the legend counts `5`, `3`, and `4`. Every `<script>` element of the
+    sprint of Acceptance Criterion 288 still shows the subheader `12 Tasks` and the
+    legend counts `5`, `3`, and `4`. Every `<script>` element of the
     sprint page other than the chart data block carries a `src` attribute and no
     content, no element of the Sprint progress card carries a `style` attribute,
     and the response's `Content-Security-Policy` header is exactly the value of
