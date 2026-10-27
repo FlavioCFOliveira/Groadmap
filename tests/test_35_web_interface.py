@@ -4164,13 +4164,14 @@ class TestWebInterface:
             card, pane = self._sprint_card(body, roadmap, sprint_id)
             assert pane == want_pane, f"sprint #{sprint_id} is under {pane}, want {want_pane}"
             assert '<div class="markdown mb-1">' in card, f"sprint #{sprint_id}: no markdown container"
-            for want in ("<strong>settlement</strong>", "window.<br>", "<li>export the settlement day</li>",
+            for want in ("<strong>settlement</strong>", "window.\nKeep the ledger frozen.", "<li>export the settlement day</li>",
                          "the runbook, https://example.org/status and flow chart.",
                          '<li class="task-list-item"><span class="task-list-marker">[x]</span> freeze announced</li>',
                          '<li class="task-list-item"><span class="task-list-marker">[ ]</span> residual published</li>',
                          "<h4>Runbook</h4>", '<pre class="chroma">',
                          "The last line of the description."):
                 assert want in card, f"sprint #{sprint_id}: the card lacks {want!r}"
+            assert "window.<br>" not in card, f"sprint #{sprint_id}: a single newline renders as <br>"
             assert "**" not in card.split("card-title")[1].split("</h4>")[1], (
                 f"sprint #{sprint_id}: literal asterisks are displayed in the description"
             )
@@ -4249,7 +4250,9 @@ class TestWebInterface:
         for label, card in (("functional", functional_card), ("technical", technical_card),
                             ("criteria", criteria_card), ("summary", summary_card)):
             assert card.count('<div class="markdown">') == 1, f"the {label} card has no single markdown container"
-        assert "<strong>residual</strong>" in functional_card and "<br>" in functional_card
+        assert "<strong>residual</strong>" in functional_card
+        assert "<strong>residual</strong>.\nPer settlement window" in functional_card
+        assert "<br" not in functional_card
         assert "<code>!time.Now().Before(exp)</code>" in technical_card
         self._assert_no_raw_html("technical requirements", technical_card)
         assert '<input checked="" disabled="" type="checkbox">' in criteria_card

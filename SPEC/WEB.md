@@ -5324,11 +5324,22 @@ the way out, on every request, and the CLI's output of these fields is unchanged
    The renderer does **not** enable raw HTML output, the attribute syntax that
    lets an author attach an `id`, a `class`, or any other attribute to an element,
    or automatic heading identifiers.
-4. **Plain text remains valid Markdown, and a single newline is a line break.**
+4. **Plain text remains valid Markdown, and line breaks follow CommonMark.**
    Text written without any Markdown syntax renders as paragraphs: a blank line
-   separates two paragraphs. A single newline inside a paragraph renders as a line
-   break (`<br>`), not as the space CommonMark's soft line break would produce,
-   so every line break the author entered stays visible.
+   separates two paragraphs. Line breaks inside a paragraph follow CommonMark
+   0.31.2 (https://spec.commonmark.org/0.31.2/), sections 6.7, Hard line breaks,
+   and 6.8, Soft line breaks, which GitHub Flavored Markdown inherits:
+   - A single newline inside a paragraph is a **soft line break**. It renders as
+     a newline in the HTML source and no `<br>` element, so the browser displays
+     it as a space and the two lines join into one wrapped line.
+   - A newline preceded by two or more spaces, or by a backslash (`\`), at the end
+     of the line is a **hard line break**. It renders as a `<br>` element, so the
+     author forces a visible line break with either form.
+
+   The renderer does not enable goldmark's hard-wraps option, which would turn
+   every soft line break into `<br>`. This rule governs the Markdown fields only:
+   plain multi-line free-text, which is not Markdown, keeps every authored line
+   break visible (see [Frontend Rules](#frontend-rules), rule 6).
 5. **Headings are demoted.** A heading in a Markdown field never outranks the
    structure of the page it appears in. A level-1 heading (`#`, or a
    Setext heading underlined with `=`) renders as `<h4>`, a level-2 heading (`##`,
@@ -5610,7 +5621,7 @@ the way out, on every request, and the CLI's output of these fields is unchanged
 
     This styling adds to the HTML the renderer emits only the fixed task-list
     classes of rules 3 and 14, which carry no text of the author's and change no
-    visible text, and it changes nothing else in rules 1 to 12, 14, and 15: the line breaks of rule 4, the heading demotion of
+    visible text, and it changes nothing else in rules 1 to 12, 14, and 15: the soft and hard line breaks of rule 4, the heading demotion of
     rule 5, the Content-Security-Policy, and every safety property stay as they
     are.
 14. **The non-interactive form, for content placed inside a link.** The sprint
@@ -5630,7 +5641,7 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       the `task-list-item` class of rule 3, which the ordinary form gives it too,
       so one rule of rule 13 styles the task-list item in both forms.
 
-    Everything else — the accepted Markdown, the line breaks, the demoted
+    Everything else — the accepted Markdown, the soft and hard line breaks of rule 4, the demoted
     headings, the highlighting, the filtering, the footnote identifier prefix, and
     the container — is identical to the ordinary form. The sprint card is the only
     surface that uses the non-interactive form.
@@ -7634,8 +7645,10 @@ Rules:
     every comment `body` shown in the task page's Comments card and in the sprint
     Comments card, and a sprint's `description` on the roadmap sprints page (across
     all three tabs) and on the roadmap sprint page — are not plain text: each renders
-    as Markdown, and its authored single newlines render as line breaks (Acceptance
-    Criterion 180).
+    as Markdown, under CommonMark's line-break semantics: an authored single newline
+    is a soft line break displayed as a space, and only a hard line break (two or
+    more trailing spaces, or a trailing backslash) renders as `<br>` (see
+    [Markdown Rendering](#markdown-rendering), rule 4, and Acceptance Criterion 180).
 33. Every HTML response carries the security headers: `Content-Security-Policy`
     with the value `default-src 'self'; script-src 'self'; style-src 'self'
     'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';
@@ -9461,8 +9474,8 @@ Rules:
 180. **Every Markdown field renders as Markdown, on every surface that shows it.**
     A field value holding a `**bold**` span, a bulleted list, and two lines
     separated by a single newline renders `<strong>`, `<ul>` with `<li>` items, and
-    a `<br>` between the two lines, inside a `<div class="markdown">`, and the
-    literal asterisks are not displayed. The check MUST cover each of the seven
+    the two lines in one paragraph separated by a newline and no `<br>`, inside a
+    `<div class="markdown">`, and the literal asterisks are not displayed. The check MUST cover each of the seven
     fields on each of its surfaces: the task `functional_requirements`,
     `technical_requirements`, `acceptance_criteria`, and `completion_summary` on
     the task page; a task comment `body` in the task page's Comments card;
@@ -9471,7 +9484,11 @@ Rules:
     Concluídos, and on the roadmap sprint page. A surface that still shows escaped
     text passes on every other surface, so no surface is left unchecked. A value
     written with no Markdown syntax renders as paragraphs, a blank line separating
-    two of them and a single newline rendering as `<br>`. A task `title` and a
+    two of them. Line breaks follow CommonMark: the value `a`, newline, `b` renders
+    exactly `<p>a\nb</p>` (a soft line break: a newline character in the HTML and
+    no `<br>`); the value `a`, two spaces, newline, `b` and the value `a`,
+    backslash, newline, `b` (hard line breaks) each render exactly
+    `<p>a<br>\nb</p>`, the trailing spaces and the backslash not displayed. A task `title` and a
     sprint `title` containing `**bold**` still display the asterisks as text (see
     [Markdown Rendering](#markdown-rendering), rules 1 to 4).
 181. **The GitHub Flavored Markdown extensions, footnotes, and definition lists
@@ -9712,7 +9729,7 @@ Rules:
     rendered Markdown has a selector scoped to `.markdown`, no template or
     renderer output carries a `style` attribute for it, and the only markup the
     typography adds to the renderer's output is the `task-list-item` class and
-    the `task-list-marker` span of Acceptance Criterion 200. Acceptance Criteria 180 to 194 continue to hold: the line breaks, the
+    the `task-list-marker` span of Acceptance Criterion 200. Acceptance Criteria 180 to 194 continue to hold: the soft and hard line breaks, the
     heading demotion, the Content-Security-Policy, and every safety property of
     rendered Markdown are unchanged (see
     [Markdown Rendering](#markdown-rendering), rule 13).

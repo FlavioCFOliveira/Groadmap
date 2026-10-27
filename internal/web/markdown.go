@@ -79,7 +79,10 @@ var markdownRenderers = [...]goldmark.Markdown{
 //     no other extension. Raw HTML output is left disabled (goldmark's default),
 //     so raw HTML is omitted; neither the attribute syntax nor automatic heading
 //     identifiers is enabled.
-//   - Hard wraps: a single newline inside a paragraph renders as <br>.
+//   - CommonMark line breaks: a single newline inside a paragraph is a soft line
+//     break, rendered as a newline and no <br>; a newline preceded by two or more
+//     spaces or by a backslash is a hard line break, rendered as <br>. Goldmark's
+//     hard-wraps option is deliberately left disabled.
 //   - Fenced code blocks are highlighted by chroma, through the renderer's own
 //     codeHighlighting extension, with CSS classes and never inline styles, by
 //     the declared language only.
@@ -100,7 +103,6 @@ func newMarkdownRenderer(form markdownForm) goldmark.Markdown {
 			parser.WithASTTransformers(util.Prioritized(markdownTransformer{}, 100)),
 		),
 		goldmark.WithRendererOptions(
-			html.WithHardWraps(),
 			// A lower value is a higher priority in goldmark, and the renderer
 			// registered with the highest priority wins a node kind: 100 takes the
 			// link, autolink, and image kinds from the core renderer (1000) and,
