@@ -17,12 +17,6 @@ import (
 // that reaches SQLite is counted, and every one is checked to have run inside the
 // one transaction ReadDashboard begins.
 
-// dashboardWindow is a throughput window in the canonical timestamp form.
-const (
-	dashboardWindowStart = "2026-08-10T00:00:00.000Z"
-	dashboardWindowEnd   = "2026-11-02T00:00:00.000Z"
-)
-
 // seedDashboardRoadmap fills a counting database with taskCount tasks spread
 // over every status, three CLOSED sprints, one PENDING sprint, and, when
 // withOpen is set, one OPEN sprint holding five of the tasks. The sprints and
@@ -98,16 +92,16 @@ func seedDashboardRoadmap(t *testing.T, database *DB, taskCount int, withOpen bo
 }
 
 // TestReadDashboard_FixedStatementCountInOneTransaction is the statement half of
-// Acceptance Criterion 283: the dashboard issues ten statements with no sprint
-// OPEN and eleven with one, the same number for 10 tasks and for 1,000, every one
+// Acceptance Criteria 274 and 283: the dashboard issues eight statements with no
+// sprint OPEN and nine with one, the same number for 10 tasks and for 1,000, every one
 // of them inside the single read-only transaction ReadDashboard begins.
 func TestReadDashboard_FixedStatementCountInOneTransaction(t *testing.T) {
 	for _, tc := range []struct {
 		withOpen bool
 		want     int
 	}{
-		{withOpen: false, want: 10},
-		{withOpen: true, want: 11},
+		{withOpen: false, want: 8},
+		{withOpen: true, want: 9},
 	} {
 		counts := map[int]int{}
 		for _, tasks := range []int{10, 1000} {
@@ -115,7 +109,7 @@ func TestReadDashboard_FixedStatementCountInOneTransaction(t *testing.T) {
 			seedDashboardRoadmap(t, database, tasks, tc.withOpen)
 
 			counter.reset()
-			d, err := database.ReadDashboard(context.Background(), dashboardWindowStart, dashboardWindowEnd)
+			d, err := database.ReadDashboard(context.Background())
 			if err != nil {
 				cleanup()
 				t.Fatalf("open=%v tasks=%d: ReadDashboard: %v", tc.withOpen, tasks, err)
@@ -156,7 +150,7 @@ func TestReadDashboard_CountsAreAggregatedInTheDatabase(t *testing.T) {
 	defer cleanup()
 	seedDashboardRoadmap(t, database, 1000, true)
 
-	d, err := database.ReadDashboard(context.Background(), dashboardWindowStart, dashboardWindowEnd)
+	d, err := database.ReadDashboard(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDashboard: %v", err)
 	}
@@ -181,14 +175,12 @@ func TestReadDashboard_CountsAreAggregatedInTheDatabase(t *testing.T) {
 // is a bound parameter (SPEC/DATABASE.md § Dashboard Queries, Parameterised).
 func TestDashboardStatements_BindEveryValue(t *testing.T) {
 	statements := map[string]string{
-		"type and status":  dashboardTypeStatusQuery,
-		"blocked":          dashboardBlockedQuery,
-		"open sprint":      dashboardOpenSprintQuery,
-		"created per week": dashboardCreatedPerWeekQuery,
-		"closed per week":  dashboardCompletedPerWeekQuery,
-		"in progress":      dashboardInProgressQuery,
-		"most severe":      dashboardSevereQuery,
-		"upcoming":         dashboardUpcomingQuery,
+		"type and status": dashboardTypeStatusQuery,
+		"blocked":         dashboardBlockedQuery,
+		"open sprint":     dashboardOpenSprintQuery,
+		"in progress":     dashboardInProgressQuery,
+		"most severe":     dashboardSevereQuery,
+		"upcoming":        dashboardUpcomingQuery,
 	}
 	literals := []string{"'COMPLETED'", "'OPEN'", "'CLOSED'", "'PENDING'", "'DOING'", "'TESTING'"}
 	for name, q := range statements {

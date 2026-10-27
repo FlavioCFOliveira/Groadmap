@@ -1012,10 +1012,11 @@ class TestWebInterface:
         """The Open tasks, Completed, and Backlog KPI cards each carry a donut of
         their tasks by type, fed by tasks_by_type {types, open, completed,
         backlog}; a card whose value is 0 renders no donut column; the Tasks by
-        type, Tasks by status, and Tasks per sprint blocks are gone, and
-        Throughput stands in a col-lg-6 beside Current sprint (SPEC/WEB.md
-        § Roadmap Dashboard Page; SPEC/DATA_FORMATS.md § Dashboard Chart Data;
-        Acceptance Criteria 271, 272, 273, 279, and 286)."""
+        type, Tasks by status, Tasks per sprint, and Throughput blocks are gone;
+        Current sprint takes a col-12 of its own and draws no chart; and the chart
+        data block holds tasks_by_type alone (SPEC/WEB.md § Roadmap Dashboard
+        Page; SPEC/DATA_FORMATS.md § Dashboard Chart Data; Acceptance Criteria
+        269, 270, 271, 272, 273, 274, 279, and 286)."""
         self._seed_dashboard_roadmap("ledger-close", [
             ("Draft the intercompany elimination entries", "TASK", "BACKLOG"),
             ("Document the accrual reversal schedule", "TASK", "BACKLOG"),
@@ -1038,7 +1039,7 @@ class TestWebInterface:
             r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S)
         assert len(blocks) == 1, "the dashboard must carry exactly one chart data block"
         data = json.loads(blocks[0])
-        assert list(data) == ["tasks_by_type", "throughput", "burndown"], (
+        assert list(data) == ["tasks_by_type"], (
             f"the chart data block's members are {list(data)}")
         assert data["tasks_by_type"] == {
             "types": ["TASK", "BUG", "CHORE"],
@@ -1068,10 +1069,29 @@ class TestWebInterface:
                         "tasks-by-type", "tasks-by-status", "tasks-per-sprint",
                         "tasks_by_status", "tasks_per_sprint"):
             assert removed not in body, f"the dashboard still carries {removed!r}"
+        for removed in ('<h3 class="card-title">Throughput</h3>', 'data-role="throughput"',
+                        "chart-lg", "chart-burndown", "chart-throughput",
+                        "No activity in the last 12 weeks", "No completed task yet"):
+            assert removed not in body, f"the dashboard still carries {removed!r}"
+        # Current sprint stands alone in a col-12, directly before Work in
+        # progress in its col-lg-6, and its card draws no chart although its
+        # OPEN sprint holds a COMPLETED member.
         assert re.search(
-            r'<div class="col-lg-6">\s*<div class="card" data-role="current-sprint">.*?</div>\s*'
-            r'<div class="col-lg-6">\s*<div class="card" data-role="throughput">', body, re.S), (
-            "Throughput must stand in a col-lg-6 directly after Current sprint")
+            r'<div class="col-12">\s*<div class="card" data-role="current-sprint">', body), (
+            "Current sprint must stand in a col-12")
+        cols = [c for c in re.findall(r'<div class="(col-[^"]+)">', body) if c != "col-auto"]
+        assert cols[4:7] == ["col-12", "col-lg-6", "col-lg-6"], (
+            f"the grid columns after the KPI row are {cols[4:7]}")
+        sprint_card = self._kpi_card(body, "current-sprint")
+        assert "COMPLETED<span class=\"legend-value\">2</span>" in sprint_card, (
+            "the OPEN sprint must hold a COMPLETED member, or the no-burndown check is vacuous")
+        assert ">50% complete<" in sprint_card and "progress-stacked" in sprint_card, (
+            "the Current sprint card must keep its completion line and its status breakdown")
+        for absent in ("chart-", 'role="img"', "burndown", "Burndown", '<div class="empty">'):
+            assert absent not in sprint_card, f"the Current sprint card carries {absent!r}"
+        charts = re.findall(r'<div [^>]*id="(chart-[a-z-]+)"', body)
+        assert charts == ["chart-open-by-type", "chart-completed-by-type", "chart-backlog-by-type"], (
+            f"the dashboard's charts are {charts}; only the three KPI donuts may remain")
         assert 'style="' not in body, "the dashboard must carry no style attribute"
 
         # Every task COMPLETED: Open tasks and Backlog read 0 and draw no donut.
@@ -1092,7 +1112,11 @@ class TestWebInterface:
             "an empty roadmap must render no type-breakdown donut")
         data = json.loads(re.search(
             r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S).group(1))
-        assert data["tasks_by_type"] == {"types": [], "open": [], "completed": [], "backlog": []}
+        assert data == {"tasks_by_type": {"types": [], "open": [], "completed": [], "backlog": []}}, (
+            f"the empty roadmap's chart data block is {data}")
+        assert "Throughput" not in body and "chart-lg" not in body, (
+            "a roadmap with no OPEN sprint must render no Throughput card and no chart-lg")
+        assert "No open sprint" in self._kpi_card(body, "current-sprint")
 
     def test_index_empty_state_when_no_roadmaps(self):
         proc, port = self._start(["--port", "0"], home=self._fresh_home())

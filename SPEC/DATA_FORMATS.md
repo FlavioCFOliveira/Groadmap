@@ -1619,16 +1619,7 @@ is canonical for the shape.
     "open": [4, 3, 1],
     "completed": [2, 1, 1],
     "backlog": [2, 0, 1]
-  },
-  "throughput": {
-    "weeks": ["2026-08-10", "2026-08-17", "2026-08-24", "2026-08-31", "2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28", "2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"],
-    "created": [0, 2, 1, 0, 3, 0, 1, 2, 0, 1, 1, 1],
-    "completed": [0, 0, 1, 1, 0, 2, 0, 0, 1, 0, 1, 0]
-  },
-  "burndown": [
-    {"date": "2026-10-23", "tasks_remaining": 6},
-    {"date": "2026-10-25", "tasks_remaining": 5}
-  ]
+  }
 }
 ```
 
@@ -1640,32 +1631,22 @@ Field reference:
 | `tasks_by_type.open` | array of integer | Per entry of `types`, the number of open tasks of that type. |
 | `tasks_by_type.completed` | array of integer | Per entry of `types`, the number of tasks of that type whose status is `COMPLETED`. |
 | `tasks_by_type.backlog` | array of integer | Per entry of `types`, the number of tasks of that type whose status is `BACKLOG`. Each entry is at most the corresponding entry of `open`, and may be `0`. |
-| `throughput.weeks` | array of string | The date of the Monday that begins each of the twelve weeks, `YYYY-MM-DD`, oldest first. |
-| `throughput.created` | array of integer | Per entry of `weeks`, the number of tasks created in that week. |
-| `throughput.completed` | array of integer | Per entry of `weeks`, the number of `COMPLETED` tasks whose `closed_at` falls in that week. |
-| `burndown` | array of object | The current sprint's burndown series, each entry in the `BurndownEntry` shape `{"date", "tasks_remaining"}` (see `MODELS.md § BurndownEntry`), exactly as `rmp sprint stats` reports it. |
 
 Rules:
 
-1. All three members are always present, in the order shown, whatever the
-   roadmap holds. An array with nothing to hold is `[]`, never `null`, and no
-   member is ever omitted (see [Implementation Notes](#implementation-notes)).
-2. The parallel arrays of one member always have the same length:
-   `tasks_by_type.open`, `tasks_by_type.completed`, and `tasks_by_type.backlog`
-   have one entry per entry of `tasks_by_type.types`, which holds at most ten; and
-   the three arrays of `throughput` have exactly twelve entries each.
+1. The object's one member, `tasks_by_type`, and its four arrays are always
+   present, in the order shown, whatever the roadmap holds. An array with nothing
+   to hold is `[]`, never `null`, and no member is ever omitted (see
+   [Implementation Notes](#implementation-notes)).
+2. The parallel arrays always have the same length: `tasks_by_type.open`,
+   `tasks_by_type.completed`, and `tasks_by_type.backlog` have one entry per entry
+   of `tasks_by_type.types`, which holds at most ten.
 3. For a roadmap with no task, `tasks_by_type.types` and its three count arrays are
-   `[]`, and every value of `throughput.created` and `throughput.completed` is
-   `0`. With no sprint `OPEN`, or an `OPEN` sprint none of whose member tasks is completed,
-   `burndown` is `[]`.
-4. The object carries enum values, counts, and dates only. It carries
+   `[]`.
+4. The object carries enum values and counts only. It carries
    no task or sprint title, no description, no comment, and no other free text a
    user authored.
-5. The `date` of a `burndown` entry and each entry of `throughput.weeks` are
-   calendar dates in the form `YYYY-MM-DD`, in UTC, the date form of
-   `MODELS.md § BurndownEntry`; neither is a timestamp in the sense of
-   [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc), and no member carries
-   a timestamp.
+5. The object carries no date and no timestamp.
 6. Every number is a JSON integer.
 7. The object is written into the page by `html/template`, which serialises it as
    JSON and escapes `<`, `>`, and `&` within it, so the element's content can never

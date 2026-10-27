@@ -2092,12 +2092,11 @@ read.
 
 **Bounded and fixed in number.** Every count is computed by the database with
 `COUNT` and, where it is per group, `GROUP BY`; every list carries a `LIMIT` equal
-to its row cap; the throughput counts are bounded to their window by their
-predicate. No statement returns every task row, and the page issues no statement
-per task, per sprint, or per row. The page issues exactly the statements below,
-in any order: the eight statements of this section — one per subsection, and two
-for the weekly throughput — every one of them always issued, plus the three
-reads defined elsewhere —
+to its row cap. No statement returns every task row, and the page issues no
+statement per task, per sprint, or per row. The page issues exactly the
+statements below, in any order: the six statements of this section — one per
+subsection — every one of them always issued, plus the three reads defined
+elsewhere —
 
 - the average-velocity read and the sprint-statistics member read of
   `Join Order of the Sprint Completion Counts` (under Performance Optimization
@@ -2106,11 +2105,11 @@ reads defined elsewhere —
 - the audit read of `Query Audit Entries` above, with no predicate, `LIMIT 10`, and
   no `OFFSET`.
 
-The number of statements is therefore ten with no sprint `OPEN` and eleven with
+The number of statements is therefore eight with no sprint `OPEN` and nine with
 one, whatever the number of tasks, sprints, or audit entries.
 
-**Parameterised.** Every status value, every bound of the throughput window, and
-every row cap is a bound parameter; none is concatenated into the SQL.
+**Parameterised.** Every status value and every row cap is a bound parameter;
+none is concatenated into the SQL.
 
 #### Dashboard Task Counts by Type and Status
 
@@ -2178,48 +2177,9 @@ WHERE status = ?;                            -- 'OPEN'
 unique index `idx_one_open_sprint` both enforces that and serves this search (see
 `sprints` Table above). When the statement returns a row, the page issues the
 sprint-statistics member read of `Join Order of the Sprint Completion Counts`
-over that sprint's id; the sprint's member count, its count per status, its active
-count against `max_tasks`, and its burndown are all derived from that one member
-read, exactly as `rmp sprint stats` and `rmp sprint show` derive theirs.
-
-#### Dashboard Weekly Throughput
-
-Returns, per ISO 8601 week of the throughput window, the number of tasks created
-in it and the number of `COMPLETED` tasks closed in it, as two statements.
-
-```sql
--- Tasks created per week
-SELECT date(created_at, '-6 days', 'weekday 1') AS week_start, COUNT(*) AS task_count
-FROM tasks
-WHERE created_at >= ? AND created_at < ?     -- window start, window end
-GROUP BY week_start
-ORDER BY week_start ASC;
-
--- Tasks completed per week
-SELECT date(closed_at, '-6 days', 'weekday 1') AS week_start, COUNT(*) AS task_count
-FROM tasks
-WHERE status = ?                             -- 'COMPLETED'
-  AND closed_at >= ? AND closed_at < ?       -- window start, window end
-GROUP BY week_start
-ORDER BY week_start ASC;
-```
-
-**The window.** The window start is the Monday that begins the oldest of the
-twelve weeks, and the window end the Monday after the week that contains the
-request instant, each bound as a timestamp at `00:00:00.000` UTC in the canonical
-format of `DATA_FORMATS.md § Dates - ISO 8601 with UTC`. Stored timestamps share
-that fixed-width format, so the string comparison orders them as instants.
-
-**The week.** `date(x, '-6 days', 'weekday 1')` is the date of the Monday on or
-before `x`: stepping back six days and then forward to the next Monday lands on
-the Monday of `x`'s own week. A week no task falls in produces no row, and the
-caller fills it with `0`, so the page always holds twelve values per series.
-
-**Index.** The created count is a covering range search of
-`idx_tasks_created_at`. The completed count searches `idx_tasks_status_priority`
-for the `COMPLETED` tasks and reads `closed_at` from each, because no index
-carries `closed_at`; it returns at most twelve rows and loads no task row into
-the application. No index is added for either.
+over that sprint's id; the sprint's member count, its count per status, and its
+active count against `max_tasks` are all derived from that one member read,
+exactly as `rmp sprint stats` and `rmp sprint show` derive theirs.
 
 #### Dashboard Tasks in Progress
 

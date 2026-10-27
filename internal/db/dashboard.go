@@ -11,20 +11,20 @@ import (
 // This file holds the reads of the web interface's dashboard page
 // (SPEC/DATABASE.md § Dashboard Queries; SPEC/WEB.md § Roadmap Dashboard Page).
 //
-// The page states every figure it shows from the eight statements below and from
+// The page states every figure it shows from the six statements below and from
 // three reads defined elsewhere in this package — the average-velocity read and
 // the sprint-statistics member read of § Join Order of the Sprint Completion
 // Counts, and the audit read of § Query Audit Entries — all issued inside ONE
 // read-only transaction, so every figure reads the same committed state. The
-// number of statements is fixed: ten with no sprint OPEN and eleven with one,
-// whatever the number of tasks, sprints, or audit entries. Every status value,
-// every bound of the throughput window, and every row cap is a bound parameter.
+// number of statements is fixed: eight with no sprint OPEN and nine with one,
+// whatever the number of tasks, sprints, or audit entries. Every status value and
+// every row cap is a bound parameter.
 //
 // The statements are package-level so a test can plan and count the exact SQL
 // production runs.
 
 // The row caps of the dashboard's bounded reads (SPEC/WEB.md § Roadmap Dashboard
-// Page, blocks 4, 5, 6, and 7) and the number of closed sprints the average
+// Page, blocks 3, 4, 5, and 6) and the number of closed sprints the average
 // velocity covers (SPEC/COMMANDS.md § Get Roadmap Statistics).
 const (
 	dashboardInProgressCap    = 10
@@ -56,24 +56,6 @@ WHERE t.status <> ?
 	dashboardOpenSprintQuery = `SELECT id, title, started_at, max_tasks
 FROM sprints
 WHERE status = ?`
-
-	// dashboardCreatedPerWeekQuery is the first statement of § Dashboard Weekly
-	// Throughput. Its parameters are the window start and the window end.
-	dashboardCreatedPerWeekQuery = `SELECT date(created_at, '-6 days', 'weekday 1') AS week_start, COUNT(*) AS task_count
-FROM tasks
-WHERE created_at >= ? AND created_at < ?
-GROUP BY week_start
-ORDER BY week_start ASC`
-
-	// dashboardCompletedPerWeekQuery is the second statement of § Dashboard
-	// Weekly Throughput. Its parameters are 'COMPLETED', the window start, and
-	// the window end.
-	dashboardCompletedPerWeekQuery = `SELECT date(closed_at, '-6 days', 'weekday 1') AS week_start, COUNT(*) AS task_count
-FROM tasks
-WHERE status = ?
-  AND closed_at >= ? AND closed_at < ?
-GROUP BY week_start
-ORDER BY week_start ASC`
 
 	// dashboardInProgressQuery is § Dashboard Tasks in Progress. Its parameters
 	// are 'DOING', 'TESTING', and the row cap.
@@ -119,13 +101,6 @@ type DashboardSprint struct {
 	ID        int
 }
 
-// WeekCount is the number of tasks of one ISO 8601 week, keyed by the date of
-// the week's Monday, YYYY-MM-DD. A week no task falls in has no row.
-type WeekCount struct {
-	WeekStart string
-	Count     int
-}
-
 // DashboardTask is one row of the dashboard's Work in progress or
 // Highest-severity open tasks card-table. Each read fills the columns its card
 // shows: Status and StartedAt for the tasks in progress, Severity and Priority
@@ -154,8 +129,6 @@ type Dashboard struct {
 	OpenSprint        *DashboardSprint
 	TypeStatusCounts  []TypeStatusCount
 	OpenSprintMembers []SprintMemberState
-	CreatedPerWeek    []WeekCount
-	CompletedPerWeek  []WeekCount
 	InProgress        []DashboardTask
 	MostSevere        []DashboardTask
 	Upcoming          []DashboardSprintRef
@@ -165,16 +138,13 @@ type Dashboard struct {
 }
 
 // ReadDashboard performs every read of the dashboard page inside ONE read-only
-// transaction (SPEC/DATABASE.md § Dashboard Queries). windowStart and windowEnd
-// bound the throughput window: the Monday that begins the oldest of the twelve
-// weeks and the Monday after the week holding the request instant, each a
-// canonical timestamp at 00:00:00.000 UTC.
+// transaction (SPEC/DATABASE.md § Dashboard Queries).
 //
 // The transaction is begun ReadOnly, so the driver begins it with a plain BEGIN
 // even on a read-write open (SPEC/IMPLEMENTATION.md § Transaction Lock Mode),
 // and it is ended, releasing the snapshot, when the last statement has been
 // read.
-func (db *DB) ReadDashboard(ctx context.Context, windowStart, windowEnd string) (*Dashboard, error) {
+func (db *DB) ReadDashboard(ctx context.Context) (*Dashboard, error) {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("beginning the dashboard read: %w", err)
@@ -183,7 +153,7 @@ func (db *DB) ReadDashboard(ctx context.Context, windowStart, windowEnd string) 
 	// the error that caused it is the one returned.
 	defer func() { _ = tx.Rollback() }()
 
-	d, err := readDashboard(ctx, tx, windowStart, windowEnd)
+	d, err := readDashboard(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +164,7 @@ func (db *DB) ReadDashboard(ctx context.Context, windowStart, windowEnd string) 
 }
 
 // readDashboard is ReadDashboard's statements on a given queryer.
-func readDashboard(ctx context.Context, q queryer, windowStart, windowEnd string) (*Dashboard, error) {
+func readDashboard(ctx context.Context, q queryer) (*Dashboard, error) {
 	d := &Dashboard{}
 	var err error
 
@@ -214,14 +184,6 @@ func readDashboard(ctx context.Context, q queryer, windowStart, windowEnd string
 		}
 	}
 	if d.AverageVelocity, err = averageVelocity(ctx, q, dashboardVelocitySprintsN); err != nil {
-		return nil, err
-	}
-	if d.CreatedPerWeek, err = dashboardWeekCounts(ctx, q, dashboardCreatedPerWeekQuery,
-		windowStart, windowEnd); err != nil {
-		return nil, err
-	}
-	if d.CompletedPerWeek, err = dashboardWeekCounts(ctx, q, dashboardCompletedPerWeekQuery,
-		models.StatusCompleted, windowStart, windowEnd); err != nil {
 		return nil, err
 	}
 	if d.InProgress, err = dashboardInProgress(ctx, q); err != nil {
@@ -314,28 +276,6 @@ func dashboardOpenSprint(ctx context.Context, q queryer) (*DashboardSprint, erro
 		return nil, fmt.Errorf("iterating the open sprint: %w", err)
 	}
 	return sprint, nil
-}
-
-// dashboardWeekCounts runs one statement of § Dashboard Weekly Throughput.
-func dashboardWeekCounts(ctx context.Context, q queryer, query string, args ...any) ([]WeekCount, error) {
-	rows, err := q.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("counting the tasks per week: %w", err)
-	}
-	defer rows.Close()
-
-	out := []WeekCount{}
-	for rows.Next() {
-		var w WeekCount
-		if err := rows.Scan(&w.WeekStart, &w.Count); err != nil {
-			return nil, fmt.Errorf("scanning the tasks of a week: %w", err)
-		}
-		out = append(out, w)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating the tasks per week: %w", err)
-	}
-	return out, nil
 }
 
 // dashboardInProgress runs § Dashboard Tasks in Progress.

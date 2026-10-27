@@ -158,9 +158,8 @@ The web interface exposes the following kinds of page for each roadmap:
    `/roadmaps/{name}` and read from its `project.db`. It states the roadmap's
    current state at a glance: four key figures (open tasks, completed tasks,
    backlog, and average velocity), the first three each with a donut of its tasks
-   by type, the current sprint's progress and burndown, a chart of the tasks
-   created and completed per week, the tasks in progress, the most severe open tasks, the most recent audit entries, and the
-   upcoming sprints, all from one consistent read of the database.
+   by type, the current sprint's progress, the tasks in progress, the most severe
+   open tasks, the most recent audit entries, and the upcoming sprints, all from one consistent read of the database.
 
 When a user selects a roadmap on the index page, the user lands on that
 roadmap's dashboard page (`/roadmaps/{name}`).
@@ -405,8 +404,7 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
     one consistent read of that roadmap's `project.db`: a row of four key figures —
     open tasks, completed tasks, backlog, and average velocity, the first three
     each with a donut of its tasks by type — the current
-    sprint's progress, status breakdown, and burndown, a chart of the tasks
-    created and completed per week, the tasks in progress, the most severe
+    sprint's progress and status breakdown, the tasks in progress, the most severe
     open tasks, the most recent audit entries, and the upcoming sprints. Every
     figure follows one closed definition, every block whose data is empty shows an
     empty state, and an empty roadmap renders with HTTP 200. The charts are drawn
@@ -1065,7 +1063,7 @@ how the `rmp web` process itself terminates.
 - **Layout.** The page body holds a single
   `<div class="row row-deck row-cards">`, the grid of Tabler's own dashboard
   homepage, whose `row-deck` makes the cards of one row equal in height and whose
-  `row-cards` sets the gutter between them. The grid holds exactly these seven
+  `row-cards` sets the gutter between them. The grid holds exactly these six
   blocks, in this order, each a Tabler `card` inside a column carrying the classes
   given:
 
@@ -1075,20 +1073,18 @@ how the `rmp web` process itself terminates.
   | 1. Completed (KPI) | `col-sm-6 col-lg-3` |
   | 1. Backlog (KPI) | `col-sm-6 col-lg-3` |
   | 1. Average velocity (KPI) | `col-sm-6 col-lg-3` |
-  | 2. Current sprint | `col-lg-6` |
-  | 3. Throughput | `col-lg-6` |
-  | 4. Work in progress | `col-lg-6` |
-  | 5. Highest-severity open tasks | `col-lg-6` |
-  | 6. Upcoming sprints | `col-12` |
-  | 7. Recent activity | `col-12` |
+  | 2. Current sprint | `col-12` |
+  | 3. Work in progress | `col-lg-6` |
+  | 4. Highest-severity open tasks | `col-lg-6` |
+  | 5. Upcoming sprints | `col-12` |
+  | 6. Recent activity | `col-12` |
 
   Below Bootstrap's `sm` breakpoint every block takes the full width, so a phone
   reads the blocks one under the other in the order of the table; the four KPI
   cards share a row two by two from `sm` and four abreast from `lg`. From `lg`,
-  Current sprint and Throughput share one row side by side, and so do Work in
-  progress and Highest-severity open tasks. Upcoming
-  sprints and Recent activity each take the full width at every viewport width,
-  so the seven columns of Recent activity fit a desktop-width card without
+  Work in progress and Highest-severity open tasks share one row side by side.
+  Current sprint, Upcoming sprints, and Recent activity each take the full width
+  at every viewport width, so the seven columns of Recent activity fit a desktop-width card without
   scrolling. Every block
   other than a KPI card carries a `card-header` holding a
   `<h3 class="card-title">` with the block's title as the table names it.
@@ -1102,8 +1098,7 @@ how the `rmp web` process itself terminates.
      is not `COMPLETED` (see `DATABASE.md § task_dependencies Table`).
   4. The **request instant** is the current UTC time, read once per request. Every
      figure that depends on the current time — the days elapsed of the current
-     sprint, the age of a task in progress, and the throughput window — uses that
-     one value.
+     sprint and the age of a task in progress — uses that one value.
   5. The **whole days elapsed** since a timestamp is the number of complete
      24-hour periods between that timestamp and the request instant, and `0` when
      the timestamp lies after the request instant. It is the measure
@@ -1219,21 +1214,14 @@ how the `rmp web` process itself terminates.
      set, where `<active>` is the number of member tasks whose status is `SPRINT`,
      `DOING`, or `TESTING` and `<max>` is `max_tasks`: the `current_load` and
      `max_tasks` of `rmp sprint show` (see `MODELS.md § Sprint Show Result`).
-     When `max_tasks` is unset no capacity line is rendered;
-  7. the **burndown chart**: a line chart of exactly the `burndown` series
-     `rmp sprint stats` reports for the sprint (see
-     `COMMANDS.md § Sprint Statistics` and `MODELS.md § Sprint Stats`), one point
-     per entry, the entry's `date` on the horizontal axis and its
-     `tasks_remaining` on the vertical axis, in the series' own date-ascending
-     order. The line is stepped: it holds each entry's value until the next
-     entry's date, because the remaining count changes only on a completion and
-     never takes a value between two entries. The vertical axis starts at `0`. When the series is empty — no member task has been completed — the
-     chart is replaced by the empty state the **Empty states** table below gives.
+     When `max_tasks` is unset no capacity line is rendered.
+
+  The card draws no chart.
 
   **No deadline is shown.** A sprint carries no end date and no timebox (see
   `MODELS.md § Sprint Stats`, where `days_remaining` is always null), so the card
-  shows no deadline, no days remaining, and no ideal burndown line: each would
-  present a figure the roadmap does not hold.
+  shows no deadline and no days remaining: each would present a figure the
+  roadmap does not hold.
 
   The segment widths are not written into the markup as a `style` attribute. Each
   segment carries its share in the attribute `data-percent`, and the page script
@@ -1247,18 +1235,7 @@ how the `rmp web` process itself terminates.
   When no sprint is `OPEN`, the card keeps its header and its body holds the
   empty state the **Empty states** table gives, whose action is a link to the
   roadmap's sprints page, `/roadmaps/{name}/sprints`.
-- **Block 3: Throughput.** A line chart with two series, `Created` and
-  `Completed`, over the twelve most recent ISO 8601 weeks, the week containing the
-  request instant included. A week begins on Monday at `00:00:00` UTC and ends
-  before the next Monday. `Created` counts, per week, the tasks whose `created_at`
-  falls in that week; `Completed` counts, per week, the tasks whose status is
-  `COMPLETED` and whose `closed_at` falls in that week. A week with no such task
-  counts `0`, so both series always hold twelve values. Each week is labelled by
-  the date of its Monday, `YYYY-MM-DD`, and the weeks run from oldest at the left
-  to the current week at the right. The points are joined by straight segments,
-  never a smoothed curve, so the line shows no value between two weeks that no
-  week holds.
-- **Block 4: Work in progress.** A Tabler card-table of the tasks in progress,
+- **Block 3: Work in progress.** A Tabler card-table of the tasks in progress,
   ordered by `started_at` ascending, the task in progress longest first, ties
   broken by `id` ascending, and at most ten rows. A task in progress whose
   `started_at` is unset is ordered after every task whose `started_at` is set. The
@@ -1270,18 +1247,18 @@ how the `rmp web` process itself terminates.
   | `Title` | The task `title`, as a link to the task's own page, exactly as in a row of the tasks page. |
   | `Status` | The status badge, exactly as in a row of the tasks page. |
   | `Age` | The whole days elapsed since the task's `started_at`; an em dash when `started_at` is unset. |
-- **Block 5: Highest-severity open tasks.** A Tabler card-table of the open tasks
+- **Block 4: Highest-severity open tasks.** A Tabler card-table of the open tasks
   ordered by `severity` descending, then `priority` descending, then `id`
   ascending, and at most five rows. The columns are, in this order, `ID`, `Title`,
   `Severity`, and `Priority`, each cell exactly as the column of the same heading
   in a row of the [Roadmap Tasks Page](#roadmap-tasks-page): the id badge, the
   title link, the `S<n>` severity badge, and the `P<n>` priority badge.
-- **Block 6: Upcoming sprints.** A Tabler card-table of the sprints whose status
+- **Block 5: Upcoming sprints.** A Tabler card-table of the sprints whose status
   is `PENDING`, ordered by `order` ascending, the next sprint to execute first, and
   at most five rows. The columns are `Sprint`, the sprint's `title` as a link to
   that sprint's own page, and `Tasks`, the sprint's `task_count` (see
   `MODELS.md § Sprint`).
-- **Block 7: Recent activity.** A Tabler card-table of the ten most recently
+- **Block 6: Recent activity.** A Tabler card-table of the ten most recently
   performed audit entries: exactly the first ten entries of page 1 of the
   [Roadmap Audit Log Page](#roadmap-audit-log-page), in the same order. Each entry
   is rendered as that page renders it, with the same seven columns in the same
@@ -1298,15 +1275,12 @@ how the `rmp web` process itself terminates.
   rule 12). A row is not a link; the links are the ones the cells carry.
 - **Empty states.** A block whose data is empty shows Tabler's empty-state markup —
   a `<div class="empty">` with an `empty-title` and an `empty-subtitle` — in place
-  of its chart or its table, inside the card body, and keeps its card and its
-  header. No block renders an empty chart, an axis with no data, or a table with
-  no row. The conditions and texts are exactly:
+  of its content, inside the card body, and keeps its card and its header. No
+  block renders a table with no row. The conditions and texts are exactly:
 
   | Block | Shown when | Title | Subtitle |
   |---|---|---|---|
   | Current sprint | No sprint is `OPEN`. | `No open sprint` | `Sprints are started with the CLI, rmp sprint start.` followed by the action link `View sprints` to `/roadmaps/{name}/sprints`, in an `empty-action` element |
-  | Current sprint, burndown chart | The `OPEN` sprint's burndown series is empty. | `No completed task yet` | `The burndown starts when a task of this sprint is completed.` |
-  | Throughput | Every value of both series is `0`. | `No activity in the last 12 weeks` | `No task was created or completed in this period.` |
   | Work in progress | No task is in progress. | `No task in progress` | `Tasks in DOING or TESTING appear here.` |
   | Highest-severity open tasks | The roadmap has no open task. | `No open task` | `Every task of this roadmap is completed.` when the roadmap has at least one task, and `Tasks are created with the CLI, rmp task create.` when it has none |
   | Recent activity | The audit log is empty. | `No activity yet` | `Changes made with the CLI are recorded here.` |
@@ -1318,25 +1292,16 @@ how the `rmp web` process itself terminates.
   place (see **Type-breakdown donuts**, item 5). A roadmap with no task, no sprint, and no
   audit entry is not an error: the page renders with HTTP 200, the four KPI cards
   at zero, and every other block in its empty state.
-- **Chart containers.** Each of the two line charts — the burndown chart and
-  Throughput — is drawn into one
-  `<div class="chart-lg">` container placed in its card body, which carries no
-  `style` attribute. Each line chart is drawn at a fixed height of `240` pixels, the
-  `15rem` Tabler's chart component draws at, given to ApexCharts as the number
-  `240` and never as a percentage: the cards of one row are stretched to equal
-  height by `row-deck`, and a percentage height would follow the stretched card
-  body and overflow it (see
-  [Dashboard Chart Library](#dashboard-chart-library), rule 4).
+- **Chart containers.** The page's only charts are the three type-breakdown
+  donuts of the KPI row. Each is drawn into one `<div>` placed in its card's
+  `col-auto` column, which carries no `class` attribute and no `style` attribute,
+  at a fixed size of `64` by `64` pixels, the `4rem` square, given to ApexCharts
+  as the numbers `64` and never as percentages (see
+  [Dashboard Chart Library](#dashboard-chart-library), rule 4). Tabler ships no
+  chart container class of that size, so the drawn chart gives the container its
+  size.
 
-  The three type-breakdown donuts of the KPI row differ in container and size.
-  Each is drawn into one `<div>` placed in its card's `col-auto` column, which
-  carries no `class` attribute and no `style` attribute, at a fixed size of `64`
-  by `64` pixels, the `4rem` square, given to ApexCharts as the numbers `64` and
-  never as percentages. Tabler ships no chart container class of that size, so
-  the drawn chart gives the container its size.
-
-  Each container — of the two line charts and of the three donuts — carries
-  `role="img"` and an `aria-label` stating the chart's key numbers, so a reader
+  Each container carries `role="img"` and an `aria-label` stating the chart's key numbers, so a reader
   of assistive technology, who cannot read the drawing, reads them in words. The
   labels are exactly:
 
@@ -1345,15 +1310,12 @@ how the `rmp web` process itself terminates.
   | Open tasks donut | `Open tasks by type: ` followed by, for each slice in donut order, `<TYPE> <n> (<p>%)`, the slices separated by `, ` |
   | Completed donut | `Completed tasks by type: ` followed by, for each slice in donut order, `<TYPE> <n> (<p>%)`, the slices separated by `, ` |
   | Backlog donut | `Backlog tasks by type: ` followed by, for each slice in donut order, `<TYPE> <n> (<p>%)`, the slices separated by `, ` |
-  | Burndown | `Burndown of sprint #<id>: ` followed by `<date> <remaining> remaining` for the first entry and, when the series holds more than one entry, `, <date> <remaining> remaining` for the last entry |
-  | Throughput | `Throughput over the last 12 weeks: <created> created, <completed> completed`, the two totals of the twelve weeks |
 
   In a donut's label, `<TYPE>`, `<n>`, and `<p>` are those of the slice's tooltip
   (see **Type-breakdown donuts**, item 3).
 
-  A container is rendered only when its chart has data; a chart whose data is
-  empty renders its empty state instead and no container, and a KPI card whose
-  value is `0` renders neither a donut container nor an empty state.
+  A container is rendered only when its card's value is greater than `0`; a KPI
+  card whose value is `0` renders neither a donut container nor an empty state.
 - **Chart data block.** The page emits the data of every chart in exactly one
   `<script type="application/json" id="dashboard-data">` element, whose content
   is the JSON object canonical in `DATA_FORMATS.md § Dashboard Chart Data`. The
@@ -1363,7 +1325,7 @@ how the `rmp web` process itself terminates.
   and still forbids every inline script. The page carries no inline script and no
   event-handler attribute. The block is written through `html/template`, which
   escapes the characters `<`, `>`, and `&` in it, so its content can never close
-  the element. The object carries enum values, counts, and dates only, and no title, description, or other free text a user authored.
+  the element. The object carries enum values and counts only, and no title, description, or other free text a user authored.
 - **Page script.** The page loads `/static/vendor/apexcharts/apexcharts.min.js`
   and then `/static/dashboard.js`, both as `<script defer>` elements in that
   order, so the library is defined before the page script runs. No other page
@@ -1381,20 +1343,18 @@ how the `rmp web` process itself terminates.
   inside one read-only transaction, so no block reflects a write that another
   block does not. The reads are a fixed number of aggregate queries, each
   bounded: every count is computed by the database with `COUNT` and `GROUP BY`,
-  every list is bounded by a `LIMIT` equal to its row cap, and the throughput
-  counts are bounded to the twelve-week window by their predicate. The page never
+  and every list is bounded by a `LIMIT` equal to its row cap. The page never
   loads every task row into memory to count it, and issues no query per task, per
   sprint, or per row. The statements, their parameters, and their indexes are
   canonical in `DATABASE.md § Dashboard Queries`, which also names the three reads
   the page shares with `rmp stats`, `rmp sprint stats`, and the audit log page;
   their number does not grow with the number of tasks, sprints, or audit entries
   (see [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)).
-  `average_velocity` and the current sprint's burndown therefore come from the
-  same reads, and the same computation over them, as the CLI's.
+  `average_velocity` and the current sprint's member counts therefore come from
+  the same reads, and the same computation over them, as the CLI's.
 - **Dates.** Every timestamp the page displays is written as
-  [Date and Time Display](#date-and-time-display) specifies. The dates of the
-  chart data block are not displayed text and keep the forms
-  `DATA_FORMATS.md § Dashboard Chart Data` gives them.
+  [Date and Time Display](#date-and-time-display) specifies. The chart data block
+  carries no date (see `DATA_FORMATS.md § Dashboard Chart Data`).
 - **Path parameters.** `{name}` is validated against the roadmap-name rules exactly
   as on the other roadmap routes; an invalid or nonexistent `{name}` returns HTTP
   `404 Not Found` (see [Routes and Pages](#routes-and-pages)).
@@ -6389,8 +6349,8 @@ Rules:
 
 ### Dashboard Chart Library
 
-1. The charts of the [Roadmap Dashboard Page](#roadmap-dashboard-page) are drawn
-   with **ApexCharts** (<https://apexcharts.com/>), the chart library Tabler's own
+1. The charts of the [Roadmap Dashboard Page](#roadmap-dashboard-page), the three
+   KPI type-breakdown donuts, are drawn with **ApexCharts** (<https://apexcharts.com/>), the chart library Tabler's own
    dashboard examples use, inside the Tabler admin-shell (see
    [UI Framework](#ui-framework)).
 2. ApexCharts is **vendored**: its already-built single-file distribution is
@@ -6413,35 +6373,9 @@ Rules:
 4. **Tabler's chart options.** `static/dashboard.js` configures every chart with
    the options Tabler's own chart component applies, so the charts read as the
    Tabler examples do:
-   - `chart.height` is the number `240`, never a percentage, for every chart
-     other than the three KPI type-breakdown donuts, whose size the last item of
-     this list gives (see
-     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Chart containers**);
-     for every chart, `chart.fontFamily` is `'inherit'`, so a chart uses the page's Inter face;
-     `chart.parentHeightOffset` is `0`; `chart.toolbar.show` is `false`; and
+   - for every chart, `chart.fontFamily` is `'inherit'`, so a chart uses the
+     page's Inter face; `chart.parentHeightOffset` is `0`; `chart.toolbar.show` is `false`; and
      `chart.animations.enabled` is `false`;
-   - a line chart sets `stroke.width` to `2` and `stroke.lineCap` to `'round'`;
-     `stroke.curve` is `'stepline'` for the burndown chart and `'straight'` for
-     the throughput chart, and no chart uses a smoothed curve, because a smoothed
-     curve draws values the data does not hold;
-   - every chart other than the three KPI type-breakdown donuts sets
-     `grid.padding` to
-     `{top: -20, right: 0, left: -4, bottom: -4}`, and every chart with axes sets
-     `grid.strokeDashArray` to `4`;
-   - every chart with axes sets `xaxis.labels.padding` to `0`,
-     `xaxis.tooltip.enabled` to `false`, and `yaxis.labels.padding` to `4`;
-   - every count axis — the vertical axis of the burndown and throughput
-     charts — shows whole-number ticks only: every tick
-     sits on a whole number and no two tick labels are equal, so no axis shows a
-     fractional task. `dashboard.js` achieves it with `yaxis.stepSize` `1` or with
-     an integer label formatter over ticks that already fall on whole numbers. The
-     burndown chart's vertical axis sets `yaxis.min` to `0`;
-   - the throughput chart, the one chart with more than one series, shows its
-     legend with
-     `legend.position` `'bottom'`, `legend.offsetY` `12`, `legend.markers`
-     `{size: 5, strokeWidth: 0, shape: 'circle'}`, and `legend.itemMargin`
-     `{horizontal: 8, vertical: 8}`; the burndown chart, which has one series,
-     shows no legend;
    - each KPI type-breakdown donut sets `chart.type` to `'donut'`, both
      `chart.height` and `chart.width` to the number `64`, never a percentage,
      `chart.sparkline.enabled` to `true`, so the chart reserves no space for
@@ -6465,8 +6399,6 @@ Rules:
 
    | Chart | Series and colour |
    |---|---|
-   | Burndown | `Remaining`: `var(--tblr-primary)` |
-   | Throughput | `Created`: `var(--tblr-primary)`; `Completed`: `var(--tblr-green)` |
    | Open tasks, Completed, and Backlog donuts | One colour per task type: `USER_STORY`: `var(--tblr-green)`; `TASK`: `var(--tblr-blue)`; `BUG`: `var(--tblr-red)`; `SUB_TASK`: `var(--tblr-azure)`; `EPIC`: `var(--tblr-purple)`; `REFACTOR`: `var(--tblr-indigo)`; `CHORE`: `var(--tblr-secondary)`; `SPIKE`: `var(--tblr-yellow)`; `DESIGN_UX`: `var(--tblr-pink)`; `IMPROVEMENT`: `var(--tblr-teal)` |
 
    The type colours are the solid counterparts of the task type badges of
@@ -6474,9 +6406,7 @@ Rules:
    `var(--tblr-<colour>)` for the badge variant `bg-<colour>-lt`, so a type reads
    in the colour of its badge across the interface. A slice's colour is keyed on
    its type, never on its position in the donut, so a type keeps its colour in all
-   three donuts whatever types the others hold. The throughput chart's
-   `Completed` series is green, the colour of the `COMPLETED` status badge, and
-   primary is kept for the burndown and the `Created` series.
+   three donuts whatever types the others hold.
 6. **No toolbar, no export.** The ApexCharts toolbar stays disabled (rule 4): no
    chart offers a download, an export, a zoom, a pan, or a selection control, and
    no chart makes a network request. A chart is a picture of numbers the page
@@ -6613,12 +6543,8 @@ experience is the baseline that larger viewports enhance.
     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Layout**, fixes: below
     `576px` every block takes the full width and the blocks stack in their
     defined order, from `576px` the KPI cards share a row two by two, and from
-    `992px` the grid places the cards side by side, Upcoming sprints and Recent
-    activity keeping the full width. Each chart other than the KPI type-breakdown
-    donuts fills the width of its card at its
-    fixed height of `240` pixels, and ApexCharts redraws it when the container's
-    width changes, so a chart is never wider than its card and never taller than
-    its card body. Each KPI type-breakdown donut keeps its fixed size of `64` by
+    `992px` the grid places the cards side by side, Current sprint, Upcoming
+    sprints, and Recent activity keeping the full width. Each KPI type-breakdown donut keeps its fixed size of `64` by
     `64` pixels in its card's `col-auto` column, beside the card's value, at every
     viewport width. Each card-table sits in Tabler's `table-responsive`
     container and scrolls horizontally inside it when its columns do not fit, as
@@ -10360,7 +10286,7 @@ Rules:
     roadmap returns HTTP 200 and the roadmap dashboard page: its header title reads
     `Dashboard` with no pretitle, no badge, and no actions column content, its
     document title is `<roadmap> - Dashboard - <hostname>`, and its page body holds
-    one `row row-deck row-cards` grid whose seven blocks appear in the order and with
+    one `row row-deck row-cards` grid whose six blocks appear in the order and with
     the column classes [Roadmap Dashboard Page](#roadmap-dashboard-page),
     **Layout**, fixes. Every roadmap link of the roadmap index page points to
     `/roadmaps/{name}`. `GET /roadmaps/{name}` for a non-existent roadmap, or with
@@ -10411,17 +10337,16 @@ Rules:
     `legend-blue`, `legend-yellow`, and `legend-green` — each holding a
     `<span class="legend-dot">`, the status name, and a `<span class="legend-value">`
     reading `2`, `2`, `1`, and `1`, with no empty `<span class="legend">` anywhere
-    on the page, the line `Capacity 5/8`, and a burndown chart whose data equals
-    the `burndown` array `rmp sprint stats -r <name> <id>` reports. With
-    `max_tasks` unset the card renders no capacity line. The card contains no
+    on the page, and the line `Capacity 5/8`; the card holds no chart container.
+    With `max_tasks` unset the card renders no capacity line. The card contains no
     deadline, no end date, and no days-remaining figure.
 270. **No open sprint shows an empty state.** For a roadmap with no `OPEN`
     sprint, the Current sprint card keeps its header and its body holds a
     `<div class="empty">` with the title `No open sprint` and an action link
     `View sprints` to `/roadmaps/{name}/sprints`, and the page renders no
-    `progress-stacked` bar and no burndown chart container. For an `OPEN` sprint
-    none of whose member tasks is completed, the card shows the empty state
-    `No completed task yet` in place of the burndown chart.
+    `progress-stacked` bar. For an `OPEN` sprint none of whose member tasks is
+    completed, the card shows the line `0% complete`, its status breakdown, and
+    its legend, and holds no `<div class="empty">`.
 271. **The donut data counts open, completed, and backlog tasks per type.** For
     the seeded roadmap of Acceptance Criterion 268 whose tasks are 6 `TASK`
     (4 open, 2 completed), 4 `BUG` (3 open, 1 completed), and 2 `CHORE` (1 open,
@@ -10429,15 +10354,12 @@ Rules:
     chart data block's `tasks_by_type` is
     `{"types": ["TASK", "BUG", "CHORE"], "open": [4, 3, 1], "completed": [2, 1, 1], "backlog": [2, 0, 1]}`
     — the types in `TaskType` enum order, the seven types with no task omitted.
-272. **Current sprint and Throughput share one row.** On a roadmap with an `OPEN`
+272. **Current sprint takes the full width.** On a roadmap with an `OPEN`
     sprint, in a browser at a viewport width of `1440px`, the Current sprint card
-    and the Throughput card stand side by side in one row of the grid, each in a
-    column carrying `col-lg-6`, Current sprint first and the two cards equal in
-    height; the next row holds Work in progress and Highest-severity open tasks,
-    side by side. The page holds no chart other than the burndown, the
-    throughput chart, and the three KPI type-breakdown donuts, and the chart data
-    block holds exactly the members `DATA_FORMATS.md § Dashboard Chart Data`
-    gives.
+    stands alone in its row of the grid, in a column carrying `col-12`, and spans
+    the full width of the grid; the next row holds Work in progress and
+    Highest-severity open tasks side by side, each in a column carrying
+    `col-lg-6`, the two cards equal in height.
 273. **A KPI card whose value is `0` draws no donut.** For a roadmap of 5 tasks,
     3 `TASK` and 2 `BUG`, all of them `COMPLETED`, the `Open tasks` and `Backlog` cards read the value
     `0`, each keeps its `<div class="row align-items-center">` and its
@@ -10446,16 +10368,12 @@ Rules:
     donut, whose container carries
     `aria-label="Completed tasks by type: TASK 3 (60%), BUG 2 (40%)"`. For a roadmap
     with no task, no KPI card holds a donut.
-274. **Throughput counts per ISO week over twelve weeks.** For a request made on a
-    Wednesday, `throughput.weeks` holds the twelve Mondays ending with the Monday
-    of that week, oldest first. A task created on the Sunday before that Monday at
-    `23:59:59` UTC is counted in the previous week's `created` entry, and one
-    created on that Monday at `00:00:00` UTC in the current week's; a task created
-    on the Monday twelve weeks before the current week's Monday is not counted. A
-    `COMPLETED` task is counted in `completed` in the week of its `closed_at`, and a
-    task that is not `COMPLETED` is not counted in `completed` whatever its other
-    timestamps. A week with no task carries `0`, and each of the three arrays has
-    twelve entries.
+274. **The dashboard draws no throughput and no burndown.** On any roadmap the
+    dashboard page holds no card titled `Throughput` and no chart other than the
+    three KPI type-breakdown donuts: no element carries the class `chart-lg`, and
+    the Current sprint card holds no chart container. The chart data block holds
+    the member `tasks_by_type` alone, and the page issues eight statements with
+    no sprint `OPEN` and nine with one (see `DATABASE.md § Dashboard Queries`).
 275. **Work in progress lists the tasks in progress, oldest first.** For a roadmap
     with 12 tasks in `DOING` or `TESTING`, the Work in progress card-table holds
     exactly 10 rows, in `started_at` ascending order with ties by `id` ascending,
@@ -10491,9 +10409,8 @@ Rules:
     `<progress>` carrying `value="0"` and `max="1"`), `0`, and `0.0`; and every
     other block keeps its card and header and shows the empty state whose title
     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Empty states**, gives for
-    it. The page renders no element carrying the class `chart-lg`, no
-    `<table>`, and no KPI type-breakdown donut: no KPI card holds a
-    `<div class="col-auto">` column.
+    it. The page renders no chart container, no `<table>`, and no KPI
+    type-breakdown donut: no KPI card holds a `<div class="col-auto">` column.
 280. **The chart data travels in one JSON data block.** The dashboard page holds
     exactly one `<script type="application/json" id="dashboard-data">` element; its
     content parses as JSON into an object with exactly the members, the order, and
@@ -10539,21 +10456,13 @@ Rules:
     horizontally inside its `table-responsive` container (see
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
     rule 12).
-285. **The charts follow Tabler's chart options and draw no false value.** In a
-    browser at a desktop-width viewport, on the seeded roadmap of Acceptance
-    Criteria 268 and 269:
-    - every chart's drawing other than a KPI type-breakdown donut's is `240`
-      pixels high and lies inside its card body, in every row of the grid;
-    - the vertical axis of the burndown and throughput charts carries only whole-number tick labels, no two equal, and the
-      burndown's vertical axis starts at `0`;
-    - the burndown is drawn as a stepped line and the throughput as straight
-      segments, and no chart draws a smoothed curve;
-    - the throughput's `Created` series is `var(--tblr-primary)` and its `Completed` series
-      `var(--tblr-green)`, and the burndown is `var(--tblr-primary)`;
+285. **The charts follow Tabler's chart options.** In a browser at a
+    desktop-width viewport, on the seeded roadmap of Acceptance Criteria 268 and
+    269:
     - the configuration `dashboard.js` passes to every chart carries the options
-      [Dashboard Chart Library](#dashboard-chart-library), rule 4, lists, the grid
-      padding, the axis-label paddings, the disabled axis tooltip, and the legend
-      offset, markers, and item margin included, and no `theme` option;
+      [Dashboard Chart Library](#dashboard-chart-library), rule 4, lists — the
+      inherited font family, the zero parent-height offset, the hidden toolbar,
+      the disabled animations, and the donut options — and no `theme` option;
     - Upcoming sprints and Recent activity each span the full width of the grid,
       Upcoming sprints first, and the Recent activity card-table shows its seven
       columns without horizontal scrolling at a viewport width of `1440px`.
