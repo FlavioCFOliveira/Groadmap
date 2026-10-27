@@ -15,10 +15,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Help text structure | `HELP.md` |
 | Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
 | Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
-| Web roadmap dashboard page / landing (`/roadmaps/{name}`, the four key figures, the current sprint card with its status breakdown and burndown, the four charts, the work-in-progress, highest-severity, recent-activity, and upcoming-sprints card-tables, the empty states, and the one consistent read) | `WEB.md § Roadmap Dashboard Page` |
+| Web roadmap dashboard page / landing (`/roadmaps/{name}`, the four key figures and the type-breakdown donuts of three of them, the current sprint card with its status breakdown and burndown, the throughput chart, the work-in-progress, highest-severity, recent-activity, and upcoming-sprints card-tables, the empty states, and the one consistent read) | `WEB.md § Roadmap Dashboard Page` |
 | Web dashboard chart library (vendored ApexCharts, the Tabler vendors stylesheet, Tabler's chart options, series colours, no toolbar) | `WEB.md § Dashboard Chart Library` |
 | Web dashboard chart data JSON shape (the `dashboard-data` data block) | `DATA_FORMATS.md § Dashboard Chart Data` |
-| Web dashboard read statements (the eight aggregate and bounded reads, the three reads shared with `rmp stats`, `rmp sprint stats`, and the audit log page, the one read transaction, the fixed statement count) | `DATABASE.md § Dashboard Queries` |
+| Web dashboard read statements (the eight aggregate and bounded statements, the three reads shared with `rmp stats`, `rmp sprint stats`, and the audit log page, the one read transaction, the fixed statement count) | `DATABASE.md § Dashboard Queries` |
 | Web roadmap sprints page (`/roadmaps/{name}/sprints`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
 | Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status and type multi-select dropdowns — the query parameters and their validation, the filter-state cookie and the default filter state, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
 | Web tasks-page search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, applied on the server) | `WEB.md § Roadmap Tasks Page` |

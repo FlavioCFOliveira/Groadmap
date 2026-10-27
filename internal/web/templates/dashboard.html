@@ -22,7 +22,7 @@
             The Roadmap Dashboard Page, the roadmap's landing page (SPEC/WEB.md
             § Roadmap Dashboard Page). One grid, Tabler's own dashboard grid: row-deck
             makes the cards of one row equal in height and row-cards sets the
-            gutter. It holds exactly the ten blocks, in the specified order and with
+            gutter. It holds exactly the seven blocks, in the specified order and with
             the specified column classes; below the sm breakpoint every block takes
             the full width (§ Responsive and Mobile-First Design, rule 12).
 
@@ -36,42 +36,78 @@
           */}}
           <div class="row row-deck row-cards">
 
-            {{/* Block 1: the KPI row, four Tabler stat cards with no card-header. */}}
+            {{/*
+              Block 1: the KPI row, four Tabler stat cards with no card-header.
+              The Open tasks, Completed, and Backlog cards use the row-and-column
+              layout of Tabler's stat cards: the label, the value, and the subline
+              in the col, and the card's type-breakdown donut in the col-auto, at
+              the card's trailing edge. The col-auto is rendered only when the
+              card's value is greater than 0, which is exactly when its donut
+              label is not empty. A donut container carries no class and no style
+              attribute: ApexCharts draws it at 64 by 64 pixels.
+            */}}
             <div class="col-sm-6 col-lg-3">
               <div class="card" data-role="kpi-open">
                 <div class="card-body">
-                  <div class="subheader">Open tasks</div>
-                  <div class="h1 mb-3">{{.KPI.Open}}</div>
-                  <div class="text-secondary">{{.KPI.InProgress}} in progress, {{.KPI.Blocked}} blocked</div>
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <div class="subheader">Open tasks</div>
+                      <div class="h1 mb-3">{{.KPI.Open}}</div>
+                      <div class="text-secondary">{{.KPI.InProgress}} in progress, {{.KPI.Blocked}} blocked</div>
+                    </div>
+                    {{if .OpenDonutLabel}}
+                    <div class="col-auto">
+                      <div id="chart-open-by-type" role="img" aria-label="{{.OpenDonutLabel}}"></div>
+                    </div>
+                    {{end}}
+                  </div>
                 </div>
               </div>
             </div>
             <div class="col-sm-6 col-lg-3">
               <div class="card" data-role="kpi-completed">
                 <div class="card-body">
-                  <div class="subheader">Completed</div>
-                  <div class="h1 mb-3">{{.KPI.Completed}}</div>
-                  <div class="d-flex mb-2">
-                    <div>{{.KPI.Completed}} of {{.KPI.Total}} tasks</div>
-                    <div class="ms-auto">{{.KPI.CompletedPercent}}%</div>
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <div class="subheader">Completed</div>
+                      <div class="h1 mb-3">{{.KPI.Completed}}</div>
+                      <div class="d-flex mb-2">
+                        <div>{{.KPI.Completed}} of {{.KPI.Total}} tasks</div>
+                        <div class="ms-auto">{{.KPI.CompletedPercent}}%</div>
+                      </div>
+                      {{/*
+                        The native <progress> element under Tabler's progress
+                        classes, for the reason the task page's Sprint card uses
+                        it: Tabler's div form states its fill as an inline style
+                        width. A roadmap with no task carries value 0 and max 1,
+                        because a max of 0 is not a valid value of the attribute.
+                      */}}
+                      <progress class="progress progress-sm" value="{{.KPI.Completed}}" max="{{.KPI.ProgressMax}}" aria-label="Completed tasks"></progress>
+                    </div>
+                    {{if .CompletedDonutLabel}}
+                    <div class="col-auto">
+                      <div id="chart-completed-by-type" role="img" aria-label="{{.CompletedDonutLabel}}"></div>
+                    </div>
+                    {{end}}
                   </div>
-                  {{/*
-                    The native <progress> element under Tabler's progress classes,
-                    for the reason the task page's Sprint card uses it: Tabler's
-                    div form states its fill as an inline style width. A roadmap
-                    with no task carries value 0 and max 1, because a max of 0 is
-                    not a valid value of the attribute.
-                  */}}
-                  <progress class="progress progress-sm" value="{{.KPI.Completed}}" max="{{.KPI.ProgressMax}}" aria-label="Completed tasks"></progress>
                 </div>
               </div>
             </div>
             <div class="col-sm-6 col-lg-3">
               <div class="card" data-role="kpi-backlog">
                 <div class="card-body">
-                  <div class="subheader">Backlog</div>
-                  <div class="h1 mb-3">{{.KPI.Backlog}}</div>
-                  <div class="text-secondary">tasks in no sprint</div>
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <div class="subheader">Backlog</div>
+                      <div class="h1 mb-3">{{.KPI.Backlog}}</div>
+                      <div class="text-secondary">tasks in no sprint</div>
+                    </div>
+                    {{if .BacklogDonutLabel}}
+                    <div class="col-auto">
+                      <div id="chart-backlog-by-type" role="img" aria-label="{{.BacklogDonutLabel}}"></div>
+                    </div>
+                    {{end}}
+                  </div>
                 </div>
               </div>
             </div>
@@ -143,65 +179,8 @@
               </div>
             </div>
 
-            {{/* Block 3: Tasks by type. */}}
+            {{/* Block 3: Throughput, beside Current sprint from lg. */}}
             <div class="col-lg-6">
-              <div class="card" data-role="tasks-by-type">
-                <div class="card-header">
-                  <h3 class="card-title">Tasks by type</h3>
-                </div>
-                <div class="card-body">
-                  {{if .TypeLabel}}
-                  <div class="chart-lg" id="chart-tasks-by-type" role="img" aria-label="{{.TypeLabel}}"></div>
-                  {{else}}
-                  <div class="empty">
-                    <p class="empty-title">No tasks yet</p>
-                    <p class="empty-subtitle text-secondary">Tasks are created with the CLI, rmp task create.</p>
-                  </div>
-                  {{end}}
-                </div>
-              </div>
-            </div>
-
-            {{/* Block 4: Tasks by status. */}}
-            <div class="col-lg-6">
-              <div class="card" data-role="tasks-by-status">
-                <div class="card-header">
-                  <h3 class="card-title">Tasks by status</h3>
-                </div>
-                <div class="card-body">
-                  {{if .StatusLabel}}
-                  <div class="chart-lg" id="chart-tasks-by-status" role="img" aria-label="{{.StatusLabel}}"></div>
-                  {{else}}
-                  <div class="empty">
-                    <p class="empty-title">No tasks yet</p>
-                    <p class="empty-subtitle text-secondary">Tasks are created with the CLI, rmp task create.</p>
-                  </div>
-                  {{end}}
-                </div>
-              </div>
-            </div>
-
-            {{/* Block 5: Tasks per sprint. */}}
-            <div class="col-lg-6">
-              <div class="card" data-role="tasks-per-sprint">
-                <div class="card-header">
-                  <h3 class="card-title">Tasks per sprint</h3>
-                </div>
-                <div class="card-body">
-                  {{if .PerSprintLabel}}
-                  <div class="chart-lg" id="chart-tasks-per-sprint" role="img" aria-label="{{.PerSprintLabel}}"></div>
-                  {{else}}
-                  <div class="empty">
-                    <p class="empty-title">No started sprint yet</p>
-                    <p class="empty-subtitle text-secondary">Sprints appear here once they are started.</p>
-                  </div>
-                  {{end}}
-                </div>
-              </div>
-            </div>
-
-            {{/* Block 6: Throughput. */}}
-            <div class="col-12">
               <div class="card" data-role="throughput">
                 <div class="card-header">
                   <h3 class="card-title">Throughput</h3>
@@ -220,7 +199,7 @@
             </div>
 
             {{/*
-              Block 7: Work in progress. The ID, Title, and Status cells are those
+              Block 4: Work in progress. The ID, Title, and Status cells are those
               of a row of the tasks page, cell for cell.
             */}}
             <div class="col-lg-6">
@@ -263,7 +242,7 @@
             </div>
 
             {{/*
-              Block 8: Highest-severity open tasks. Every cell is that of the column
+              Block 5: Highest-severity open tasks. Every cell is that of the column
               of the same heading in a row of the tasks page.
             */}}
             <div class="col-lg-6">
@@ -305,7 +284,7 @@
               </div>
             </div>
 
-            {{/* Block 9: Upcoming sprints. Full width, before Recent activity. */}}
+            {{/* Block 6: Upcoming sprints. Full width, before Recent activity. */}}
             <div class="col-12">
               <div class="card" data-role="upcoming-sprints">
                 <div class="card-header">
@@ -342,7 +321,7 @@
             </div>
 
             {{/*
-              Block 10: Recent activity. The head of page 1 of the audit log page,
+              Block 7: Recent activity. The head of page 1 of the audit log page,
               each entry through the auditRow partial that page renders its entries
               with, under the same seven column headings.
             */}}

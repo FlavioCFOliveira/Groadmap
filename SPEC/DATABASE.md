@@ -2095,8 +2095,9 @@ read.
 to its row cap; the throughput counts are bounded to their window by their
 predicate. No statement returns every task row, and the page issues no statement
 per task, per sprint, or per row. The page issues exactly the statements below,
-in any order: the eight of this section, of which the open-sprint read is always
-issued, plus the three reads defined elsewhere —
+in any order: the eight statements of this section — one per subsection, and two
+for the weekly throughput — every one of them always issued, plus the three
+reads defined elsewhere —
 
 - the average-velocity read and the sprint-statistics member read of
   `Join Order of the Sprint Completion Counts` (under Performance Optimization
@@ -2105,7 +2106,7 @@ issued, plus the three reads defined elsewhere —
 - the audit read of `Query Audit Entries` above, with no predicate, `LIMIT 10`, and
   no `OFFSET`.
 
-The number of statements is therefore eleven with no sprint `OPEN` and twelve with
+The number of statements is therefore ten with no sprint `OPEN` and eleven with
 one, whatever the number of tasks, sprints, or audit entries.
 
 **Parameterised.** Every status value, every bound of the throughput window, and
@@ -2126,8 +2127,10 @@ GROUP BY type, status;
 depend on a dependency, a sprint, or a timestamp is a sum over these rows, so the
 figures are readings of one result and cannot disagree: the open tasks (every
 status except `COMPLETED`), the tasks in progress (`DOING` and `TESTING`), the
-completed tasks, the backlog (`BACKLOG`), the roadmap's task total, the open and
-completed counts per type, and the count per status. A combination no task holds
+completed tasks, the backlog (`BACKLOG`), the roadmap's task total, and the open,
+completed, and backlog counts per type. The per-type counts are the data of the
+type-breakdown donuts of the `Open tasks`, `Completed`, and `Backlog` cards, so no
+further statement is issued for the donuts. A combination no task holds
 produces no row, and the caller reads its count as `0`.
 
 **Index.** The statement reads the whole table in the order of `idx_tasks_type`
@@ -2178,37 +2181,6 @@ sprint-statistics member read of `Join Order of the Sprint Completion Counts`
 over that sprint's id; the sprint's member count, its count per status, its active
 count against `max_tasks`, and its burndown are all derived from that one member
 read, exactly as `rmp sprint stats` and `rmp sprint show` derive theirs.
-
-#### Dashboard Tasks per Sprint
-
-Returns, for the ten sprints with the highest `order` among the sprints whose
-status is `CLOSED` or `OPEN`, each sprint's id, its number of completed member
-tasks, and its number of member tasks, in ascending `order`.
-
-```sql
-SELECT s.id,
-       (SELECT COUNT(*) FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
-        WHERE st.sprint_id = s.id AND t.status = ?) AS completed_count,   -- 'COMPLETED'
-       (SELECT COUNT(*) FROM sprint_tasks st
-        WHERE st.sprint_id = s.id) AS member_count
-FROM (SELECT id, order_index FROM sprints
-      WHERE status IN (?, ?)                                             -- 'CLOSED', 'OPEN'
-      ORDER BY order_index DESC
-      LIMIT ?) s                                                         -- 10
-ORDER BY s.order_index ASC;
-```
-
-**Limits before it counts.** The inner statement selects the sprints, the highest
-`order` first, and applies the `LIMIT` there, so the two counts are computed for
-the selected sprints alone. The outer `ORDER BY` returns them oldest first, the
-order the chart draws. The page's not-completed figure is `member_count` minus
-`completed_count`.
-
-**Index.** The sprints are found through `idx_sprints_status`. The completed
-count is driven from `sprint_tasks` by `CROSS JOIN`, for the reason
-`Join Order of the Sprint Completion Counts` gives, and both counts search
-`sprint_tasks` by `sprint_id` through a covering index, so the cost follows the
-size of the ten sprints, not the size of the roadmap.
 
 #### Dashboard Weekly Throughput
 

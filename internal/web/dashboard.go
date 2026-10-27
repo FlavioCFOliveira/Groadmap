@@ -13,8 +13,8 @@ import (
 )
 
 // This file holds the Roadmap Dashboard Page, the roadmap's landing page: the
-// four key figures, the current sprint card, the four charts, and the four
-// card-tables, all stated from one consistent read of the roadmap database
+// four key figures with the type-breakdown donuts of three of them, the current
+// sprint card, the throughput chart, and the four card-tables, all stated from one consistent read of the roadmap database
 // (SPEC/WEB.md § Roadmap Dashboard Page). The reads are db.ReadDashboard's,
 // inside one read-only transaction (SPEC/DATABASE.md § Dashboard Queries); this
 // file turns their rows into the page's figures, its aria-label texts, and the
@@ -23,7 +23,7 @@ import (
 
 // dashboardWeeks is the number of ISO 8601 weeks the throughput chart covers,
 // the week holding the request instant included (SPEC/WEB.md § Roadmap Dashboard
-// Page, Block 6).
+// Page, Block 3).
 const dashboardWeeks = 12
 
 // dashboardDateLayout is the calendar-date form of the chart data block's dates,
@@ -49,21 +49,23 @@ type dashboardSource interface {
 // JavaScript; Chart data block).
 //
 // A chart label that is empty marks the chart's empty state: the template renders
-// a chart container only when its chart has data.
+// a chart container only when its chart has data. The three donut labels are
+// empty when their KPI card's value is 0, and the card then renders no donut at
+// all (SPEC/WEB.md § Roadmap Dashboard Page, Type-breakdown donuts, item 5).
 type dashboardData struct {
-	Sprint          *dashboardSprint
-	Name            string
-	TypeLabel       string
-	StatusLabel     string
-	PerSprintLabel  string
-	ThroughputLabel string
-	Chrome          chrome
-	InProgress      []dashboardTaskRow
-	MostSevere      []dashboardTaskRow
-	Upcoming        []db.DashboardSprintRef
-	RecentAudit     []models.AuditEntry
-	Charts          dashboardCharts
-	KPI             dashboardKPI
+	Sprint              *dashboardSprint
+	Name                string
+	OpenDonutLabel      string
+	CompletedDonutLabel string
+	BacklogDonutLabel   string
+	ThroughputLabel     string
+	Chrome              chrome
+	InProgress          []dashboardTaskRow
+	MostSevere          []dashboardTaskRow
+	Upcoming            []db.DashboardSprintRef
+	RecentAudit         []models.AuditEntry
+	Charts              dashboardCharts
+	KPI                 dashboardKPI
 }
 
 // dashboardKPI is the row of four key figures (SPEC/WEB.md § Roadmap Dashboard
@@ -134,28 +136,20 @@ type dashboardTaskRow struct {
 // SPEC/DATA_FORMATS.md § Dashboard Chart Data publishes. Every slice is non-nil,
 // so an array with nothing to hold is written [] rather than null (rule 1).
 type dashboardCharts struct {
-	TasksByType    tasksByTypeChart       `json:"tasks_by_type"`
-	TasksByStatus  tasksByStatusChart     `json:"tasks_by_status"`
-	TasksPerSprint tasksPerSprintChart    `json:"tasks_per_sprint"`
-	Throughput     throughputChart        `json:"throughput"`
-	Burndown       []models.BurndownEntry `json:"burndown"`
+	TasksByType tasksByTypeChart       `json:"tasks_by_type"`
+	Throughput  throughputChart        `json:"throughput"`
+	Burndown    []models.BurndownEntry `json:"burndown"`
 }
 
+// tasksByTypeChart is the data of the three type-breakdown donuts of the KPI
+// row: per type with at least one task, in TaskType enum order, its open,
+// COMPLETED, and BACKLOG task counts (SPEC/DATA_FORMATS.md § Dashboard Chart
+// Data, rule 8).
 type tasksByTypeChart struct {
 	Types     []models.TaskType `json:"types"`
 	Open      []int             `json:"open"`
 	Completed []int             `json:"completed"`
-}
-
-type tasksByStatusChart struct {
-	Statuses []models.TaskStatus `json:"statuses"`
-	Counts   []int               `json:"counts"`
-}
-
-type tasksPerSprintChart struct {
-	Sprints      []int `json:"sprints"`
-	Completed    []int `json:"completed"`
-	NotCompleted []int `json:"not_completed"`
+	Backlog   []int             `json:"backlog"`
 }
 
 type throughputChart struct {
@@ -212,17 +206,15 @@ func readDashboard(ctx context.Context, src dashboardSource, name string, now ti
 		MostSevere:  mostSevereRows(d.MostSevere),
 	}
 
-	byType, byStatus, kpi := taskCountFigures(d.TypeStatusCounts)
+	byType, kpi := taskCountFigures(d.TypeStatusCounts)
 	kpi.Blocked = d.Blocked
 	kpi.AverageVelocity = strconv.FormatFloat(d.AverageVelocity, 'f', 1, 64)
 	data.KPI = kpi
 
 	data.Charts = dashboardCharts{
-		TasksByType:    byType,
-		TasksByStatus:  byStatus,
-		TasksPerSprint: perSprintChart(d.SprintCompletion),
-		Throughput:     throughputSeries(weeks, d.CreatedPerWeek, d.CompletedPerWeek),
-		Burndown:       []models.BurndownEntry{},
+		TasksByType: byType,
+		Throughput:  throughputSeries(weeks, d.CreatedPerWeek, d.CompletedPerWeek),
+		Burndown:    []models.BurndownEntry{},
 	}
 
 	if d.OpenSprint != nil {
@@ -231,13 +223,9 @@ func readDashboard(ctx context.Context, src dashboardSource, name string, now ti
 		data.Charts.Burndown = burndown
 	}
 
-	if kpi.Total > 0 {
-		data.TypeLabel = tasksByTypeLabel(&data.Charts.TasksByType)
-		data.StatusLabel = tasksByStatusLabel(&data.Charts.TasksByStatus)
-	}
-	if len(data.Charts.TasksPerSprint.Sprints) > 0 {
-		data.PerSprintLabel = tasksPerSprintLabel(&data.Charts.TasksPerSprint)
-	}
+	data.OpenDonutLabel = typeDonutLabel("Open tasks by type: ", byType.Types, byType.Open, kpi.Open)
+	data.CompletedDonutLabel = typeDonutLabel("Completed tasks by type: ", byType.Types, byType.Completed, kpi.Completed)
+	data.BacklogDonutLabel = typeDonutLabel("Backlog tasks by type: ", byType.Types, byType.Backlog, kpi.Backlog)
 	data.ThroughputLabel = throughputLabel(&data.Charts.Throughput)
 	return data, nil
 }
@@ -245,7 +233,7 @@ func readDashboard(ctx context.Context, src dashboardSource, name string, now ti
 // throughputWindow returns the Mondays that begin the twelve weeks of the
 // throughput chart, oldest first, and the window's bounds: the oldest Monday and
 // the Monday after the week holding now, each at 00:00:00 UTC. A week begins on
-// Monday at 00:00:00 UTC (SPEC/WEB.md § Roadmap Dashboard Page, Block 6).
+// Monday at 00:00:00 UTC (SPEC/WEB.md § Roadmap Dashboard Page, Block 3).
 func throughputWindow(now time.Time) (weeks []string, start, end time.Time) {
 	now = now.UTC()
 	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
@@ -287,20 +275,25 @@ func throughputSeries(weeks []string, created, completed []db.WeekCount) through
 }
 
 // taskCountFigures derives, from the one count by type and status, every task
-// figure that depends on no dependency, sprint, or timestamp: the two charts'
-// data and the KPI counts. Being readings of one result, they cannot disagree
+// figure that depends on no dependency, sprint, or timestamp: the donuts' data
+// and the KPI counts. Being readings of one result, they cannot disagree
 // (SPEC/DATABASE.md § Dashboard Task Counts by Type and Status).
-func taskCountFigures(rows []db.TypeStatusCount) (tasksByTypeChart, tasksByStatusChart, dashboardKPI) {
+func taskCountFigures(rows []db.TypeStatusCount) (tasksByTypeChart, dashboardKPI) {
 	openByType := map[models.TaskType]int{}
 	doneByType := map[models.TaskType]int{}
+	backlogByType := map[models.TaskType]int{}
 	byStatus := map[models.TaskStatus]int{}
 	var kpi dashboardKPI
 	for _, r := range rows {
 		byStatus[r.Status] += r.Count
 		kpi.Total += r.Count
-		if r.Status == models.StatusCompleted {
+		switch r.Status {
+		case models.StatusCompleted:
 			doneByType[r.Type] += r.Count
-		} else {
+		case models.StatusBacklog:
+			backlogByType[r.Type] += r.Count
+			openByType[r.Type] += r.Count
+		default:
 			openByType[r.Type] += r.Count
 		}
 	}
@@ -312,7 +305,7 @@ func taskCountFigures(rows []db.TypeStatusCount) (tasksByTypeChart, tasksByStatu
 	kpi.CompletedPercent = floorPercent(kpi.Completed, kpi.Total)
 	kpi.ProgressMax = max(kpi.Total, 1)
 
-	types := tasksByTypeChart{Types: []models.TaskType{}, Open: []int{}, Completed: []int{}}
+	types := tasksByTypeChart{Types: []models.TaskType{}, Open: []int{}, Completed: []int{}, Backlog: []int{}}
 	for _, t := range models.ValidTaskTypes {
 		if openByType[t]+doneByType[t] == 0 {
 			continue
@@ -320,33 +313,9 @@ func taskCountFigures(rows []db.TypeStatusCount) (tasksByTypeChart, tasksByStatu
 		types.Types = append(types.Types, t)
 		types.Open = append(types.Open, openByType[t])
 		types.Completed = append(types.Completed, doneByType[t])
+		types.Backlog = append(types.Backlog, backlogByType[t])
 	}
-
-	statuses := tasksByStatusChart{
-		Statuses: make([]models.TaskStatus, len(models.ValidTaskStatuses)),
-		Counts:   make([]int, len(models.ValidTaskStatuses)),
-	}
-	for i, s := range models.ValidTaskStatuses {
-		statuses.Statuses[i] = s
-		statuses.Counts[i] = byStatus[s]
-	}
-	return types, statuses, kpi
-}
-
-// perSprintChart is the Tasks per Sprint chart data: the read's sprints in its
-// ascending order, each with its completed and its other member tasks.
-func perSprintChart(rows []db.SprintCompletion) tasksPerSprintChart {
-	chart := tasksPerSprintChart{
-		Sprints:      make([]int, len(rows)),
-		Completed:    make([]int, len(rows)),
-		NotCompleted: make([]int, len(rows)),
-	}
-	for i, r := range rows {
-		chart.Sprints[i] = r.ID
-		chart.Completed[i] = r.Completed
-		chart.NotCompleted[i] = r.Members - r.Completed
-	}
-	return chart
+	return types, kpi
 }
 
 // currentSprint derives the Current sprint card and its burndown series from the
@@ -488,32 +457,24 @@ func burndownLabel(sprintID int, series []models.BurndownEntry) string {
 	return b.String()
 }
 
-// tasksByTypeLabel is the Tasks by type chart's aria-label.
-func tasksByTypeLabel(c *tasksByTypeChart) string {
-	parts := make([]string, len(c.Types))
-	for i, t := range c.Types {
-		parts[i] = string(t) + " " + strconv.Itoa(c.Open[i]) + " open, " + strconv.Itoa(c.Completed[i]) + " completed"
+// typeDonutLabel is a KPI type-breakdown donut's aria-label: the prefix, then
+// one "<TYPE> <n> (<p>%)" per type whose count is greater than 0, in the order
+// of types, separated by ", ", where p is the floor percentage of n in total,
+// the card's value. It is "" when total is 0, which renders no donut
+// (SPEC/WEB.md § Roadmap Dashboard Page, Type-breakdown donuts and Chart
+// containers).
+func typeDonutLabel(prefix string, types []models.TaskType, counts []int, total int) string {
+	if total <= 0 {
+		return ""
 	}
-	return "Tasks by type: " + strings.Join(parts, "; ")
-}
-
-// tasksByStatusLabel is the Tasks by status chart's aria-label.
-func tasksByStatusLabel(c *tasksByStatusChart) string {
-	parts := make([]string, len(c.Statuses))
-	for i, s := range c.Statuses {
-		parts[i] = string(s) + " " + strconv.Itoa(c.Counts[i])
+	parts := make([]string, 0, len(types))
+	for i, t := range types {
+		if counts[i] <= 0 {
+			continue
+		}
+		parts = append(parts, string(t)+" "+strconv.Itoa(counts[i])+" ("+strconv.Itoa(floorPercent(counts[i], total))+"%)")
 	}
-	return "Tasks by status: " + strings.Join(parts, ", ")
-}
-
-// tasksPerSprintLabel is the Tasks per sprint chart's aria-label.
-func tasksPerSprintLabel(c *tasksPerSprintChart) string {
-	parts := make([]string, len(c.Sprints))
-	for i, id := range c.Sprints {
-		parts[i] = "#" + strconv.Itoa(id) + " " + strconv.Itoa(c.Completed[i]) + " completed, " +
-			strconv.Itoa(c.NotCompleted[i]) + " not completed"
-	}
-	return "Tasks per sprint: " + strings.Join(parts, "; ")
+	return prefix + strings.Join(parts, ", ")
 }
 
 // throughputLabel is the Throughput chart's aria-label, the two totals of the

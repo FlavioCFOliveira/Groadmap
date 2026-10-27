@@ -969,6 +969,131 @@ class TestWebInterface:
             body,
         ), "the sprints page must select the current (Actual/OPEN) sprint tab by default"
 
+    def _seed_dashboard_roadmap(self, roadmap, tasks):
+        """Build a roadmap through the CLI from (title, type, status) triples and
+        return their ids. Every task that is not BACKLOG joins one sprint, which
+        is started so its members can move through DOING, TESTING, and
+        COMPLETED; a BACKLOG task belongs to no sprint."""
+        self._run(["roadmap", "create", roadmap])
+        ids = []
+        for title, task_type, _ in tasks:
+            _, out, _ = self._run([
+                "task", "create", "-r", roadmap, "-t", title, "-y", task_type,
+                "-fr", "Finance operations must see the state of the ledger close.",
+                "-tr", "Recorded in the roadmap database and read by the dashboard.",
+                "-ac", "The dashboard counts the task under its type and status.",
+            ])
+            ids.append(json.loads(out)["id"])
+        members = [i for i, (_, _, status) in zip(ids, tasks) if status != "BACKLOG"]
+        if members:
+            sprint = self.test.create_sprint(roadmap, "Close the month-end ledger",
+                                             title="Month-end ledger close")
+            self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(map(str, members))])
+            self._run(["sprint", "start", "-r", roadmap, str(sprint)])
+
+        def stat(status, wanted, *extra):
+            chosen = [i for i, (_, _, s) in zip(ids, tasks) if s in wanted]
+            if chosen:
+                self._run(["task", "stat", "-r", roadmap, ",".join(map(str, chosen)), status, *extra])
+
+        stat("DOING", ("DOING", "TESTING", "COMPLETED"), "--commit-open", "5d6a2cd")
+        stat("TESTING", ("TESTING", "COMPLETED"))
+        stat("COMPLETED", ("COMPLETED",), "--commit-close", "4999725")
+        return ids
+
+    @staticmethod
+    def _kpi_card(body, role):
+        """The markup of one dashboard KPI card, up to the next card."""
+        start = body.index(f'<div class="card" data-role="{role}">')
+        end = body.find('<div class="card" data-role="', start + 1)
+        return body[start:end]
+
+    def test_dashboard_kpi_type_donuts_and_removed_blocks(self):
+        """The Open tasks, Completed, and Backlog KPI cards each carry a donut of
+        their tasks by type, fed by tasks_by_type {types, open, completed,
+        backlog}; a card whose value is 0 renders no donut column; the Tasks by
+        type, Tasks by status, and Tasks per sprint blocks are gone, and
+        Throughput stands in a col-lg-6 beside Current sprint (SPEC/WEB.md
+        § Roadmap Dashboard Page; SPEC/DATA_FORMATS.md § Dashboard Chart Data;
+        Acceptance Criteria 271, 272, 273, 279, and 286)."""
+        self._seed_dashboard_roadmap("ledger-close", [
+            ("Draft the intercompany elimination entries", "TASK", "BACKLOG"),
+            ("Document the accrual reversal schedule", "TASK", "BACKLOG"),
+            ("Reconcile the suspense account balances", "TASK", "DOING"),
+            ("Publish the trial balance to the controllers", "TASK", "COMPLETED"),
+            ("FX revaluation posts to the wrong period", "BUG", "COMPLETED"),
+            ("Duplicate journal lines after a re-import", "BUG", "SPRINT"),
+            ("Archive the prior-year close workpapers", "CHORE", "BACKLOG"),
+        ])
+        self._seed_dashboard_roadmap("card-settlement", [
+            ("Settle the scheme fees for September", "TASK", "COMPLETED"),
+            ("Reprocess the rejected clearing file", "BUG", "COMPLETED"),
+        ])
+        self._run(["roadmap", "create", "treasury-greenfield"])
+        proc, port = self._start(["--port", "0"])
+
+        status, _, body = self._req(port, "/roadmaps/ledger-close")
+        assert status == 200
+        blocks = re.findall(
+            r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S)
+        assert len(blocks) == 1, "the dashboard must carry exactly one chart data block"
+        data = json.loads(blocks[0])
+        assert list(data) == ["tasks_by_type", "throughput", "burndown"], (
+            f"the chart data block's members are {list(data)}")
+        assert data["tasks_by_type"] == {
+            "types": ["TASK", "BUG", "CHORE"],
+            "open": [3, 1, 1], "completed": [1, 1, 0], "backlog": [2, 0, 1],
+        }, f"tasks_by_type = {data['tasks_by_type']}"
+
+        for role, chart, label in (
+            ("kpi-open", "chart-open-by-type",
+             "Open tasks by type: TASK 3 (60%), BUG 1 (20%), CHORE 1 (20%)"),
+            ("kpi-completed", "chart-completed-by-type",
+             "Completed tasks by type: TASK 1 (50%), BUG 1 (50%)"),
+            ("kpi-backlog", "chart-backlog-by-type",
+             "Backlog tasks by type: TASK 2 (66%), CHORE 1 (33%)"),
+        ):
+            card = self._kpi_card(body, role)
+            assert '<div class="row align-items-center">' in card and '<div class="col">' in card, (
+                f"{role} lacks the row-and-column layout")
+            assert re.search(
+                r'<div class="col-auto">\s*<div id="' + chart + r'" role="img" aria-label="'
+                + re.escape(label) + r'"></div>\s*</div>', card), (
+                f"{role} lacks its donut container labelled {label!r}; card={card!r}")
+        velocity = self._kpi_card(body, "kpi-velocity")
+        assert "col-auto" not in velocity and 'role="img"' not in velocity, (
+            "the Average velocity card must carry no donut")
+
+        for removed in ("Tasks by type", "Tasks by status", "Tasks per sprint",
+                        "tasks-by-type", "tasks-by-status", "tasks-per-sprint",
+                        "tasks_by_status", "tasks_per_sprint"):
+            assert removed not in body, f"the dashboard still carries {removed!r}"
+        assert re.search(
+            r'<div class="col-lg-6">\s*<div class="card" data-role="current-sprint">.*?</div>\s*'
+            r'<div class="col-lg-6">\s*<div class="card" data-role="throughput">', body, re.S), (
+            "Throughput must stand in a col-lg-6 directly after Current sprint")
+        assert 'style="' not in body, "the dashboard must carry no style attribute"
+
+        # Every task COMPLETED: Open tasks and Backlog read 0 and draw no donut.
+        _, _, body = self._req(port, "/roadmaps/card-settlement")
+        for role in ("kpi-open", "kpi-backlog"):
+            card = self._kpi_card(body, role)
+            assert '<div class="h1 mb-3">0</div>' in card, f"{role} must read 0"
+            assert '<div class="row align-items-center">' in card
+            for absent in ('<div class="col-auto">', 'role="img"', '<div class="empty">'):
+                assert absent not in card, f"{role}, whose value is 0, carries {absent!r}"
+        assert ('aria-label="Completed tasks by type: TASK 1 (50%), BUG 1 (50%)"'
+                in self._kpi_card(body, "kpi-completed")), "the Completed card must hold its donut"
+
+        # A roadmap with no task: no KPI card holds a donut.
+        status, _, body = self._req(port, "/roadmaps/treasury-greenfield")
+        assert status == 200
+        assert 'class="col-auto"' not in body and "-by-type" not in body, (
+            "an empty roadmap must render no type-breakdown donut")
+        data = json.loads(re.search(
+            r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S).group(1))
+        assert data["tasks_by_type"] == {"types": [], "open": [], "completed": [], "backlog": []}
+
     def test_index_empty_state_when_no_roadmaps(self):
         proc, port = self._start(["--port", "0"], home=self._fresh_home())
         status, _, body = self._req(port, "/")

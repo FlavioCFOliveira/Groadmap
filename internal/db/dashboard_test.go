@@ -98,16 +98,16 @@ func seedDashboardRoadmap(t *testing.T, database *DB, taskCount int, withOpen bo
 }
 
 // TestReadDashboard_FixedStatementCountInOneTransaction is the statement half of
-// Acceptance Criterion 283: the dashboard issues eleven statements with no sprint
-// OPEN and twelve with one, the same number for 10 tasks and for 1,000, every one
+// Acceptance Criterion 283: the dashboard issues ten statements with no sprint
+// OPEN and eleven with one, the same number for 10 tasks and for 1,000, every one
 // of them inside the single read-only transaction ReadDashboard begins.
 func TestReadDashboard_FixedStatementCountInOneTransaction(t *testing.T) {
 	for _, tc := range []struct {
 		withOpen bool
 		want     int
 	}{
-		{withOpen: false, want: 11},
-		{withOpen: true, want: 12},
+		{withOpen: false, want: 10},
+		{withOpen: true, want: 11},
 	} {
 		counts := map[int]int{}
 		for _, tasks := range []int{10, 1000} {
@@ -135,10 +135,9 @@ func TestReadDashboard_FixedStatementCountInOneTransaction(t *testing.T) {
 
 			// Bounded lists: no read returns every task row.
 			if len(d.InProgress) > dashboardInProgressCap || len(d.MostSevere) > dashboardSevereCap ||
-				len(d.Upcoming) > dashboardUpcomingCap || len(d.RecentAudit) > dashboardAuditCap ||
-				len(d.SprintCompletion) > dashboardSprintChartCap {
-				t.Errorf("open=%v tasks=%d: a list exceeds its row cap: %d %d %d %d %d", tc.withOpen, tasks,
-					len(d.InProgress), len(d.MostSevere), len(d.Upcoming), len(d.RecentAudit), len(d.SprintCompletion))
+				len(d.Upcoming) > dashboardUpcomingCap || len(d.RecentAudit) > dashboardAuditCap {
+				t.Errorf("open=%v tasks=%d: a list exceeds its row cap: %d %d %d %d", tc.withOpen, tasks,
+					len(d.InProgress), len(d.MostSevere), len(d.Upcoming), len(d.RecentAudit))
 			}
 			cleanup()
 		}
@@ -185,7 +184,6 @@ func TestDashboardStatements_BindEveryValue(t *testing.T) {
 		"type and status":  dashboardTypeStatusQuery,
 		"blocked":          dashboardBlockedQuery,
 		"open sprint":      dashboardOpenSprintQuery,
-		"tasks per sprint": dashboardSprintCompletionQuery,
 		"created per week": dashboardCreatedPerWeekQuery,
 		"closed per week":  dashboardCompletedPerWeekQuery,
 		"in progress":      dashboardInProgressQuery,

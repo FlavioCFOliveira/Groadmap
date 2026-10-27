@@ -1617,16 +1617,8 @@ is canonical for the shape.
   "tasks_by_type": {
     "types": ["TASK", "BUG", "CHORE"],
     "open": [4, 3, 1],
-    "completed": [2, 1, 1]
-  },
-  "tasks_by_status": {
-    "statuses": ["BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"],
-    "counts": [3, 2, 2, 1, 4]
-  },
-  "tasks_per_sprint": {
-    "sprints": [41, 42, 43],
-    "completed": [5, 7, 1],
-    "not_completed": [0, 1, 5]
+    "completed": [2, 1, 1],
+    "backlog": [2, 0, 1]
   },
   "throughput": {
     "weeks": ["2026-08-10", "2026-08-17", "2026-08-24", "2026-08-31", "2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28", "2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"],
@@ -1647,11 +1639,7 @@ Field reference:
 | `tasks_by_type.types` | array of string | The task types that have at least one task, as the `TaskType` enum spells them, in the enum's declared order. |
 | `tasks_by_type.open` | array of integer | Per entry of `types`, the number of open tasks of that type. |
 | `tasks_by_type.completed` | array of integer | Per entry of `types`, the number of tasks of that type whose status is `COMPLETED`. |
-| `tasks_by_status.statuses` | array of string | The five task statuses, always all five, in the `TaskStatus` enum's declared order. |
-| `tasks_by_status.counts` | array of integer | Per entry of `statuses`, the number of tasks in that status. |
-| `tasks_per_sprint.sprints` | array of integer | The `id` of each sprint the chart shows, in ascending sprint `order`. The page labels each bar `#<id>`. |
-| `tasks_per_sprint.completed` | array of integer | Per entry of `sprints`, the number of the sprint's member tasks whose status is `COMPLETED`. |
-| `tasks_per_sprint.not_completed` | array of integer | Per entry of `sprints`, the number of the sprint's other member tasks. |
+| `tasks_by_type.backlog` | array of integer | Per entry of `types`, the number of tasks of that type whose status is `BACKLOG`. Each entry is at most the corresponding entry of `open`, and may be `0`. |
 | `throughput.weeks` | array of string | The date of the Monday that begins each of the twelve weeks, `YYYY-MM-DD`, oldest first. |
 | `throughput.created` | array of integer | Per entry of `weeks`, the number of tasks created in that week. |
 | `throughput.completed` | array of integer | Per entry of `weeks`, the number of `COMPLETED` tasks whose `closed_at` falls in that week. |
@@ -1659,22 +1647,18 @@ Field reference:
 
 Rules:
 
-1. All five members are always present, in the order shown, whatever the
+1. All three members are always present, in the order shown, whatever the
    roadmap holds. An array with nothing to hold is `[]`, never `null`, and no
    member is ever omitted (see [Implementation Notes](#implementation-notes)).
 2. The parallel arrays of one member always have the same length:
-   `tasks_by_type.open` and `tasks_by_type.completed` have one entry per entry of
-   `tasks_by_type.types`; `tasks_by_status.counts` has five; the two count arrays
-   of `tasks_per_sprint` have one entry per entry of `tasks_per_sprint.sprints`,
-   which holds at most ten; and the three arrays of `throughput` have exactly
-   twelve entries each.
-3. For a roadmap with no task, `tasks_by_type.types` and its two count arrays are
-   `[]`, `tasks_by_status.counts` is five zeros, and every value of
-   `throughput.created` and `throughput.completed` is `0`. With no sprint
-   `CLOSED` or `OPEN`, the three arrays of `tasks_per_sprint` are `[]`. With no
-   sprint `OPEN`, or an `OPEN` sprint none of whose member tasks is completed,
+   `tasks_by_type.open`, `tasks_by_type.completed`, and `tasks_by_type.backlog`
+   have one entry per entry of `tasks_by_type.types`, which holds at most ten; and
+   the three arrays of `throughput` have exactly twelve entries each.
+3. For a roadmap with no task, `tasks_by_type.types` and its three count arrays are
+   `[]`, and every value of `throughput.created` and `throughput.completed` is
+   `0`. With no sprint `OPEN`, or an `OPEN` sprint none of whose member tasks is completed,
    `burndown` is `[]`.
-4. The object carries enum values, counts, sprint ids, and dates only. It carries
+4. The object carries enum values, counts, and dates only. It carries
    no task or sprint title, no description, no comment, and no other free text a
    user authored.
 5. The `date` of a `burndown` entry and each entry of `throughput.weeks` are
@@ -1688,6 +1672,12 @@ Rules:
    close the element. Whitespace around the object is permitted, and the object is
    not required to be pretty-printed: it is part of an HTML page, not output to
    stdout.
+8. `tasks_by_type` is the data of the three type-breakdown donuts of the KPI row.
+   The `Open tasks` donut reads `open`, the
+   `Completed` donut `completed`, and the `Backlog` donut `backlog`; each takes
+   from its array, in the order of `types`, the entries greater than `0`, one
+   slice per entry, the type at the same index naming the slice (see
+   `WEB.md § Roadmap Dashboard Page`, **Type-breakdown donuts**).
 
 ---
 

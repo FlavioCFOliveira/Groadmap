@@ -16,7 +16,7 @@ import (
 // the sprint-statistics member read of § Join Order of the Sprint Completion
 // Counts, and the audit read of § Query Audit Entries — all issued inside ONE
 // read-only transaction, so every figure reads the same committed state. The
-// number of statements is fixed: eleven with no sprint OPEN and twelve with one,
+// number of statements is fixed: ten with no sprint OPEN and eleven with one,
 // whatever the number of tasks, sprints, or audit entries. Every status value,
 // every bound of the throughput window, and every row cap is a bound parameter.
 //
@@ -24,10 +24,9 @@ import (
 // production runs.
 
 // The row caps of the dashboard's bounded reads (SPEC/WEB.md § Roadmap Dashboard
-// Page, blocks 5, 7, 8, 9, and 10) and the number of closed sprints the average
+// Page, blocks 4, 5, 6, and 7) and the number of closed sprints the average
 // velocity covers (SPEC/COMMANDS.md § Get Roadmap Statistics).
 const (
-	dashboardSprintChartCap   = 10
 	dashboardInProgressCap    = 10
 	dashboardSevereCap        = 5
 	dashboardUpcomingCap      = 5
@@ -57,19 +56,6 @@ WHERE t.status <> ?
 	dashboardOpenSprintQuery = `SELECT id, title, started_at, max_tasks
 FROM sprints
 WHERE status = ?`
-
-	// dashboardSprintCompletionQuery is § Dashboard Tasks per Sprint. Its
-	// parameters are 'COMPLETED', 'CLOSED', 'OPEN', and the row cap.
-	dashboardSprintCompletionQuery = `SELECT s.id,
-       (SELECT COUNT(*) FROM sprint_tasks st CROSS JOIN tasks t ON t.id = st.task_id
-        WHERE st.sprint_id = s.id AND t.status = ?) AS completed_count,
-       (SELECT COUNT(*) FROM sprint_tasks st
-        WHERE st.sprint_id = s.id) AS member_count
-FROM (SELECT id, order_index FROM sprints
-      WHERE status IN (?, ?)
-      ORDER BY order_index DESC
-      LIMIT ?) s
-ORDER BY s.order_index ASC`
 
 	// dashboardCreatedPerWeekQuery is the first statement of § Dashboard Weekly
 	// Throughput. Its parameters are the window start and the window end.
@@ -133,14 +119,6 @@ type DashboardSprint struct {
 	ID        int
 }
 
-// SprintCompletion is one bar of the dashboard's Tasks per Sprint chart: the
-// sprint's id, its COMPLETED member tasks, and all of its member tasks.
-type SprintCompletion struct {
-	ID        int
-	Completed int
-	Members   int
-}
-
 // WeekCount is the number of tasks of one ISO 8601 week, keyed by the date of
 // the week's Monday, YYYY-MM-DD. A week no task falls in has no row.
 type WeekCount struct {
@@ -176,7 +154,6 @@ type Dashboard struct {
 	OpenSprint        *DashboardSprint
 	TypeStatusCounts  []TypeStatusCount
 	OpenSprintMembers []SprintMemberState
-	SprintCompletion  []SprintCompletion
 	CreatedPerWeek    []WeekCount
 	CompletedPerWeek  []WeekCount
 	InProgress        []DashboardTask
@@ -237,9 +214,6 @@ func readDashboard(ctx context.Context, q queryer, windowStart, windowEnd string
 		}
 	}
 	if d.AverageVelocity, err = averageVelocity(ctx, q, dashboardVelocitySprintsN); err != nil {
-		return nil, err
-	}
-	if d.SprintCompletion, err = dashboardSprintCompletion(ctx, q); err != nil {
 		return nil, err
 	}
 	if d.CreatedPerWeek, err = dashboardWeekCounts(ctx, q, dashboardCreatedPerWeekQuery,
@@ -340,29 +314,6 @@ func dashboardOpenSprint(ctx context.Context, q queryer) (*DashboardSprint, erro
 		return nil, fmt.Errorf("iterating the open sprint: %w", err)
 	}
 	return sprint, nil
-}
-
-// dashboardSprintCompletion runs § Dashboard Tasks per Sprint.
-func dashboardSprintCompletion(ctx context.Context, q queryer) ([]SprintCompletion, error) {
-	rows, err := q.QueryContext(ctx, dashboardSprintCompletionQuery,
-		models.StatusCompleted, models.SprintClosed, models.SprintOpen, dashboardSprintChartCap)
-	if err != nil {
-		return nil, fmt.Errorf("counting the tasks per sprint: %w", err)
-	}
-	defer rows.Close()
-
-	out := []SprintCompletion{}
-	for rows.Next() {
-		var c SprintCompletion
-		if err := rows.Scan(&c.ID, &c.Completed, &c.Members); err != nil {
-			return nil, fmt.Errorf("scanning the tasks of a sprint: %w", err)
-		}
-		out = append(out, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating the tasks per sprint: %w", err)
-	}
-	return out, nil
 }
 
 // dashboardWeekCounts runs one statement of § Dashboard Weekly Throughput.

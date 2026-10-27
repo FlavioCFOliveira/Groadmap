@@ -17,7 +17,11 @@ import (
 // roadmap index, the roadmap sprints landing page, the roadmap tasks page, a
 // roadmap sprint detail page, the roadmap audit log page, and the
 // knowledge-graph page — and asserts the rendered HTML contains the gutter
-// class on the page-header row and no longer contains the gutter-less variant.
+// class on the page-header row and that the page header no longer contains the
+// gutter-less variant. The absence is checked in the page header alone: the
+// dashboard's KPI cards carry `row align-items-center` by specification, the
+// row-and-column layout of Tabler's stat cards (SPEC/WEB.md § Roadmap Dashboard
+// Page, Block 1).
 func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
@@ -42,7 +46,8 @@ func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 			t.Errorf("page %s: missing Tabler page-header gutter row "+
 				`<div class="row g-2 align-items-center">`, path)
 		}
-		if strings.Contains(body, `<div class="row align-items-center">`) {
+		header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<main class="page-body">`)
+		if strings.Contains(header, `<div class="row align-items-center">`) {
 			t.Errorf("page %s: page-header row regressed to the gutter-less "+
 				`<div class="row align-items-center">`, path)
 		}

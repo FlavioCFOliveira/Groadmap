@@ -20,7 +20,7 @@ import (
 )
 
 // This file is the gate of the Roadmap Dashboard Page (SPEC/WEB.md § Roadmap
-// Dashboard Page; Acceptance Criteria 265 to 284), of its chart data block
+// Dashboard Page; Acceptance Criteria 265 to 286), of its chart data block
 // (SPEC/DATA_FORMATS.md § Dashboard Chart Data), and of the vendored chart assets
 // (SPEC/BUILD.md § Vendored Web Assets, rules 7 and 8, and its verification
 // checklist). The statement count and the single transaction of the page's read
@@ -160,9 +160,9 @@ func addDependency(t *testing.T, database *db.DB, task, dependsOn int) {
 }
 
 // dashFixture is the seeded roadmap of Acceptance Criteria 268, 269, 271, 272,
-// and 280: 12 tasks — 3 BACKLOG, 2 SPRINT, 2 DOING, 1 TESTING, 4 COMPLETED —
+// 280, and 286: 12 tasks — 3 BACKLOG, 2 SPRINT, 2 DOING, 1 TESTING, 4 COMPLETED —
 // of 6 TASK (4 open, 2 completed), 4 BUG (3 open, 1 completed), and 2 CHORE
-// (1 open, 1 completed); an OPEN sprint with max_tasks 8, started 3 days and 5
+// (1 open, 1 completed), the 3 BACKLOG tasks being 2 TASK and 1 CHORE; an OPEN sprint with max_tasks 8, started 3 days and 5
 // hours before dashNow, holding 2 SPRINT, 2 DOING, 1 TESTING, and 1 COMPLETED
 // task; one CLOSED sprint, so the average velocity is not zero; and one PENDING
 // sprint titled with markup.
@@ -188,14 +188,14 @@ func seedDashFixture(t *testing.T, name string) dashFixture {
 	tasks := []dashTask{
 		{title: "Draft the settlement reconciliation runbook", typ: models.TypeTask, status: models.StatusBacklog, severity: 2, priority: 3},
 		{title: dashScriptTitle, typ: models.TypeTask, status: models.StatusBacklog, severity: 9, priority: 1},
-		{title: "Rounding drift in the FX conversion report", typ: models.TypeBug, status: models.StatusBacklog, severity: 6, priority: 4},
+		{title: "Rotate the settlement service credentials", typ: models.TypeChore, status: models.StatusBacklog, severity: 6, priority: 4},
 		{title: "Expose the batch status endpoint", typ: models.TypeTask, status: models.StatusSprint, severity: 3, priority: 5},
 		{title: "Duplicate rows in the nightly ledger export", typ: models.TypeBug, status: models.StatusSprint, severity: 8, priority: 7},
 		{title: "Migrate the settlement scheduler to the new queue", typ: models.TypeTask, status: models.StatusDoing, severity: 5, priority: 6,
 			started: at(dashNow.Add(-50 * time.Hour))},
 		{title: "Timeout when the acquirer feed is slow", typ: models.TypeBug, status: models.StatusDoing, severity: 7, priority: 8,
 			started: at(dashNow.Add(-26 * time.Hour))},
-		{title: "Rotate the settlement service credentials", typ: models.TypeChore, status: models.StatusTesting, severity: 4, priority: 2,
+		{title: "Rounding drift in the FX conversion report", typ: models.TypeBug, status: models.StatusTesting, severity: 4, priority: 2,
 			started: at(dashNow.Add(-74 * time.Hour))},
 		{title: "Add the batch identifier to the audit trail", typ: models.TypeTask, status: models.StatusCompleted, severity: 3, priority: 3,
 			started: at(started), closed: at(dashNow.Add(-26 * time.Hour))},
@@ -273,7 +273,25 @@ var (
 	dashColRe   = regexp.MustCompile(`<div class="(col-[^"]+)">`)
 	dashTitleRe = regexp.MustCompile(`<h3 class="card-title">([^<]+)</h3>|<div class="subheader">([^<]+)</div>`)
 	dashLabelRe = regexp.MustCompile(`<div class="chart-lg" id="([a-z-]+)" role="img" aria-label="([^"]*)"></div>`)
+	dashDonutRe = regexp.MustCompile(`<div id="(chart-[a-z]+-by-type)" role="img" aria-label="([^"]*)"></div>`)
 )
+
+// dashKPIRow is the row-and-column layout of the Open tasks, Completed, and
+// Backlog KPI cards (SPEC/WEB.md § Roadmap Dashboard Page, Block 1).
+const dashKPIRow = `<div class="row align-items-center">`
+
+// dashGridCols returns the column classes of the grid's blocks, in order: every
+// col-* column except the col-auto donut columns inside the KPI cards, which are
+// not blocks of the grid.
+func dashGridCols(main string) []string {
+	var cols []string
+	for _, m := range dashColRe.FindAllStringSubmatch(main, -1) {
+		if m[1] != "col-auto" {
+			cols = append(cols, m[1])
+		}
+	}
+	return cols
+}
 
 // dashCharts decodes the page's one chart data block.
 func dashCharts(t *testing.T, body string) dashboardCharts {
@@ -290,10 +308,13 @@ func dashCharts(t *testing.T, body string) dashboardCharts {
 }
 
 // dashAriaLabels returns each chart container's aria-label by container id,
-// unescaped.
+// unescaped: the two line charts and the KPI type-breakdown donuts.
 func dashAriaLabels(body string) map[string]string {
 	labels := map[string]string{}
 	for _, m := range dashLabelRe.FindAllStringSubmatch(body, -1) {
+		labels[m[1]] = htmlUnescape(m[2])
+	}
+	for _, m := range dashDonutRe.FindAllStringSubmatch(body, -1) {
 		labels[m[1]] = htmlUnescape(m[2])
 	}
 	return labels
@@ -356,17 +377,15 @@ func TestDashboard_IsTheLandingPage(t *testing.T) {
 	if n := strings.Count(main, `<div class="row row-deck row-cards">`); n != 1 {
 		t.Fatalf("the page body holds %d row-deck row-cards grids, want 1", n)
 	}
-	if strings.Count(main, `class="row`) != 1 {
-		t.Errorf("the page body holds a row other than the one grid")
+	// The one grid, and inside it only the row-and-column layout of the three
+	// KPI cards that carry a type-breakdown donut.
+	if strings.Count(main, dashKPIRow) != 3 || strings.Count(main, `class="row`)-strings.Count(main, dashKPIRow) != 1 {
+		t.Errorf("the page body holds a row other than the one grid and the three KPI card rows")
 	}
-	colMatches := dashColRe.FindAllStringSubmatch(main, -1)
-	cols := make([]string, 0, len(colMatches))
-	for _, m := range colMatches {
-		cols = append(cols, m[1])
-	}
+	cols := dashGridCols(main)
 	wantCols := []string{
 		"col-sm-6 col-lg-3", "col-sm-6 col-lg-3", "col-sm-6 col-lg-3", "col-sm-6 col-lg-3",
-		"col-lg-6", "col-lg-6", "col-lg-6", "col-lg-6", "col-12", "col-lg-6", "col-lg-6", "col-12", "col-12",
+		"col-lg-6", "col-lg-6", "col-lg-6", "col-lg-6", "col-12", "col-12",
 	}
 	if strings.Join(cols, "|") != strings.Join(wantCols, "|") {
 		t.Errorf("the grid's columns are %q, want %q", cols, wantCols)
@@ -377,9 +396,8 @@ func TestDashboard_IsTheLandingPage(t *testing.T) {
 		titles = append(titles, m[1]+m[2])
 	}
 	wantTitles := []string{
-		"Open tasks", "Completed", "Backlog", "Average velocity", "Current sprint", "Tasks by type",
-		"Tasks by status", "Tasks per sprint", "Throughput", "Work in progress",
-		"Highest-severity open tasks", "Upcoming sprints", "Recent activity",
+		"Open tasks", "Completed", "Backlog", "Average velocity", "Current sprint", "Throughput",
+		"Work in progress", "Highest-severity open tasks", "Upcoming sprints", "Recent activity",
 	}
 	if strings.Join(titles, "|") != strings.Join(wantTitles, "|") {
 		t.Errorf("the blocks read %q, want %q", titles, wantTitles)
@@ -750,137 +768,255 @@ func TestDashboard_NoOpenSprintShowsAnEmptyState(t *testing.T) {
 	}
 }
 
-// ==================== AC 271 AND 272: TYPES AND STATUSES ====================
+// ==================== AC 271, 272, AND 273: THE DONUT DATA AND THE LAYOUT ====================
 
-// TestDashboard_TasksByTypeAndStatus is Acceptance Criteria 271 and 272.
-func TestDashboard_TasksByTypeAndStatus(t *testing.T) {
+// TestDashboard_DonutDataCountsPerType is Acceptance Criterion 271 and
+// SPEC/DATA_FORMATS.md § Dashboard Chart Data, rules 2 and 3.
+func TestDashboard_DonutDataCountsPerType(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	f := seedDashFixture(t, "settlement-platform")
+	c := dashCharts(t, dashboardBody(t, f.name, dashNow))
+
+	byType, _ := json.Marshal(c.TasksByType)
+	if string(byType) != `{"types":["TASK","BUG","CHORE"],"open":[4,3,1],"completed":[2,1,1],"backlog":[2,0,1]}` {
+		t.Errorf("tasks_by_type = %s", byType)
+	}
+
+	// Every type in enum order, each with its own per-card counts, and a type
+	// whose every task is COMPLETED keeps zero open and backlog entries.
+	database := openDashRoadmap(t, "treasury-ops")
+	tasks := []dashTask{
+		{title: "Close the treasury books", typ: models.TypeSpike, status: models.StatusBacklog},
+		{title: "Forecast the quarter-end cash position", typ: models.TypeUserStory, status: models.StatusDoing, started: at(dashNow.Add(-time.Hour))},
+		{title: "Model the intraday liquidity buffer", typ: models.TypeSpike, status: models.StatusSprint},
+		{title: "Treasury workstation redesign", typ: models.TypeDesignUX, status: models.StatusCompleted, closed: at(dashNow.Add(-time.Hour))},
+		{title: "Faster bank statement import", typ: models.TypeImprovement, status: models.StatusBacklog},
+		{title: "Split the cash pooling service", typ: models.TypeRefactor, status: models.StatusTesting, started: at(dashNow.Add(-time.Hour))},
+	}
+	setDashTaskStates(t, database, addDashTasks(t, database, tasks), tasks)
+	c = dashCharts(t, dashboardBody(t, "treasury-ops", dashNow))
+	byType, _ = json.Marshal(c.TasksByType)
+	if string(byType) != `{"types":["USER_STORY","REFACTOR","SPIKE","DESIGN_UX","IMPROVEMENT"],`+
+		`"open":[1,1,2,0,1],"completed":[0,0,0,1,0],"backlog":[0,0,1,0,1]}` {
+		t.Errorf("tasks_by_type = %s", byType)
+	}
+	for i := range c.TasksByType.Types {
+		if c.TasksByType.Backlog[i] > c.TasksByType.Open[i] {
+			t.Errorf("type %s: backlog %d exceeds open %d", c.TasksByType.Types[i], c.TasksByType.Backlog[i], c.TasksByType.Open[i])
+		}
+	}
+}
+
+// TestDashboard_CurrentSprintAndThroughputShareARow is the markup half of
+// Acceptance Criterion 272: Throughput stands in a col-lg-6 directly after the
+// Current sprint's col-lg-6, the removed blocks are gone, and the page holds no
+// chart other than the burndown, the throughput, and the three donuts. The
+// 1440px measurement is a browser's.
+func TestDashboard_CurrentSprintAndThroughputShareARow(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	f := seedDashFixture(t, "settlement-platform")
 	body := dashboardBody(t, f.name, dashNow)
-	c := dashCharts(t, body)
+	main := regionBetween(t, body, `<main class="page-body">`, `</main>`)
 
-	byType, _ := json.Marshal(c.TasksByType)
-	if string(byType) != `{"types":["TASK","BUG","CHORE"],"open":[4,3,1],"completed":[2,1,1]}` {
-		t.Errorf("tasks_by_type = %s", byType)
-	}
-	byStatus, _ := json.Marshal(c.TasksByStatus)
-	if string(byStatus) != `{"statuses":["BACKLOG","SPRINT","DOING","TESTING","COMPLETED"],"counts":[3,2,2,1,4]}` {
-		t.Errorf("tasks_by_status = %s", byStatus)
-	}
-	labels := dashAriaLabels(body)
-	if got := labels["chart-tasks-by-type"]; got != "Tasks by type: TASK 4 open, 2 completed; BUG 3 open, 1 completed; CHORE 1 open, 1 completed" {
-		t.Errorf("the Tasks by type aria-label is %q", got)
-	}
-	if got := labels["chart-tasks-by-status"]; got != "Tasks by status: BACKLOG 3, SPRINT 2, DOING 2, TESTING 1, COMPLETED 4" {
-		t.Errorf("the Tasks by status aria-label is %q", got)
+	assertOrdered(t, "the grid", main, []string{
+		`<div class="col-lg-6">` + "\n" + `              <div class="card" data-role="current-sprint">`,
+		`<div class="col-lg-6">` + "\n" + `              <div class="card" data-role="throughput">`,
+		`<div class="col-lg-6">` + "\n" + `              <div class="card" data-role="work-in-progress">`,
+		`<div class="col-lg-6">` + "\n" + `              <div class="card" data-role="most-severe">`,
+	})
+	for _, absent := range []string{
+		"tasks-by-type", "tasks-by-status", "tasks-per-sprint", "Tasks by type", "Tasks by status",
+		"Tasks per sprint", "No started sprint yet", "No tasks yet", "tasks_by_status", "tasks_per_sprint",
+	} {
+		if strings.Contains(body, absent) {
+			t.Errorf("the page still carries %q", absent)
+		}
 	}
 
-	// The donut's five series colours, in the status order (SPEC/WEB.md
-	// § Dashboard Chart Library, rule 5).
+	chartMatches := regexp.MustCompile(`<div [^>]*id="(chart-[a-z-]+)"`).FindAllStringSubmatch(main, -1)
+	charts := make([]string, 0, len(chartMatches))
+	for _, m := range chartMatches {
+		charts = append(charts, m[1])
+	}
+	want := []string{"chart-open-by-type", "chart-completed-by-type", "chart-backlog-by-type", "chart-burndown", "chart-throughput"}
+	if strings.Join(charts, ",") != strings.Join(want, ",") {
+		t.Errorf("the page's charts are %v, want %v", charts, want)
+	}
+
+	// The page script draws no removed chart.
 	js := stripJSComments(readEmbeddedAsset(t, "static/dashboard.js"))
-	colours := regexp.MustCompile(`(?s)var STATUS_COLOURS = \[(.*?)\];`).FindStringSubmatch(js)
-	if colours == nil {
-		t.Fatal("dashboard.js declares no STATUS_COLOURS")
-	}
-	got := strings.Join(strings.Fields(strings.NewReplacer(`"`, "", ",", " ").Replace(colours[1])), " ")
-	if got != "SECONDARY var(--tblr-cyan) var(--tblr-blue) var(--tblr-yellow) GREEN" ||
-		!strings.Contains(js, `var GREEN = "var(--tblr-green)";`) ||
-		!strings.Contains(js, `var SECONDARY = "var(--tblr-secondary)";`) {
-		t.Errorf("the donut's colours are %q, want secondary, cyan, blue, yellow, green", got)
-	}
-
-	// A status with no task is still present, with 0.
-	database := openDashRoadmap(t, "treasury-ops")
-	addDashTasks(t, database, []dashTask{{title: "Close the treasury books", typ: models.TypeSpike, status: models.StatusBacklog}})
-	c = dashCharts(t, dashboardBody(t, "treasury-ops", dashNow))
-	if len(c.TasksByStatus.Counts) != 5 || c.TasksByStatus.Counts[0] != 1 || c.TasksByStatus.Counts[4] != 0 {
-		t.Errorf("tasks_by_status.counts = %v, want [1 0 0 0 0]", c.TasksByStatus.Counts)
-	}
-	if strings.Join(statusStrings(c.TasksByType.Types), ",") != "SPIKE" {
-		t.Errorf("tasks_by_type.types = %v, want [SPIKE]", c.TasksByType.Types)
+	for _, absent := range []string{"tasks_by_status", "tasks_per_sprint", "chart-tasks-", `"bar"`, "stacked", "STATUS_COLOURS"} {
+		if strings.Contains(js, absent) {
+			t.Errorf("dashboard.js still carries %q", absent)
+		}
 	}
 }
 
-func statusStrings[T ~string](values []T) []string {
-	out := make([]string, len(values))
-	for i, v := range values {
-		out[i] = string(v)
-	}
-	return out
-}
-
-// ==================== AC 273: TASKS PER SPRINT ====================
-
-// TestDashboard_TasksPerSprintShowsTheLastTenStarted is Acceptance Criterion 273.
-func TestDashboard_TasksPerSprintShowsTheLastTenStarted(t *testing.T) {
+// TestDashboard_ZeroValueKPICardDrawsNoDonut is Acceptance Criterion 273.
+func TestDashboard_ZeroValueKPICardDrawsNoDonut(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	database := openDashRoadmap(t, "card-issuing")
-	ids := addDashTasks(t, database, []dashTask{
-		{title: "Issue virtual cards", typ: models.TypeTask, status: models.StatusCompleted, closed: at(dashNow.AddDate(0, 0, -40))},
-		{title: "Tokenise the PAN", typ: models.TypeTask, status: models.StatusCompleted, closed: at(dashNow.AddDate(0, 0, -30))},
-		{title: "Card controls screen", typ: models.TypeTask, status: models.StatusDoing, started: at(dashNow.AddDate(0, 0, -2))},
-	})
-	closed := make([]int, 0, 11)
-	for i := range 11 {
-		// Orders 1..11, inserted in reverse so the id order is not the order.
-		order := 11 - i
-		var members []int
-		if order == 11 {
-			members = []int{ids[0], ids[1]}
-		}
-		id := addDashSprint(t, database, "Issuing wave "+itoa(order), order, members)
-		closed = append(closed, id)
+	done := func(title string, typ models.TaskType, daysAgo int) dashTask {
+		return dashTask{title: title, typ: typ, status: models.StatusCompleted, closed: at(dashNow.AddDate(0, 0, -daysAgo))}
 	}
-	open := addDashSprint(t, database, "Issuing wave 12", 12, []int{ids[2]})
-	pendingA := addDashSprint(t, database, "Issuing wave 13", 13, nil)
-	pendingB := addDashSprint(t, database, "Issuing wave 14", 14, nil)
 	tasks := []dashTask{
-		{status: models.StatusCompleted, closed: at(dashNow.AddDate(0, 0, -40))},
-		{status: models.StatusCompleted, closed: at(dashNow.AddDate(0, 0, -30))},
-		{status: models.StatusDoing, started: at(dashNow.AddDate(0, 0, -2))},
+		done("Issue virtual cards", models.TypeTask, 40),
+		done("Tokenise the PAN", models.TypeTask, 30),
+		done("Card controls screen", models.TypeTask, 20),
+		done("Declined contactless payments abroad", models.TypeBug, 15),
+		done("PIN change not propagated to the processor", models.TypeBug, 10),
 	}
-	setDashTaskStates(t, database, ids, tasks)
-	for _, id := range closed {
-		setDashSprint(t, database, id, models.SprintClosed, at(dashNow.AddDate(0, 0, -60)), at(dashNow.AddDate(0, 0, -50)), nil)
-	}
-	setDashSprint(t, database, open, models.SprintOpen, at(dashNow.AddDate(0, 0, -5)), nil, nil)
-
+	setDashTaskStates(t, database, addDashTasks(t, database, tasks), tasks)
 	body := dashboardBody(t, "card-issuing", dashNow)
-	c := dashCharts(t, body).TasksPerSprint
 
-	// closed[i] has order 11-i; the nine highest closed orders are 3..11, which
-	// are closed[8] down to closed[0], in ascending order, then the OPEN sprint.
-	want := []int{closed[8], closed[7], closed[6], closed[5], closed[4], closed[3], closed[2], closed[1], closed[0], open}
-	if strconv.Quote(intsText(c.Sprints)) != strconv.Quote(intsText(want)) {
-		t.Errorf("tasks_per_sprint.sprints = %v, want %v", c.Sprints, want)
-	}
-	for _, absent := range []int{closed[10], closed[9], pendingA, pendingB} {
-		for _, id := range c.Sprints {
-			if id == absent {
-				t.Errorf("sprint %d appears in tasks_per_sprint", absent)
+	for _, role := range []string{"kpi-open", "kpi-backlog"} {
+		card := dashCard(t, body, role)
+		if !strings.Contains(card, `<div class="h1 mb-3">0</div>`) {
+			t.Errorf("%s does not read 0; card=%q", role, card)
+		}
+		if !strings.Contains(card, dashKPIRow) || !strings.Contains(card, `<div class="col">`) {
+			t.Errorf("%s lost its row or its col; card=%q", role, card)
+		}
+		for _, absent := range []string{`<div class="col-auto">`, `role="img"`, "-by-type", `<div class="empty">`} {
+			if strings.Contains(card, absent) {
+				t.Errorf("%s, whose value is 0, carries %q; card=%q", role, absent, card)
 			}
 		}
 	}
-	if len(c.Completed) != 10 || len(c.NotCompleted) != 10 {
-		t.Fatalf("the count arrays have %d and %d entries, want 10", len(c.Completed), len(c.NotCompleted))
+	completed := dashCard(t, body, "kpi-completed")
+	if !strings.Contains(completed, `<div class="col-auto">`) {
+		t.Errorf("the Completed card holds no donut column; card=%q", completed)
 	}
-	// closed[0] (order 11) holds the two completed tasks; the OPEN sprint one DOING task.
-	if c.Completed[8] != 2 || c.NotCompleted[8] != 0 || c.Completed[9] != 0 || c.NotCompleted[9] != 1 {
-		t.Errorf("completed = %v, not_completed = %v", c.Completed, c.NotCompleted)
+	if got := dashAriaLabels(body)["chart-completed-by-type"]; got != "Completed tasks by type: TASK 3 (60%), BUG 2 (40%)" {
+		t.Errorf("the Completed donut's aria-label is %q", got)
 	}
-	for i := range 8 {
-		if c.Completed[i] != 0 || c.NotCompleted[i] != 0 {
-			t.Errorf("sprint %d with no member task reads %d and %d, want two zero series", c.Sprints[i], c.Completed[i], c.NotCompleted[i])
+	if n := len(dashDonutRe.FindAllString(body, -1)); n != 1 {
+		t.Errorf("%d donut containers, want 1", n)
+	}
+	byType, _ := json.Marshal(dashCharts(t, body).TasksByType)
+	if string(byType) != `{"types":["TASK","BUG"],"open":[0,0],"completed":[3,2],"backlog":[0,0]}` {
+		t.Errorf("tasks_by_type = %s", byType)
+	}
+}
+
+// ==================== AC 286: THE KPI TYPE-BREAKDOWN DONUTS ====================
+
+// TestDashboard_KPICardsCarryTypeDonuts is the markup and source half of
+// Acceptance Criterion 286; the drawn half — 64 px square, no legend, the
+// tooltip text on hover — is a browser's.
+func TestDashboard_KPICardsCarryTypeDonuts(t *testing.T) {
+	t.Setenv("HOME", shortHome(t))
+	f := seedDashFixture(t, "settlement-platform")
+	body := dashboardBody(t, f.name, dashNow)
+
+	cardRe := func(label, role string) *regexp.Regexp {
+		return regexp.MustCompile(`(?s)^\s*<div class="card-body">\s*` + regexp.QuoteMeta(dashKPIRow) +
+			`\s*<div class="col">\s*<div class="subheader">` + label + `</div>\s*<div class="h1 mb-3">\d+</div>.*?` +
+			`</div>\s*<div class="col-auto">\s*<div id="chart-` + role + `-by-type" role="img" aria-label="[^"]*"></div>\s*</div>\s*</div>\s*</div>\s*</div>\s*</div>\s*<div class="col-sm-6 col-lg-3">\s*$`)
+	}
+	for _, c := range []struct{ role, label, chart string }{
+		{"kpi-open", "Open tasks", "open"},
+		{"kpi-completed", "Completed", "completed"},
+		{"kpi-backlog", "Backlog", "backlog"},
+	} {
+		card := dashCard(t, body, c.role)
+		if !cardRe(c.label, c.chart).MatchString(card) {
+			t.Errorf("%s is not a row of a col (label, value, subline) and a col-auto holding its donut; card=%q", c.role, card)
+		}
+		if strings.Count(card, `role="img"`) != 1 {
+			t.Errorf("%s holds %d donut containers, want 1", c.role, strings.Count(card, `role="img"`))
 		}
 	}
-	label := dashAriaLabels(body)["chart-tasks-per-sprint"]
-	parts := make([]string, len(want))
-	for i, id := range want {
-		parts[i] = "#" + itoa(id) + " " + itoa(c.Completed[i]) + " completed, " + itoa(c.NotCompleted[i]) + " not completed"
+	velocity := dashCard(t, body, "kpi-velocity")
+	for _, absent := range []string{"col-auto", `role="img"`, dashKPIRow} {
+		if strings.Contains(velocity, absent) {
+			t.Errorf("the Average velocity card carries %q", absent)
+		}
 	}
-	wantLabel := "Tasks per sprint: " + strings.Join(parts, "; ")
-	if label != wantLabel {
-		t.Errorf("the Tasks per sprint aria-label is %q, want %q", label, wantLabel)
+	// The open card's subline stays in the col, after the value.
+	assertOrdered(t, "the Open tasks card", dashCard(t, body, "kpi-open"), []string{
+		`<div class="col">`, `<div class="subheader">Open tasks</div>`, `<div class="h1 mb-3">8</div>`,
+		">3 in progress, 1 blocked<", `<div class="col-auto">`,
+	})
+
+	labels := dashAriaLabels(body)
+	for id, want := range map[string]string{
+		"chart-open-by-type":      "Open tasks by type: TASK 4 (50%), BUG 3 (37%), CHORE 1 (12%)",
+		"chart-completed-by-type": "Completed tasks by type: TASK 2 (50%), BUG 1 (25%), CHORE 1 (25%)",
+		"chart-backlog-by-type":   "Backlog tasks by type: TASK 2 (66%), CHORE 1 (33%)",
+	} {
+		if labels[id] != want {
+			t.Errorf("%s aria-label = %q, want %q", id, labels[id], want)
+		}
+	}
+	// The containers, in card order, carry no class and no style attribute.
+	donuts := dashDonutRe.FindAllStringSubmatch(body, -1)
+	if len(donuts) != 3 || donuts[0][1] != "chart-open-by-type" || donuts[1][1] != "chart-completed-by-type" ||
+		donuts[2][1] != "chart-backlog-by-type" {
+		t.Errorf("the donut containers are %v", donuts)
+	}
+
+	// The script: a donut per card from its array, 64 by 64, sparkline, no
+	// legend, no data labels, the tooltip writing <n> (<p>%) with p floored.
+	js := strings.Join(strings.Fields(stripJSComments(readEmbeddedAsset(t, "static/dashboard.js"))), " ")
+	for _, want := range []string{
+		`var DONUT_SIZE = 64;`,
+		`type: "donut", height: DONUT_SIZE, width: DONUT_SIZE, fontFamily: "inherit", parentHeightOffset: 0, sparkline: { enabled: true }, toolbar: { show: false }, animations: { enabled: false }`,
+		`legend: { show: false }, dataLabels: { enabled: false }, tooltip: { fillSeriesColor: false,`,
+		`return value + " (" + Math.floor(value * 100 / total) + "%)";`,
+		`if (counts[i] > 0) { labels.push(types[i]); series.push(counts[i]); colours.push(TYPE_COLOURS[types[i]]);`,
+		`draw("chart-open-by-type", typeDonutOptions(byType.types, byType.open));`,
+		`draw("chart-completed-by-type", typeDonutOptions(byType.types, byType.completed));`,
+		`draw("chart-backlog-by-type", typeDonutOptions(byType.types, byType.backlog));`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("dashboard.js lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`width:\s*"[0-9.]+%"`).MatchString(js) {
+		t.Errorf("a chart width is a percentage")
+	}
+
+	// Each type's slice colour is the solid counterpart of its badge variant,
+	// var(--tblr-<colour>) for bg-<colour>-lt, for every type of the enum.
+	block := regexp.MustCompile(`var TYPE_COLOURS = \{(.*?)\};`).FindStringSubmatch(js)
+	if block == nil {
+		t.Fatal("dashboard.js declares no TYPE_COLOURS")
+	}
+	entries := regexp.MustCompile(`([A-Z_]+): "([^"]+)"`).FindAllStringSubmatch(block[1], -1)
+	if len(entries) != len(models.ValidTaskTypes) {
+		t.Errorf("TYPE_COLOURS holds %d entries, want %d", len(entries), len(models.ValidTaskTypes))
+	}
+	colours := map[string]string{}
+	for _, e := range entries {
+		colours[e[1]] = e[2]
+	}
+	for _, typ := range models.ValidTaskTypes {
+		badge := taskTypeBadge(typ)
+		want := "var(--tblr-" + strings.TrimSuffix(strings.TrimPrefix(badge, "bg-"), "-lt") + ")"
+		if colours[string(typ)] != want {
+			t.Errorf("TYPE_COLOURS[%s] = %q, want %q, the solid counterpart of %s", typ, colours[string(typ)], want, badge)
+		}
+	}
+}
+
+// TestDashboard_TypeDonutLabel pins the donut label's derivation: the slices
+// whose count is greater than 0, in type order, each with its floored share of
+// the card's value, and no label for a value of 0.
+func TestDashboard_TypeDonutLabel(t *testing.T) {
+	types := []models.TaskType{models.TypeTask, models.TypeBug, models.TypeChore}
+	for _, tc := range []struct {
+		counts []int
+		total  int
+		want   string
+	}{
+		{[]int{2, 0, 1}, 3, "Backlog tasks by type: TASK 2 (66%), CHORE 1 (33%)"},
+		{[]int{0, 0, 0}, 0, ""},
+		{[]int{0, 7, 0}, 7, "Backlog tasks by type: BUG 7 (100%)"},
+	} {
+		if got := typeDonutLabel("Backlog tasks by type: ", types, tc.counts, tc.total); got != tc.want {
+			t.Errorf("typeDonutLabel(%v, %d) = %q, want %q", tc.counts, tc.total, got, tc.want)
+		}
 	}
 }
 
@@ -1218,9 +1354,6 @@ func TestDashboard_EmptyRoadmapRendersEmptyStates(t *testing.T) {
 	}
 	empties := map[string][2]string{
 		"current-sprint":   {"Current sprint", "No open sprint"},
-		"tasks-by-type":    {"Tasks by type", "No tasks yet"},
-		"tasks-by-status":  {"Tasks by status", "No tasks yet"},
-		"tasks-per-sprint": {"Tasks per sprint", "No started sprint yet"},
 		"throughput":       {"Throughput", "No activity in the last 12 weeks"},
 		"work-in-progress": {"Work in progress", "No task in progress"},
 		"most-severe":      {"Highest-severity open tasks", "No open task"},
@@ -1242,14 +1375,30 @@ func TestDashboard_EmptyRoadmapRendersEmptyStates(t *testing.T) {
 	if strings.Contains(body, "chart-lg") || strings.Contains(body, "<table") {
 		t.Errorf("the empty roadmap renders a chart container or a table")
 	}
+	// No KPI type-breakdown donut: each of the three cards keeps its row and its
+	// col, and holds no col-auto, no container, and no empty state.
+	for _, role := range []string{"kpi-open", "kpi-completed", "kpi-backlog"} {
+		card := dashCard(t, body, role)
+		if !strings.Contains(card, dashKPIRow) || !strings.Contains(card, `<div class="col">`) {
+			t.Errorf("%s lost its row or its col", role)
+		}
+		if strings.Contains(card, `<div class="col-auto">`) || strings.Contains(card, `role="img"`) || strings.Contains(card, `<div class="empty">`) {
+			t.Errorf("%s of an empty roadmap carries a donut or an empty state; card=%q", role, card)
+		}
+	}
+	if strings.Contains(body, `class="col-auto"`) || strings.Contains(body, "-by-type") {
+		t.Errorf("the empty roadmap renders a KPI type-breakdown donut")
+	}
 
 	c := dashCharts(t, body)
 	raw := dashDataRe.FindStringSubmatch(body)[1]
 	if strings.Contains(raw, "null") {
 		t.Errorf("the chart data block carries null: %s", raw)
 	}
-	if len(c.TasksByStatus.Counts) != 5 || intsText(c.TasksByStatus.Counts) != "0,0,0,0,0" ||
-		len(c.Throughput.Created) != 12 || intsText(c.Throughput.Created) != "0,0,0,0,0,0,0,0,0,0,0,0" {
+	byType, _ := json.Marshal(c.TasksByType)
+	if string(byType) != `{"types":[],"open":[],"completed":[],"backlog":[]}` ||
+		len(c.Throughput.Created) != 12 || intsText(c.Throughput.Created) != "0,0,0,0,0,0,0,0,0,0,0,0" ||
+		intsText(c.Throughput.Completed) != "0,0,0,0,0,0,0,0,0,0,0,0" {
 		t.Errorf("the empty roadmap's chart data is %s", raw)
 	}
 
@@ -1295,14 +1444,12 @@ func TestDashboard_ChartDataBlock(t *testing.T) {
 			t.Fatalf("decoding member %v: %v", key, err)
 		}
 	}
-	if strings.Join(top, ",") != "tasks_by_type,tasks_by_status,tasks_per_sprint,throughput,burndown" {
+	if strings.Join(top, ",") != "tasks_by_type,throughput,burndown" {
 		t.Errorf("the members are %v", top)
 	}
 	members := map[string]string{
-		"tasks_by_type":    "types,open,completed",
-		"tasks_by_status":  "statuses,counts",
-		"tasks_per_sprint": "sprints,completed,not_completed",
-		"throughput":       "weeks,created,completed",
+		"tasks_by_type": "types,open,completed,backlog",
+		"throughput":    "weeks,created,completed",
 	}
 	for member, keys := range members {
 		d := json.NewDecoder(bytes.NewReader(obj[member]))
@@ -1335,16 +1482,26 @@ func TestDashboard_ChartDataBlock(t *testing.T) {
 
 	// The values equal the figures the page states.
 	labels := dashAriaLabels(body)
-	if labels["chart-tasks-by-status"] != tasksByStatusLabel(&c.TasksByStatus) ||
-		labels["chart-tasks-by-type"] != tasksByTypeLabel(&c.TasksByType) ||
-		labels["chart-tasks-per-sprint"] != tasksPerSprintLabel(&c.TasksPerSprint) ||
+	sum := func(v []int) int {
+		n := 0
+		for _, x := range v {
+			n += x
+		}
+		return n
+	}
+	byType := &c.TasksByType
+	open, completed, backlog := sum(byType.Open), sum(byType.Completed), sum(byType.Backlog)
+	if labels["chart-open-by-type"] != typeDonutLabel("Open tasks by type: ", byType.Types, byType.Open, open) ||
+		labels["chart-completed-by-type"] != typeDonutLabel("Completed tasks by type: ", byType.Types, byType.Completed, completed) ||
+		labels["chart-backlog-by-type"] != typeDonutLabel("Backlog tasks by type: ", byType.Types, byType.Backlog, backlog) ||
 		labels["chart-throughput"] != throughputLabel(&c.Throughput) {
 		t.Errorf("an aria-label does not state the block's values: %v", labels)
 	}
-	completed := c.TasksByStatus.Counts[4]
-	if !strings.Contains(dashCard(t, body, "kpi-completed"), `<div class="h1 mb-3">`+itoa(completed)+`</div>`) ||
-		!strings.Contains(dashCard(t, body, "kpi-backlog"), `<div class="h1 mb-3">`+itoa(c.TasksByStatus.Counts[0])+`</div>`) {
-		t.Errorf("the KPI values disagree with tasks_by_status")
+	// Each donut's slices sum to its card's value.
+	for role, value := range map[string]int{"kpi-open": open, "kpi-completed": completed, "kpi-backlog": backlog} {
+		if !strings.Contains(dashCard(t, body, role), `<div class="h1 mb-3">`+itoa(value)+`</div>`) {
+			t.Errorf("the %s value disagrees with tasks_by_type, whose entries sum to %d", role, value)
+		}
 	}
 
 	// No free text, no closing tag, nothing unescaped.
@@ -1414,7 +1571,7 @@ func TestDashboard_NoInlineScriptOrStyle(t *testing.T) {
 	for _, want := range []string{
 		`segments[i].style.width = share + "%";`, `getAttribute("data-percent")`,
 		`toolbar: { show: false }`, `animations: { enabled: false }`, `fontFamily: "inherit"`, `parentHeightOffset: 0`,
-		`columnWidth: "50%"`, `dataLabels: { enabled: false }`, `tooltip: { fillSeriesColor: false }`,
+		`dataLabels: { enabled: false }`, `fillSeriesColor: false`,
 		`JSON.parse(block.textContent)`,
 	} {
 		if !strings.Contains(js, want) {
@@ -1437,12 +1594,12 @@ func TestDashboard_NoInlineScriptOrStyle(t *testing.T) {
 }
 
 // TestDashboard_ChartOptionsFollowTabler is the source half of Acceptance
-// Criterion 285 and of the amended criteria 269 and 272: the configuration
-// dashboard.js passes to every chart carries the options of SPEC/WEB.md
-// § Dashboard Chart Library, rules 4 and 5. The drawn half — 240 px drawings
+// Criterion 285 and of the amended criterion 269: the configuration
+// dashboard.js passes to every line chart carries the options of SPEC/WEB.md
+// § Dashboard Chart Library, rules 4 and 5; the donuts' options are pinned by
+// TestDashboard_KPICardsCarryTypeDonuts. The drawn half — 240 px drawings
 // inside their card bodies, whole-number ticks, a burndown axis from 0, the
-// stacked segment order and colours — is measured in headless Chromium (see the
-// task report).
+// series colours — is measured in headless Chromium (see the task report).
 func TestDashboard_ChartOptionsFollowTabler(t *testing.T) {
 	js := stripJSComments(readEmbeddedAsset(t, "static/dashboard.js"))
 	norm := strings.Join(strings.Fields(js), " ")
@@ -1451,20 +1608,17 @@ func TestDashboard_ChartOptionsFollowTabler(t *testing.T) {
 		`var HEIGHT = 240;`, `height: HEIGHT,`,
 		// Tabler's grid padding on every chart, the dashed grid on charts with axes.
 		`var GRID_PADDING = { top: -20, right: 0, left: -4, bottom: -4 };`,
-		`grid: { padding: GRID_PADDING, strokeDashArray: 4 }`, `grid: { padding: GRID_PADDING }`,
+		`grid: { padding: GRID_PADDING, strokeDashArray: 4 }`,
 		// The axis options.
-		`labels: { padding: 0 }, tooltip: { enabled: false }`, `axis.axisBorder = { show: false };`,
+		`labels: { padding: 0 }, tooltip: { enabled: false }`,
 		`labels: { padding: 4, formatter: wholeNumber }`, `min: 0,`,
 		// The lines: no smoothed curve.
 		`stroke: { width: 2, lineCap: "round", curve: curve }`, `"stepline", { show: false }`, `"straight", LEGEND,`,
 		// The legend.
 		`position: "bottom", offsetY: 12, markers: { size: 5, strokeWidth: 0, shape: "circle" }, itemMargin: { horizontal: 8, vertical: 8 }`,
-		`return name + " " + counts[opts.seriesIndex];`,
-		// The series colours and the Completed-first order of both stacked charts.
-		`var PRIMARY = "var(--tblr-primary)";`,
+		// The series colours.
+		`var PRIMARY = "var(--tblr-primary)";`, `var GREEN = "var(--tblr-green)";`,
 		`[{ name: "Remaining", data: remaining }], [PRIMARY], "stepline"`,
-		`{ name: "Completed", data: data.tasks_by_type.completed }, { name: "Open", data: data.tasks_by_type.open } ], [GREEN, SECONDARY]`,
-		`{ name: "Completed", data: data.tasks_per_sprint.completed }, { name: "Not completed", data: data.tasks_per_sprint.not_completed } ], [GREEN, SECONDARY]`,
 		`{ name: "Created", data: data.throughput.created }, { name: "Completed", data: data.throughput.completed } ], [PRIMARY, GREEN], "straight"`,
 	} {
 		if !strings.Contains(norm, want) {
@@ -1698,11 +1852,14 @@ func TestDashboard_ResponsiveMarkup(t *testing.T) {
 	if tables != 4 || wrapped != tables {
 		t.Errorf("%d tables, %d of them directly in table-responsive; want 4 and 4", tables, wrapped)
 	}
-	if n := len(dashLabelRe.FindAllString(main, -1)); n != 5 {
-		t.Errorf("%d chart containers, want 5", n)
+	if n := len(dashLabelRe.FindAllString(main, -1)); n != 2 {
+		t.Errorf("%d chart-lg containers, want 2", n)
 	}
-	for _, m := range dashColRe.FindAllStringSubmatch(main, -1) {
-		for _, class := range strings.Fields(m[1]) {
+	if n := len(dashDonutRe.FindAllString(main, -1)); n != 3 {
+		t.Errorf("%d donut containers, want 3", n)
+	}
+	for _, col := range dashGridCols(main) {
+		for _, class := range strings.Fields(col) {
 			if class != "col-12" && !strings.HasPrefix(class, "col-sm-") && !strings.HasPrefix(class, "col-lg-") {
 				t.Errorf("column class %q fixes a width below sm", class)
 			}
