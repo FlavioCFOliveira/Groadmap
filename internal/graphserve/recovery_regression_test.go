@@ -114,8 +114,91 @@ func TestServe_ResumesTheTransactionSequenceAcrossATornReopen(t *testing.T) {
 // Before the fix the server served the committed prefix and acknowledged new
 // writes after the damaged record, and the next recovery discarded them.
 func TestServe_RefusesAStoreWhoseRecoveryWasNotClean(t *testing.T) {
-	root := graphRoot(t)
-	graphDir := filepath.Join(root, "graph")
+	root, graphDir := seedUncleanStore(t)
+	before := lessLock(treeFingerprint(t, graphDir))
+
+	p := launchServerProcess(t, root, "unclean")
+	if code := waitForExit(t, p); code != 1 {
+		t.Fatalf("the start over a store whose recovery was not clean exited %d, want 1.\nstderr:\n%s",
+			code, p.capturedStderr(t))
+	}
+	if out := readFile(t, p.stdout); len(out) != 0 {
+		t.Errorf("the refused start wrote %q to stdout; the socket must not be announced", out)
+	}
+
+	stderr := p.capturedStderr(t)
+	line := lastLine(stderr)
+	if !strings.HasPrefix(line, notCleanRecoveryHead) || len(line) == len(notCleanRecoveryHead) {
+		t.Errorf("the refused start ended with %q, want the not-clean-recovery line %q followed by the "+
+			"recovery's own account of the damage.\nstderr:\n%s", line, notCleanRecoveryHead+"<detail>", stderr)
+	}
+
+	if diff := describeFingerprintDiff(before, lessLock(treeFingerprint(t, graphDir))); diff != "" {
+		t.Errorf("the refused start changed graph/; the write-ahead log must be left byte for byte as it "+
+			"was found:\n%s", diff)
+	}
+	if _, err := os.Lstat(p.socket); !os.IsNotExist(err) {
+		t.Errorf("the refused start left %s behind (lstat: %v)", p.socket, err)
+	}
+}
+
+// TestServe_UncleanRecoveryWritesOnlyServerRecordsToStderr is the regression
+// fence for rmp task #640: the engine's recovery reports the damage it found
+// through the process's default slog logger, and a start over a store whose
+// recovery was not clean must still write to stderr nothing but this server's
+// records, each stamped with the canonical UTC timestamp, followed by its own
+// error line (SPEC/GRAPH.md § Server Diagnostics on Stderr).
+//
+// Before the fix the default logger was Go's, and the recovery's record reached
+// stderr through the standard log package: its date-and-time prefix, in local
+// time, ahead of the error line. The child runs in a zone other than UTC so that
+// a record stamped in local time cannot pass as a canonical one.
+func TestServe_UncleanRecoveryWritesOnlyServerRecordsToStderr(t *testing.T) {
+	t.Setenv("TZ", "Asia/Kolkata")
+	root, _ := seedUncleanStore(t)
+
+	p := launchServerProcess(t, root, "unclean")
+	if code := waitForExit(t, p); code != 1 {
+		t.Fatalf("the start over a store whose recovery was not clean exited %d, want 1.\nstderr:\n%s",
+			code, p.capturedStderr(t))
+	}
+
+	stderr := p.capturedStderr(t)
+	lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
+	last := len(lines) - 1
+	if !strings.HasPrefix(lines[last], notCleanRecoveryHead) {
+		t.Fatalf("stderr does not end with the not-clean-recovery line %q.\nstderr:\n%s",
+			notCleanRecoveryHead+"<detail>", stderr)
+	}
+	if last == 0 {
+		t.Fatalf("stderr holds the error line alone; the recovery's record of the damage is missing, so "+
+			"this test no longer exercises a record emitted during the open.\nstderr:\n%s", stderr)
+	}
+	for i, line := range lines[:last] {
+		if !canonicalTimestamp.MatchString(line) {
+			t.Errorf("stderr line %d is neither a server record stamped in canonical UTC nor the error "+
+				"line: %q.\nstderr:\n%s", i+1, line, stderr)
+		}
+	}
+}
+
+// notCleanRecoveryHead is the fixed head of the line a start over a store whose
+// recovery was not clean ends with; the recovery's own account of the damage
+// follows it (SPEC/GRAPH.md § Error Handling and Exit Codes, rule 11). The child
+// prints the error without the CLI's "Error: " prefix.
+const notCleanRecoveryHead = "graph store error: graph store recovery was not clean; the write-ahead log " +
+	"was left unchanged and the store was not served: "
+
+// seedUncleanStore builds a store whose next recovery returns no error and
+// reports itself not clean: three committed transactions written by a server
+// that was then killed, the last of them holding an operation that cannot be
+// decoded behind a record checksum that is still valid. It returns the test's
+// root and the store's graph directory.
+func seedUncleanStore(t *testing.T) (root, graphDir string) {
+	t.Helper()
+
+	root = graphRoot(t)
+	graphDir = filepath.Join(root, "graph")
 
 	seed := startServerProcess(t, root, "seed")
 	for _, i := range []int{1, 2, 3} {
@@ -129,33 +212,7 @@ func TestServe_RefusesAStoreWhoseRecoveryWasNotClean(t *testing.T) {
 		t.Fatalf("the seeded log holds the transactions %v, want three", seqs)
 	}
 	corruptCommittedOp(t, graphDir, seqs[len(seqs)-1])
-	before := lessLock(treeFingerprint(t, graphDir))
-
-	p := launchServerProcess(t, root, "unclean")
-	if code := waitForExit(t, p); code != 1 {
-		t.Fatalf("the start over a store whose recovery was not clean exited %d, want 1.\nstderr:\n%s",
-			code, p.capturedStderr(t))
-	}
-	if out := readFile(t, p.stdout); len(out) != 0 {
-		t.Errorf("the refused start wrote %q to stdout; the socket must not be announced", out)
-	}
-
-	const head = "graph store error: graph store recovery was not clean; the write-ahead log was left " +
-		"unchanged and the store was not served: "
-	stderr := p.capturedStderr(t)
-	line := lastLine(stderr)
-	if !strings.HasPrefix(line, head) || len(line) == len(head) {
-		t.Errorf("the refused start ended with %q, want the not-clean-recovery line %q followed by the "+
-			"recovery's own account of the damage.\nstderr:\n%s", line, head+"<detail>", stderr)
-	}
-
-	if diff := describeFingerprintDiff(before, lessLock(treeFingerprint(t, graphDir))); diff != "" {
-		t.Errorf("the refused start changed graph/; the write-ahead log must be left byte for byte as it "+
-			"was found:\n%s", diff)
-	}
-	if _, err := os.Lstat(p.socket); !os.IsNotExist(err) {
-		t.Errorf("the refused start left %s behind (lstat: %v)", p.socket, err)
-	}
+	return root, graphDir
 }
 
 // removeLeftoverSocket removes the socket file a killed server left at its path,

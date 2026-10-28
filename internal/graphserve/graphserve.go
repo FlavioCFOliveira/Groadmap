@@ -566,6 +566,19 @@ func Run(opts Options) error {
 	// [dropSink.Flush] for why it must be.
 	defer stderrSink.Flush()
 
+	// The engine's recovery reports what it finds through slog.Default() and
+	// accepts no logger of its own: neither recovery.Options nor recovery.Open
+	// takes one in GoGraph v0.17.2. Left as it is, the process default hands
+	// those records to the standard log package, which writes them to stderr in
+	// its own format and in local time, outside the handler SPEC/GRAPH.md
+	// § Server Diagnostics on Stderr requires of every line (rmp task #640). The
+	// default is therefore made this server's logger, before the store is opened
+	// at step 6, and for the life of the process: this process is the server, its
+	// stderr carries this logger's records and the error line and nothing else,
+	// and restoring the previous default would not undo the redirection of the
+	// log package that slog.SetDefault performs.
+	slog.SetDefault(logger)
+
 	// Step 2. The exclusive advisory hold, under the ordinary bounded wait. The
 	// only holder that can be met here is another server, since no other surface
 	// opens the store: a server starting while an outgoing one is still draining

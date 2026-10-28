@@ -607,6 +607,13 @@ def extract_fenced_corpus(text):
 # span that only names the prefix (`Error: `) publishes nothing.
 _PUBLISHED_ERROR_RE = re.compile(r"Error: \S")
 
+# A server record on stderr: the canonical UTC timestamp GRAPH.md "Server
+# Diagnostics on Stderr" fixes -- three digits of milliseconds and an explicit Z
+# -- opening the line, then the level.
+_AI_HINT_LINE = "AI agents usage: run `rmp --ai-help` for a machine-readable command contract."
+
+_UTC_RECORD_RE = re.compile(r"^time=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z level=")
+
 
 def iter_prose_paragraphs(text):
     """Yield `(first line number, paragraph)` for every paragraph outside the
@@ -1276,16 +1283,21 @@ class TestErrorStringParity:
     # Invocation helpers
     # ------------------------------------------------------------------
 
-    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None, home=None):
+    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None, home=None, extra_env=None):
         """Run the CLI with `input_text` (or a closed/empty stdin when None)
         piped in, returning (exit_code, stdout, stderr).
 
         `stdin_fd` hands the child a descriptor DIRECTLY instead of a pipe,
         which is the only way to drive a stdin whose failure is a property of
         the descriptor rather than of the bytes on it -- a directory, whose
-        read(2) is EISDIR. It and `input_text` are mutually exclusive."""
+        read(2) is EISDIR. It and `input_text` are mutually exclusive.
+
+        `extra_env` adds or overrides variables of the child's environment, such
+        as a time zone a timestamp check needs to be meaningful."""
         env = os.environ.copy()
         env["HOME"] = str(self.test.home_dir) if home is None else home
+        if extra_env:
+            env.update(extra_env)
         if stdin_fd is not None:
             assert input_text is None, "stdin_fd and input_text are mutually exclusive"
             result = subprocess.run(
@@ -4561,21 +4573,37 @@ class TestErrorStringParity:
         before = _graph_dir_bytes(graph_dir)
 
         # The engine's recovery reports the damage in a record of its own before
-        # the start ends, as GRAPH.md "Graph Store Format Migration", rule 9,
-        # admits for a failed open, so the line compared is the invocation's own
-        # error line rather than stderr's first line. Everything else is
-        # check_head's assertion: the exit code, an empty stdout, the head
+        # the start ends, so stderr's first line is that record, and the
+        # invocation's own error line -- the Error: line followed by the AI-agent
+        # hint, HELP.md "Error message format" -- closes the stream. Every line
+        # before the Error: line must be a server record stamped in canonical UTC
+        # (GRAPH.md "Server Diagnostics on Stderr"; rmp task #640): the child runs
+        # in a zone other than UTC, so a record that escaped the server's handler
+        # -- the standard log package's local-time prefix -- cannot pass. The rest
+        # is check_head's assertion: the exit code, an empty stdout, the head
         # character for character, and a non-empty tail.
         key = ("Error: graph store error: graph store recovery was not clean; the write-ahead log was "
                "left unchanged and the store was not served: <detail>")
         assert key in CORPUS and key in TAIL_EXEMPT_KEYS, key
         head = key[:-len(TAIL_EXEMPT_KEYS[key][0])]
-        rc, out, err = self.run_stdin(["graph", "serve", "-r", r], None, timeout=60)
+        rc, out, err = self.run_stdin(["graph", "serve", "-r", r], None, timeout=60,
+                                      extra_env={"TZ": "Asia/Kolkata"})
         assert rc == 1, f"the refused start exited {rc}, want 1\n  stderr: {err!r}"
         assert out == "", f"the refused start wrote to stdout: {out!r}"
-        error_lines = [line for line in err.splitlines() if line.startswith("Error: ")]
-        assert len(error_lines) == 1, f"want exactly one error line, got {error_lines!r}\n  stderr: {err!r}"
-        line = error_lines[0]
+        lines = err.splitlines()
+        error_at = [i for i, text in enumerate(lines) if text.startswith("Error: ")]
+        assert len(error_at) == 1, f"want exactly one error line, got {len(error_at)}\n  stderr: {err!r}"
+        line = lines[error_at[0]]
+        tail = lines[error_at[0] + 1:]
+        while tail and tail[-1] == "":
+            tail.pop()
+        assert tail == ["", _AI_HINT_LINE], (
+            f"the error line is not the last line before the AI-agent hint\n  stderr: {err!r}")
+        assert error_at[0] >= 1, f"want the recovery's record before the error line\n  stderr: {err!r}"
+        for number, record in enumerate(lines[:error_at[0]], start=1):
+            assert _UTC_RECORD_RE.match(record), (
+                f"stderr line {number} is neither a server record stamped in canonical UTC nor the "
+                f"error line: {record!r}\n  stderr: {err!r}")
         assert line.startswith(head), (
             f"the published head does not match the binary\n  published at: {_where(key)}\n"
             f"  published: {head!r} (then <detail>)\n  captured:  {line!r}")
