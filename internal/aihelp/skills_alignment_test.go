@@ -89,6 +89,7 @@ func fixtureContract() *Contract {
 			fixtureSub("client", nil, "--roadmap", "--query", "--socket", "--help"),
 		}},
 		{Name: "web", Subcommands: []SubcommandEntry{fixtureSub("web", nil, "--port", "--help")}},
+		{Name: "skills", Subcommands: []SubcommandEntry{fixtureSub("install", nil, "--help")}},
 		{Name: "ai-help", Subcommands: []SubcommandEntry{fixtureSub("ai-help", nil, "--help")}},
 	}}
 }
@@ -110,14 +111,16 @@ const fixtureRoadmapManagerBody = "# Roadmap manager\n\n" +
 	"rmp audit history TASK <id> -r <roadmap>\n" +
 	"rmp stats -r <roadmap>\n" +
 	"```\n\n" +
-	"Every subcommand accepts `--help`. The knowledge graph (`rmp graph …`) belongs to knowledge-authority.\n"
+	"Every subcommand accepts `--help`. The knowledge graph (`rmp graph …`) belongs to knowledge-authority.\n\n" +
+	"Run `rmp skills install` after rmp is installed or upgraded.\n"
 
 const fixtureKnowledgeAuthorityBody = "# Knowledge authority\n\n" +
 	"```bash\n" +
 	"rmp graph serve -r <roadmap> --socket <path>\n" +
 	"rmp graph client -r <roadmap> --roadmap <roadmap> --query \"RETURN 1\" --socket <path>\n" +
 	"```\n\n" +
-	"Use `--help` for details, and `rmp ai-help` for the contract.\n"
+	"Use `--help` for details, and `rmp ai-help` for the contract.\n\n" +
+	"```bash\nrmp skills install\n```\n"
 
 // writeSkillFixture builds an aligned skills/ tree in a temporary directory and
 // returns its path.
@@ -309,6 +312,46 @@ func TestSkillsCheck_MentionsAndSharedCommandDoNotFail(t *testing.T) {
 	if msgs := checkFixture(dir); len(msgs) != 0 {
 		t.Fatalf("mentions and rmp ai-help must not fail; got:\n%s", strings.Join(msgs, "\n"))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Location and Identity item 6 — each SKILL.md invokes rmp skills install
+// (acceptance criterion 19).
+// ---------------------------------------------------------------------------
+
+func TestSkillsCheck_MissingSkillsInstallFails(t *testing.T) {
+	cases := []struct{ skill, invocation string }{
+		{"roadmap-manager", "Run `rmp skills install` after rmp is installed or upgraded.\n"},
+		{"knowledge-authority", "```bash\nrmp skills install\n```\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.skill, func(t *testing.T) {
+			dir := writeSkillFixture(t)
+			editSkillFixture(t, filepath.Join(dir, c.skill, "SKILL.md"), c.invocation, "")
+			requireSkillViolation(t, checkFixture(dir), c.skill, "skills/"+c.skill+"/", "item 6", "rmp skills install")
+		})
+	}
+}
+
+func TestSkillsCheck_SkillsInstallOutsideSkillMDDoesNotSatisfyItemSix(t *testing.T) {
+	dir := writeSkillFixture(t)
+	editSkillFixture(t, filepath.Join(dir, "knowledge-authority", "SKILL.md"), "```bash\nrmp skills install\n```\n", "")
+	writeSkillFile(t, filepath.Join(dir, "knowledge-authority", "references", "install.md"), "`rmp skills install`\n")
+	requireSkillViolation(t, checkFixture(dir), "knowledge-authority", "item 6", "rmp skills install")
+}
+
+func TestSkillsCheck_SkillsInstallIsSharedAndProseDoesNotSatisfyItemSix(t *testing.T) {
+	dir := writeSkillFixture(t)
+	for _, skill := range []string{"roadmap-manager", "knowledge-authority"} {
+		writeSkillFile(t, filepath.Join(dir, skill, "references", "install.md"), "Again: `rmp skills install`.\n")
+	}
+	if msgs := checkFixture(dir); len(msgs) != 0 {
+		t.Fatalf("rmp skills install is shared by both skills and must not fail; got:\n%s", strings.Join(msgs, "\n"))
+	}
+	// A prose mention is not an invocation, so it does not satisfy item 6.
+	editSkillFixture(t, filepath.Join(dir, "roadmap-manager", "SKILL.md"),
+		"Run `rmp skills install` after", "Run rmp skills install after")
+	requireSkillViolation(t, checkFixture(dir), "roadmap-manager", "item 6", "rmp skills install")
 }
 
 // ---------------------------------------------------------------------------

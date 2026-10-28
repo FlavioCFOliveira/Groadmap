@@ -65,6 +65,7 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/skillsinstall"
 )
 
 // ---------------------------------------------------------------------------
@@ -374,6 +375,11 @@ func registrySchemaCases() []schemaCase {
 		// published key and the emitted one can be compared instead of merely
 		// described.
 		{"graph", "serve", "startup object", graphServeResult{}, quotedMembers(0)},
+		// `skills install` publishes its success object and, as a second
+		// group, the element of its skipped array; both are structs of
+		// internal/skillsinstall, which the handler serialises unchanged.
+		{"skills", "install", "success object", skillsinstall.Result{}, quotedMembers(0)},
+		{"skills", "install", "skipped element", skillsinstall.Skipped{}, quotedMembers(1)},
 	}
 }
 

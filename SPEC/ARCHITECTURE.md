@@ -348,6 +348,7 @@ Groadmap/
 │   │   ├── graph.go       # Graph family: help, statement sources, result JSON (see module 6)
 │   │   ├── graph_client.go # graph client subcommand
 │   │   ├── graph_serve.go # graph serve subcommand
+│   │   ├── skills.go      # skills install subcommand (calls internal/skillsinstall)
 │   │   └── registry_web.go # web command entry (calls internal/web)
 │   ├── graphstore/        # The graph store's lifecycle: open, checkpoint, close
 │   │   └── graphstore.go  # The ONE open/checkpoint sequence; only graphserve calls it
@@ -356,6 +357,7 @@ Groadmap/
 │   ├── graphjson/         # The ONE mapping from an engine value to published JSON; every surface calls it
 │   ├── graphserve/        # The graph server's lifecycle: listener, options, drain, shutdown
 │   ├── signals/           # The ONE registration for SIGINT and SIGTERM; every surface takes the action over
+│   ├── skillsinstall/     # Fetch, validate, and install the agent skills (see module 12)
 │   ├── web/               # Embedded HTTP server (net/http)
 │   │   ├── web.go         # Run: argument parsing, help text
 │   │   ├── server.go      # Startup migration, listener binding, graceful shutdown
@@ -686,13 +688,19 @@ version is written. The risk analysis and required mitigations are in
   never unregisters. What a caller changes is the action taken on delivery, not
   the registration.
 - **No delivery is ever unowned.** A short-lived invocation leaves the default
-  action in place and is interrupted, exiting `130` (see
-  [Exit Codes](#exit-codes)). A long-lived surface — `rmp graph serve` and
+  action in place, with the one exception of the next bullet, and is interrupted,
+  exiting `130` (see [Exit Codes](#exit-codes)). A long-lived surface — `rmp graph serve` and
   `rmp web`, the only two — takes the action over for the length of its service
   and hands it back for its teardown. Because the registration is never torn down
   and rebuilt, there is no interval in which the process would be killed outright
   by a signal it is supposed to handle, and none in which a signal already queued
   would be delivered to nothing.
+- **One short-lived surface takes the action over too.** `rmp skills install`
+  takes it over before it creates its staging directory and hands it back once
+  that directory has been removed, so that a signal rolls back a swap in progress
+  and removes the command's temporary directories before the process exits `130`
+  (`SKILLS.md § Install Interruption`). It announces nothing, so the ordering rule
+  of the next bullet does not bind it.
 - **A surface takes the action over before it announces itself.**
   `rmp graph serve` takes over before it prints its socket
   (`GRAPH.md § Server Startup`, step 7), and `rmp web` before it prints its URL
@@ -708,6 +716,27 @@ version is written. The risk analysis and required mitigations are in
 - **What it deliberately does not own.** It chooses no exit code — the action a
   caller installs does that — and it knows nothing about drains, stores, sockets,
   or HTTP.
+
+### 12. internal/skillsinstall/ and installing the agent skills
+
+- Owns everything `rmp skills install` does after its arguments are accepted:
+  the download of the fixed source, the staging directory, the validation and
+  extraction of the archive, the three destination tiers and their rules, the
+  replacement procedure and its rollback, and the reaction to a signal
+  (`SKILLS.md § Skills Install Command`). The handler in `internal/commands/`
+  parses the arguments, calls this package, and writes its result.
+- **It is the only part of the binary that connects to another machine.** Every
+  other command reads and writes local files and local sockets alone, which is why the AI Agent Contract publishes `"None."` as the network
+  side effect of every other subcommand (`DATA_FORMATS.md § Field reference:
+  subcommand-level fields`).
+- **Its source, its tiers, and its failure points are parameters of its
+  interface**, so its tests can exercise every path against a local HTTPS server
+  and directories they create (`SKILLS.md § Install Verification`). The command
+  passes the fixed values; nothing outside the package's tests passes any other.
+- **What it deliberately does not own.** It writes nothing to stdout and chooses
+  no exit code: it returns the outcome and the warnings to the handler. It
+  registers no signal handler of its own; it takes the action over through
+  `internal/signals`.
 
 ## Command Lifecycle
 
@@ -932,12 +961,14 @@ do not settle on their own, so the specification fixes them here.
 
    The class is an operation on a stream, a socket, a file, or a directory that
    the operating system refused or could not complete, where what was operated on
-   is not a roadmap's database. Three surfaces reach it today: a failed read of
+   is not a roadmap's database. Four surfaces reach it today: a failed read of
    standard input, which `graph client` and the four
    comment-body subcommands can all meet; a listener `rmp web` cannot bind, or a
-   listener that stops accepting once it is serving; and the data directory
+   listener that stops accepting once it is serving; the data directory
    `~/.roadmaps/`, together with the roadmap home directories inside it, when the
-   startup layout sweep or `rmp web` cannot read, create, or secure one of them.
+   startup layout sweep or `rmp web` cannot read, create, or secure one of them;
+   and `rmp skills install`, whose network stream, staging directory, archive, and
+   skills directories are all outside a roadmap (`COMMANDS.md § Skills Management`).
 
    **The boundary against `utils.ErrDatabase` is the artefact, not the layer that
    reported the failure.** `utils.ErrDatabase` names a roadmap's SQLite database:
@@ -955,6 +986,18 @@ do not settle on their own, so the specification fixes them here.
    for, and what follows is `rmp`'s own safety decision rather than a failure of
    the operation. `utils.ErrIO` is for an operation the operating system did not
    complete.
+
+   **`rmp skills install` is the one exception, and it is bounded.** Its own
+   refusals — a staging directory that fails its checks, an archive that fails
+   validation, and a run in which every destination tier was refused or failed —
+   carry `utils.ErrIO` although some of them follow an operation that succeeded.
+   The rule above keeps a refusal of a roadmap's directory or database on
+   `utils.ErrDatabase` because its artefact is a roadmap's data; the artefacts of
+   this command are a downloaded stream and directories that hold no roadmap
+   data, no other sentinel names them, and what the reader must act on is the
+   network or the filesystem, which is what `I/O error: ` names
+   (`SKILLS.md § Skills Install Command`). The exception covers that command
+   alone.
 
    `utils.ErrIO` maps to exit code `1`, which is the code every one of these
    conditions already returned under `utils.ErrDatabase`, so no consumer that

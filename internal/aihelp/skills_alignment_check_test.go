@@ -12,15 +12,17 @@
 //
 // # What it enforces
 //
-//   - SPEC/SKILLS.md § Location and Identity items 1, 2, 3 and 5: the two skill
-//     directories and nothing else, a SKILL.md with frontmatter whose name
-//     matches the directory and whose description is non-empty, and a
-//     non-empty file set.
+//   - SPEC/SKILLS.md § Location and Identity items 1, 2, 3, 5 and 6: the two
+//     skill directories and nothing else, a SKILL.md with frontmatter whose
+//     name matches the directory and whose description is non-empty, a
+//     non-empty file set, and an invocation of `rmp skills install` written
+//     with canonical names in each SKILL.md.
 //   - § Version Declaration: exactly one `  rmp-version: "X.Y.Z"` line, inside
 //     the frontmatter's `metadata:` map, equal to the binary version.
 //   - § Rules 1 to 4: every in-scope subcommand invoked with canonical names,
 //     every in-scope long flag present, every invocation resolvable, and no
-//     invocation outside the skill's scope other than `rmp ai-help`.
+//     invocation outside the skill's scope other than `rmp ai-help` and
+//     `rmp skills install`.
 //
 // # What counts as an invocation
 //
@@ -62,9 +64,19 @@ var skillScopes = []skillScope{
 	{name: "knowledge-authority", commands: []string{"graph"}},
 }
 
-// skillSharedCommand is the one command both skills may invoke whatever their
-// scope (SPEC/SKILLS.md § Scope Partition, rule 1).
-const skillSharedCommand = "ai-help"
+// skillSharedCommands are the commands both skills may invoke whatever their
+// scope (SPEC/SKILLS.md § Scope Partition, rule 1): `rmp ai-help`, the source
+// of truth for the CLI surface, and `rmp skills install`, the command that
+// installs the skills.
+var skillSharedCommands = map[string]bool{"ai-help": true, "skills": true}
+
+// skillInstallCommand and skillInstallSubcommand name the invocation every
+// SKILL.md carries, written with canonical names (SPEC/SKILLS.md § Location
+// and Identity, item 6).
+const (
+	skillInstallCommand    = "skills"
+	skillInstallSubcommand = "install"
+)
 
 // skillVersionLine is the fixed, machine-readable form of the version
 // declaration (SPEC/SKILLS.md § Version Declaration).
@@ -638,23 +650,32 @@ func checkOneSkill(skillsDir string, sc skillScope, cli *skillCLI, binaryVersion
 	}
 
 	named := make(map[string]bool)
+	installInSkillMD := false
 	for i := range files {
 		f := &files[i]
 		for _, seg := range recognisedSegments(f.rel, f.content) {
 			for _, inv := range findInvocations(cli, seg, f.rel) {
 				if inv.canonical() {
 					named[inv.cmd.Name+" "+inv.sub.Name] = true
+					if f.rel == sc.name+"/SKILL.md" && inv.cmd.Name == skillInstallCommand && inv.sub.Name == skillInstallSubcommand {
+						installInSkillMD = true
+					}
 				}
 				if !inv.resolve {
 					report(sc.name, "rule 3 (nothing absent is invoked)",
 						"%q at %s:%d names a command or subcommand the binary does not have", inv.text(), inv.file, inv.line)
 				}
-				if inv.cmd != nil && inv.cmd.Name != skillSharedCommand && !scope[inv.cmd.Name] {
+				if inv.cmd != nil && !skillSharedCommands[inv.cmd.Name] && !scope[inv.cmd.Name] {
 					report(sc.name, "rule 4 (the partition holds)",
 						"%q at %s:%d invokes a command outside this skill's scope", inv.text(), inv.file, inv.line)
 				}
 			}
 		}
+	}
+
+	if !installInSkillMD && hasSkillMD(files, sc.name) {
+		report(sc.name, "Location and Identity item 6",
+			"SKILL.md contains no invocation of rmp %s %s written with canonical names", skillInstallCommand, skillInstallSubcommand)
 	}
 
 	var all strings.Builder
@@ -687,6 +708,17 @@ func checkOneSkill(skillsDir string, sc skillScope, cli *skillCLI, binaryVersion
 			}
 		}
 	}
+}
+
+// hasSkillMD reports whether the file set holds the skill's SKILL.md; a missing
+// one is reported by checkSkillLayout.
+func hasSkillMD(files []skillFile, skill string) bool {
+	for i := range files {
+		if files[i].rel == skill+"/SKILL.md" {
+			return true
+		}
+	}
+	return false
 }
 
 // checkSkillLayout enforces SPEC/SKILLS.md § Location and Identity item 2: a

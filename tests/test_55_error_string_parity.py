@@ -113,10 +113,13 @@ Strings Are Exact, "The gate", rules 1 to 3):
 
 test_governance_checks_can_fail proves each of the three refuses a mutant.
 
-One line is published for stderr on a SUCCESSFUL path, and it is reached and
-compared exactly as an error line is: the warning `sprint close --force` writes.
-A table row whose exit code is 0 and whose stderr column quotes a line
-contributes that line to the corpus (extract_success_stderr_rows).
+Four lines are published for stderr on a SUCCESSFUL path, and each is held to
+the same exact comparison as an error line: the warning `sprint close --force`
+writes, which is reached against the binary, and the three warnings
+`rmp skills install` writes, which follow a download and are exempted by name
+(EXEMPT_KEYS) because the package tests drive them. A table row whose exit code
+is 0 and whose stderr column quotes a line contributes that line to the corpus
+(extract_success_stderr_rows).
 
 The module's own final test method (test_zz_coverage_report, alphabetically
 last so it runs after every other check has had the chance to mark its key
@@ -1098,6 +1101,186 @@ EXEMPT_KEYS = {
         "on its own. A head of `Error: ` alone carries no sentinel, so the shape "
         "cannot be narrowed either (see TAIL_EXEMPT_KEYS)."
     ),
+    "Error: I/O error: cannot download the skills from https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. The line is written when the '
+        'request itself fails. It and its exit code are driven in process, '
+        'against a local HTTPS server, by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_RefusedConnection, TestInstall_SourceMustBeHTTPS, and the '
+        'time-bound and redirect cases of TestInstall_DownloadFailures).'
+    ),
+    "Error: I/O error: cannot download the skills from https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz: HTTP status N": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures, "status other than 200"), which asserts '
+        'the whole line.'
+    ),
+    "Error: I/O error: the skills archive exceeds 64 MiB; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures, the declared and the undeclared body '
+        'over the bound), which asserts the whole line.'
+    ),
+    "Error: I/O error: the skills archive expands to more than 256 MiB; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures, "decompressed stream over its bound"), '
+        'which asserts the whole line.'
+    ),
+    "Error: I/O error: the skills in the archive exceed 16 MiB; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "selected files over 16 MiB"), which '
+        'asserts the whole line.'
+    ),
+    "Error: I/O error: the skills in the archive exceed 1,000 entries; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "selected entries over 1,000"), which '
+        'asserts the whole line.'
+    ),
+    "Error: I/O error: the skills archive is not a valid gzip-compressed tar archive: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures: not a gzip stream, a truncated stream, '
+        'a corrupted trailer), which asserts the whole line for each.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" has an absolute name': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "absolute name"), which asserts the '
+        'whole line.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" has an empty, "." or ".." path component': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives: a "..", a "." and an empty component, '
+        'inside and outside the skills), which asserts the whole line.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" is neither a directory nor a regular file': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives: a selected symbolic link, hard link, '
+        'character device and FIFO), which asserts the whole line.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" appears more than once': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "duplicate file"), which asserts the '
+        'whole line.'
+    ),
+    "Error: I/O error: the skills archive is malformed: it carries no regular file skills/roadmap-manager/SKILL.md": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "missing roadmap-manager SKILL.md"), '
+        'which asserts the whole line.'
+    ),
+    "Error: I/O error: the skills archive is malformed: it carries no regular file skills/knowledge-authority/SKILL.md": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "missing knowledge-authority '
+        'SKILL.md"), which asserts the whole line.'
+    ),
+    "Error: I/O error: cannot extract the skills archive into the staging directory: <detail>": (
+        "SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches the "
+        "network, so no end-to-end test runs the binary past the refusals that "
+        "precede the download, and this line is written only while the "
+        "downloaded archive is being extracted. Driven in process by "
+        "internal/skillsinstall/skillsinstall_test.go "
+        "(TestInstall_ExtractionFailureIsReported), which asserts the head and "
+        "the operating system's account of the refused write."
+    ),
+    "Error: I/O error: the skills could not be installed in the global, user, or project skills directory; the project skills directory was not used: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Reached only after a '
+        'successful download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_AllTiersRefusedFailsAndChangesNothing), which asserts the '
+        'whole line and the two warnings before it.'
+    ),
+    "Error: I/O error: the skills replacement failed and could not be rolled back: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Reached only after a '
+        'successful download, with a rename failure injected in the swap and in '
+        'its undo. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_FailedRollbackKeepsTheWorkDirectoryAndStops, '
+        'TestInstall_SignalWithAFailedUndoKeepsTheWorkDirectory), which assert '
+        'the whole line.'
+    ),
+    "warning: the global skills directory was not used, trying the user skills directory: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. A success-path warning reached '
+        'only after a successful download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_FallsBackToUserTier), which asserts the whole line.'
+    ),
+    "warning: the user skills directory was not used, trying the project skills directory: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. A success-path warning reached '
+        'only after a successful download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_FallsBackToProjectTierAndLeavesTheRefusedPathAsFound), '
+        'which asserts the whole line.'
+    ),
+    "warning: the temporary directory <path> could not be removed: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Written when the operating '
+        'system refuses the removal of a directory the command created; the '
+        'removal failure is injected in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_RemovalRefusedIsWarnedAndDoesNotChangeTheOutcome), which '
+        'asserts the whole line.'
+    ),
 }
 
 
@@ -1110,6 +1293,17 @@ EXEMPT_KEYS = {
 # NARROWING, not an exemption: the key is marked reached, and the sentinel
 # half is asserted rather than skipped.
 TAIL_EXEMPT_KEYS = {
+    "Error: I/O error: cannot create a private staging directory: <detail>": (
+        "<detail>",
+        "SPEC/COMMANDS.md § Skills Install Error Cases: <detail> is a "
+        "description the command composes, naming the directory and the "
+        "condition, and the table publishes no fixed wording for it. The "
+        "refusal precedes the download (SPEC/SKILLS.md § Install Staging "
+        "Directory, item 2), so it is driven against the binary with a "
+        "relative TMPDIR; the head, which carries the sentinel, is asserted "
+        "exactly, and the tail must name the relative directory and why it is "
+        "refused."
+    ),
     "Error: I/O error: reading query from stdin: <detail>": (
         "<detail>",
         "The head \"Error: I/O error: reading query from stdin: \" is asserted "
@@ -1351,7 +1545,7 @@ class TestErrorStringParity:
         REACHED.add(key)
 
     def check_head(self, key, args, exit_code, tail_contains, subs=None,
-                   stdin=None, note="", stdin_fd=None, timeout=None):
+                   stdin=None, note="", stdin_fd=None, timeout=None, extra_env=None):
         """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
 
         Everything BEFORE the named placeholder is compared character for
@@ -1390,7 +1584,8 @@ class TestErrorStringParity:
             f"sentinel -- narrowing it would assert nothing of substance"
         )
 
-        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd, timeout=timeout)
+        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd, timeout=timeout,
+                                      extra_env=extra_env)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -4814,14 +5009,42 @@ class TestErrorStringParity:
                 f"NOT_PUBLISHED_SPANS names a span no file carries any longer: {s!r}")
         print(f"\n  governed files: {', '.join(sorted(named))}")
 
-    def test_success_path_stderr_lines_are_the_force_warning(self):
+    def test_skills_install_errors(self):
+        """SPEC/COMMANDS.md § Skills Install Error Cases: the lines the binary
+        can reach before any request. The confirmation flag is refused as an
+        unknown flag, and a staging parent that is not an absolute path is
+        refused before the download. Every other line of the table follows a
+        download and is exempted by name above."""
+        self.check(
+            "Error: invalid input: unknown flag: --yes",
+            ["skills", "install", "--yes"], 2, note="skills install has no confirmation flag",
+        )
+        self.check_head(
+            "Error: I/O error: cannot create a private staging directory: <detail>",
+            ["skills", "install"], 1,
+            ['the temporary-file directory "relative-staging-parent" is not an absolute path'],
+            note="a relative TMPDIR is refused before the download",
+            extra_env={"TMPDIR": "relative-staging-parent"},
+        )
+
+    def test_success_path_stderr_lines_are_the_published_warnings(self):
+        """COMMANDS.md § Published Error Strings Are Exact: the success-path
+        stderr lines are the warning `sprint close --force` writes and the three
+        warnings `rmp skills install` writes (§ Skills Install Warnings), in the
+        order the file publishes them."""
         lines = {}
         for path, _supplemental in SPEC_SOURCES:
             for s in extract_success_stderr_rows(path.read_text(encoding="utf-8")):
                 lines.setdefault(s, []).append(_rel(path))
-        assert list(lines) == ["warning: closing sprint #N with M incomplete task(s): <id-status-list>"], (
-            f"COMMANDS.md publishes one success-path stderr line, the --force warning; "
-            f"extraction found {lines}")
+        assert list(lines) == [
+            "warning: closing sprint #N with M incomplete task(s): <id-status-list>",
+            "warning: the global skills directory was not used, trying the user skills directory: <detail>",
+            "warning: the user skills directory was not used, trying the project skills directory: <detail>",
+            "warning: the temporary directory <path> could not be removed: <detail>",
+        ], (
+            f"COMMANDS.md publishes four success-path stderr lines, the --force "
+            f"warning and the three skills install warnings; extraction found {lines}")
+        assert all(where == ["SPEC/COMMANDS.md"] for where in lines.values()), lines
         for s in lines:
             assert s in CORPUS, f"the success-path line is not in the corpus: {s!r}"
 

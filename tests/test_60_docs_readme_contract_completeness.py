@@ -215,6 +215,7 @@ FAMILY_DOC_FILE = {
     "stats": "stats.md",
     "graph": "graph.md",
     "web": "web.md",
+    "skills": "skills.md",
     "ai-help": "ai-help.md",
 }
 

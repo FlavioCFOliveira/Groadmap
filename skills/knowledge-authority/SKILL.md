@@ -40,7 +40,9 @@ or file-read fallback). Guessing is a defect.
 
 - **Uses exclusively `rmp graph`**, whose two subcommands are `serve` and
   `client`. No other `rmp` command is in scope. Full contract:
-  `references/cli.md`.
+  `references/cli.md`. `rmp skills install`, which installs this skill, is
+  shared by both skills and belongs to neither one's scope (§ Keeping this skill
+  current).
 - **Owns the project's `./knowledge-model.md` exclusively.** That file is
   maintained and updated by this skill and by nothing else — no other skill, agent
   or workflow writes to it — and this skill is answerable for its accuracy. It is
@@ -68,6 +70,27 @@ The `roadmap-manager` skill does not touch the graph: **every graph read, write
 and maintenance step routes through this skill** — and so does every edit to
 `./knowledge-model.md`, which no other skill, agent or workflow may write
 (§ Scope).
+
+## Keeping this skill current — `rmp skills install`
+
+Run `rmp skills install` on either of two occasions:
+
+- after `rmp` has been installed or upgraded;
+- when the `rmp-version` this skill declares in its frontmatter differs from
+  the version `rmp --version` writes, which is the third whitespace-separated
+  word of its line (`Groadmap version 1.19.0 (commit …)` writes `1.19.0`).
+
+```bash
+rmp skills install
+```
+
+The command replaces the installed `roadmap-manager` and `knowledge-authority`
+entirely with the copies on the repository's `main` branch, asks nothing, and
+needs network access to `github.com`. Run it **once** per occasion. When the
+declared version still differs from `rmp --version` after a successful run, the
+cause is the installed binary, not the skills: the skills on `main` declare the
+version of the release `main` carries. Report that `rmp` itself must be
+upgraded, and do not run the command again.
 
 ## How this skill is structured
 
