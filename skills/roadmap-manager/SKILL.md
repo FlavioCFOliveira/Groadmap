@@ -3,12 +3,12 @@ name: roadmap-manager
 model: inherit
 description: Sole operator of the local Groadmap CLI (`rmp`) — the single source of truth for a project's tasks, sprints, and backlog, in per-roadmap SQLite databases under `~/.roadmaps/<name>/`. Self-contained: needs no other skill to plan, coordinate, and report roadmap work. Trigger it to create/list/inspect/edit/transition tasks, sprints, or backlog items; run the sprint lifecycle (plan/start/close/reopen); move a task across `BACKLOG → SPRINT → DOING → TESTING → COMPLETED`; set priority or severity; manage dependencies and subtasks; reorder or move tasks within or between sprints; read the audit log or statistics; work out what to do next; resume an interrupted task; or produce a status report ("ponto de situação", PDS). Trigger it equally for the typed comment log — write a FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE or NOTE entry as the work happens, and read it back to recover a task's history and the reasoning behind past decisions. Bare cues: "rmp", "groadmap", "roadmap", "sprint", "backlog", "pds", ids like `#42`, "what's next?", "mark this done", "reopen task N", "block A on B", "close the sprint", "log this decision", "keep this test result", "why was this decided?", "what was already tried?". Do NOT use it for GitHub Issues, Jira, Linear or any remote tracker; to write code, tests, audits, git operations or specifications (delegate those); or for `rmp graph …` — the knowledge graph belongs to the `knowledge-authority` skill.
 metadata:
-  rmp-version: "1.19.0"
+  rmp-version: "1.20.0"
 ---
 
 # Roadmap Manager
 
-Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.19.0** — and coordinate all roadmap, sprint, task, and backlog work. This skill is the single source of truth for a project's planning and execution state.
+Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.20.0** — and coordinate all roadmap, sprint, task, and backlog work. This skill is the single source of truth for a project's planning and execution state.
 
 **Coordinate, never implement.** This skill operates the CLI autonomously; the actual work behind a task — code, tests, security/performance audits, git operations, specifications — is out of scope and is handed to the appropriate specialist agent or human. Never mark a task `COMPLETED` without confirmation that its acceptance criteria are met.
 
