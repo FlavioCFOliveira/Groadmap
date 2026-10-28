@@ -4,7 +4,7 @@ Everything this skill may touch on the `rmp` CLI. All other `rmp` commands are
 **out of scope**: `task`, `sprint`, `backlog`, `stats`, `audit` and `roadmap`
 belong to the `roadmap-manager` skill, and `web` to neither skill.
 
-Baseline: **Groadmap v1.18.0**. The binary's own machine-readable contract is
+Baseline: **Groadmap v1.19.0**. The binary's own machine-readable contract is
 `rmp --ai-help`; run it whenever this reference and observed behaviour disagree —
 **the binary is the source of truth**. Setting `AI_AGENT=1` makes every invocation
 print a one-line hint to stderr pointing at `--ai-help`; every failure appends the
