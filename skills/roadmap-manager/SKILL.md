@@ -16,6 +16,19 @@ Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.19.0** — and coord
 
 **The `web` command is out of scope as well.** It starts a long-running, read-only HTTP server; this skill never starts it. If the user wants the web interface, tell them it is a separate command they run themselves.
 
+## Keeping this skill current — `rmp skills install`
+
+Run `rmp skills install` on either of two occasions:
+
+- after `rmp` has been installed or upgraded;
+- when the `rmp-version` this skill declares in its frontmatter differs from the version `rmp --version` writes, which is the third whitespace-separated word of its line (`Groadmap version 1.19.0 (commit …)` writes `1.19.0`).
+
+```bash
+rmp skills install
+```
+
+The command replaces the installed `roadmap-manager` and `knowledge-authority` entirely with the copies on the repository's `main` branch, asks nothing, and needs network access to `github.com`. It is shared by both skills and belongs to neither one's scope. Run it **once** per occasion. When the declared version still differs from `rmp --version` after a successful run, the cause is the installed binary, not the skills: the skills on `main` declare the version of the release `main` carries. Report that `rmp` itself must be upgraded, and do not run the command again.
+
 ## How this skill is structured (progressive disclosure)
 
 Keep the always-loaded surface small; load detail on demand.

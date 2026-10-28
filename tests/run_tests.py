@@ -96,6 +96,7 @@ TEST_MODULES = [
     "test_76_correctness_and_security_lab",
     "test_77_install_skills",
     "test_78_changelog_section",
+    "test_79_skills_install_command",
 ]
 
 # Stress tests (run separately due to time/data volume)

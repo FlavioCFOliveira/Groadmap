@@ -183,6 +183,18 @@ func staticPitfalls() []Pitfall {
 			Reference:      "task stat; task prio; sprint reorder; conventions.stdout_on_success.",
 		},
 		{
+			ID: "skills_install_confirmation_flag",
+			Description: "Passing a confirmation flag such as `--yes` or `--force` to `rmp skills install`. The " +
+				"command is non-interactive and replaces the installed skills unconditionally on every run, so " +
+				"it has no such flag: the flag is refused as an unknown flag with exit code 2, and nothing is " +
+				"downloaded or installed.",
+			WrongExample:   "rmp skills install --yes",
+			WrongExit:      2,
+			WrongStderr:    "Error: invalid input: unknown flag: --yes",
+			CorrectExample: "rmp skills install",
+			Reference:      "skills install; SPEC/COMMANDS.md § Skills Management.",
+		},
+		{
 			ID: "graph_statement_is_not_checked",
 			Description: "Expecting `rmp graph` to refuse a statement for what it does. The family has TWO " +
 				"subcommands, serve and client, only client runs a statement, and there is no operation-class " +

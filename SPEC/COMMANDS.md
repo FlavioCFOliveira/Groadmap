@@ -255,6 +255,7 @@ The table publishes the declared maximum for every command in the CLI. It is can
 | `graph serve` | 0 | - |
 | `graph client` | 0 | - |
 | `web` | 0 | - |
+| `skills install` | 0 | - |
 
 Three consequences of the table are worth stating, because each is a case a reader may expect to behave differently:
 

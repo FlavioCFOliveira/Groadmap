@@ -126,6 +126,27 @@ EXEMPT_EXAMPLES = {
         "the client half of the same pair, and unrunnable for the same reason: "
         "it can only succeed against a server bound to that same path outside "
         "the gate's isolation.",
+    "rmp skills install":
+        "SPEC/DATA_FORMATS.md § Examples that cannot be run as published: the "
+        "success example of `skills install` is not refused before its "
+        "download. It fetches the archive of the repository's main branch from "
+        "github.com and, run with sufficient privileges, writes the machine's "
+        "managed settings directory, which lies outside any temporary home the "
+        "gate can redirect (SPEC/SKILLS.md § Install Verification). Its "
+        "behaviour is verified in process by "
+        "internal/skillsinstall/skillsinstall_test.go.",
+}
+
+# The pitfall examples the gate cannot run, keyed by (pitfall id, role), under
+# the same rules as EXEMPT_EXAMPLES.
+EXEMPT_PITFALL_EXAMPLES = {
+    ("skills_install_confirmation_flag", "correct"):
+        "SPEC/DATA_FORMATS.md § Examples that cannot be run as published: the "
+        "correct_example is `rmp skills install`, the same invocation as the "
+        "success example of `skills install`, and unrunnable for the same "
+        "reason: it downloads from github.com and may write the machine's "
+        "managed settings directory. The pitfall's wrong_example is refused "
+        "before any request and is executed like every other.",
 }
 
 
@@ -1119,6 +1140,9 @@ class TestPublishedExamplesAreExecuted:
                 ("correct", "correct_example", 0),
             ):
                 cmd = pitfall[field]
+                if (pid, role) in EXEMPT_PITFALL_EXAMPLES:
+                    self.exempted.append(cmd)
+                    continue
                 home = Workspace.fresh()
                 server = None
                 try:
@@ -1328,6 +1352,24 @@ class TestPublishedExamplesAreExecuted:
                 f"it to cover nothing"
             )
             assert why.strip(), f"the exemption for `{cmd}` states no reason"
+        pitfalls = {p["id"]: p for p in self.contract["pitfalls"]}
+        for (pid, role), why in EXEMPT_PITFALL_EXAMPLES.items():
+            assert pid in pitfalls, (
+                f"the exemption for pitfall {pid} ({why}) names a pitfall the "
+                f"contract no longer publishes; remove it")
+            assert role in ("wrong", "correct"), f"unknown role {role!r} for pitfall {pid}"
+            assert why.strip(), f"the exemption for pitfall {pid} states no reason"
+        for (label, code), why in UNDRIVEN_CODES.items():
+            declared = [
+                e["code"]
+                for c in self.contract["commands"] for sub in c["subcommands"]
+                if subcommand_label(c, sub)[0] == label
+                for e in sub["exit_codes"]
+            ]
+            assert code in declared, (
+                f"UNDRIVEN_CODES names exit {code} of {label} ({why}), which the "
+                f"contract no longer declares; remove it")
+            assert why.strip(), f"the undriven code {label} {code} states no reason"
 
     def test_the_comparator_rejects_a_degraded_string(self):
         """SPEC/DATA_FORMATS.md § Examples that cannot be run as published,
@@ -1413,6 +1455,9 @@ class TestPublishedExamplesAreExecuted:
         print("  accounted:", accounted)
         for cmd, why in sorted(EXEMPT_EXAMPLES.items()):
             print(f"  EXEMPT  {cmd}")
+            print(f"          {why}")
+        for (pid, role), why in sorted(EXEMPT_PITFALL_EXAMPLES.items()):
+            print(f"  EXEMPT  pitfall {pid} {role}_example")
             print(f"          {why}")
 
         assert accounted == len(published), (
@@ -1618,7 +1663,7 @@ VALID_POSITIONALS = {
     "sprint comment-edit": ["1"], "sprint comment-remove": ["1"],
     "backlog list": [], "backlog show-next": ["5"], "audit list": [],
     "audit history": ["TASK", "1"], "audit stats": [], "stats": [],
-    "graph serve": [], "graph client": [], "web": [], "ai-help": [],
+    "graph serve": [], "graph client": [], "web": [], "skills install": [], "ai-help": [],
 }
 
 # The flags a subcommand needs before its positional arguments are meaningful.
@@ -1637,7 +1682,7 @@ EXTRA_FLAGS = {
 }
 
 # Subcommands that take no roadmap selector.
-NO_ROADMAP = {"roadmap list", "roadmap create", "roadmap remove", "web", "ai-help"}
+NO_ROADMAP = {"roadmap list", "roadmap create", "roadmap remove", "web", "skills install", "ai-help"}
 
 # Subcommands whose invocation blocks; the probe sweep leaves them to the
 # drivers, which start and stop them deliberately.
@@ -1802,7 +1847,38 @@ def _driver_unopenable_graph_lock(home):
     return code
 
 
+def _driver_skills_relative_tmpdir(home):
+    """Exit 1 of `skills install` without a request: a temporary-file directory
+    that is not an absolute path refuses the staging directory before the
+    download (SPEC/SKILLS.md § Install Staging Directory, item 2)."""
+    env = _env_for(home)
+    env["TMPDIR"] = "relative-staging-parent"
+    proc = subprocess.run([resolve_cli(), "skills", "install"], capture_output=True,
+                          text=True, env=env, cwd=home, input="", timeout=60)
+    want = ('Error: I/O error: cannot create a private staging directory: the '
+            'temporary-file directory "relative-staging-parent" is not an absolute path')
+    assert first_line(proc.stderr) == want, f"stderr {first_line(proc.stderr)!r}; want {want!r}"
+    assert proc.stdout == "", f"stdout {proc.stdout[:80]!r}; want nothing"
+    assert not os.path.exists(os.path.join(home, ".claude")), "a skills directory was created"
+    return proc.returncode
+
+
+# Declared codes no invocation of the binary may produce in this gate, each
+# named with its reason, under the rules of SPEC/DATA_FORMATS.md § Examples
+# that cannot be run as published. The staleness check covers them too.
+UNDRIVEN_CODES = {
+    ("skills install", 0):
+        "SPEC/SKILLS.md § Install Verification: a successful `skills install` "
+        "downloads from github.com and, run with sufficient privileges, writes "
+        "the machine's managed settings directory, so no end-to-end test runs "
+        "the binary past the refusals that precede the download. Exit 0 is "
+        "driven in process by internal/skillsinstall/skillsinstall_test.go "
+        "against a local HTTPS server.",
+}
+
+
 RESIDUE_DRIVERS = {
+    ("skills install", 1): _driver_skills_relative_tmpdir,
     ("task comment-add", 1): _driver_corrupt_db(
         ["task", "comment-add", "-r", FIXTURE_ROADMAP, "1", "--type", "NOTE", "--body", "b"]),
     ("task comment-edit", 1): _driver_corrupt_db(
@@ -2135,6 +2211,8 @@ class TestSubcommandExitCodesAreExhaustive:
                 label, argv = subcommand_label(cmd_entry, sub)
                 for entry in sub["exit_codes"]:
                     code = entry["code"]
+                    if (label, code) in UNDRIVEN_CODES:
+                        continue
                     driver = self._driver_for(label, argv, sub, code)
                     if driver is None:
                         undriven.append(f"{label}: exit {code}")
