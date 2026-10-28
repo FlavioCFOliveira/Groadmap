@@ -2205,7 +2205,7 @@ both serialize as `[]` when the command family or the workflow has no preconditi
 | `stdout_on_success.example` | any or null | A canonical example payload; `null` for `empty`. |
 | `side_effects.database` | string | Plain-language description of DB writes; `"Read-only."` when none. |
 | `side_effects.filesystem` | string | Plain-language description of FS writes; `"None."` when none. |
-| `side_effects.network` | string | Always `"None."` for Groadmap; field kept for forward compatibility. |
+| `side_effects.network` | string | `"None."` for every subcommand except `skills install`, the one subcommand that connects to another machine; its value states that it downloads the archive of the repository's `main` branch from `github.com` over HTTPS (`SKILLS.md § Install Source`). |
 | `idempotent` | boolean | True when repeated invocations with the same arguments produce the same end state. |
 | `exit_codes` | array of object | Exit codes the subcommand can emit, in ascending order by `code`, each paired with the conditions that produce it. Always includes `0`. See `Field reference: per-subcommand exit code entry` below. |
 | `prerequisites` | array of string or absent | Preconditions on state that the caller must satisfy before invoking. Present only when the subcommand has at least one of its own; **absent**, never empty, when it has none. See `Subcommand prerequisites` below. |
@@ -2471,6 +2471,7 @@ Each follows the shape shown above.
 | `assume_partial_batch_success` | Assuming a batch operation may partially succeed. All batch operations are fail-fast: either every ID is valid and the operation runs, or no change is made. |
 | `invalid_roadmap_name` | Creating a roadmap with characters outside `^[a-z0-9_-]+$` or longer than 50 characters. Validate the name client-side before issuing `roadmap create`. |
 | `parse_modification_stdout` | Parsing stdout after a modification command (status change, priority change, reorder, delete). Such commands deliberately return empty stdout on success; rely on the exit code. |
+| `skills_install_confirmation_flag` | Passing a confirmation flag such as `--yes` or `--force` to `rmp skills install`. The command is non-interactive and replaces the installed skills unconditionally on every run, so it has no such flag: the flag is refused as an unknown flag with exit code `2`, and nothing is downloaded or installed. Its `wrong_example` is `rmp skills install --yes`, its `wrong_stderr` is `Error: invalid input: unknown flag: --yes`, and its `correct_example` is `rmp skills install`. |
 
 #### Field reference: `pitfalls` entry
 
@@ -2740,6 +2741,18 @@ with its reason published beside it**. The rules are absolute:
    removed, one with the `Error: ` prefix removed — and accepts the undegraded one.
    Without that check a comparator that has silently become permissive reports a
    contract that has silently become wrong.
+
+**Two published invocations are exempted by name, for one reason.** They are the
+success example of `skills install`, whose `cmd` is `rmp skills install`, and the
+`correct_example` of the pitfall `skills_install_confirmation_flag`, which is the
+same invocation. Neither is refused before its download: each fetches the archive
+of the repository's `main` branch from `github.com` and, run with sufficient
+privileges, writes the machine's managed settings directory, which lies outside
+any temporary home the gate can redirect (`SKILLS.md § Install Verification`). The
+gate does not depend on the network and writes nothing outside its own temporary
+directories, so it cannot run either. The failure examples of `skills install`
+and the pitfall's `wrong_example` are refused before any request, and are
+executed like every other.
 
 #### Acceptance criteria
 

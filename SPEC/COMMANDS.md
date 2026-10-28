@@ -19,6 +19,7 @@
 - [Statistics Command](#statistics-command)
 - [Graph Management](#graph-management)
 - [Web Interface](#web-interface)
+- [Skills Management](#skills-management)
 - [Command Aliases Reference](#command-aliases-reference)
 
 ## Naming Conventions
@@ -86,7 +87,7 @@ Three consequences follow, and they hold for every table and every code block in
 2. on a table row that publishes the stderr of a failure without the `Error: ` prefix;
 3. when the set of files under `SPEC/` that it finds publishing an `Error:` string differs from the files named above.
 
-A line a table publishes for stderr on a successful path is reached and compared in the same way, although it carries no `Error: ` prefix. The warning `sprint close --force` writes is the one such line (`§ Sprint Lifecycle`).
+A line a table publishes for stderr on a successful path is reached and compared in the same way, although it carries no `Error: ` prefix. The warning `sprint close --force` writes is one such line (`§ Sprint Lifecycle`), and the warnings `rmp skills install` writes are the others (`§ Skills Install Warnings`).
 
 This section states the convention once. The tables below do not restate it.
 
@@ -111,7 +112,7 @@ Both classes:
 2. Write the **help for the level at which the name could not be resolved** to stderr, after the error line: the global help body for an unresolved command, and the family help body of the command that did resolve for an unresolved subcommand.
 3. Write nothing to stdout.
 
-The commands that dispatch subcommands, and for which the second class can arise, are `roadmap`, `task`, `sprint`, `backlog`, `audit`, and `graph`. The commands `stats`, `web`, and `ai-help` accept no subcommand, so no dispatch failure arises for them.
+The commands that dispatch subcommands, and for which the second class can arise, are `roadmap`, `task`, `sprint`, `backlog`, `audit`, `graph`, and `skills`. The commands `stats`, `web`, and `ai-help` accept no subcommand, so no dispatch failure arises for them.
 
 A dispatch failure is the **only** error class after which help is written. Every other error class — a missing required parameter, an unknown flag, an invalid enum value, an out-of-range value, a rejected state transition, a resource that does not exist, a name conflict, and a database failure — produces the error line and the AI-agent hint alone, with no help. The reader recovers from those by running `--help` explicitly, because the error line already names the offending flag or value.
 
@@ -1014,6 +1015,8 @@ Error: no roadmap selected: use -r <name> or --roadmap <name>
 This applies to every subcommand under `task`, `sprint`, `backlog`, `audit`, `stats`, and `graph`.
 
 The `web` command is deliberately **not** in this list. `rmp web` operates across all roadmaps: the web interface lists every roadmap found under `~/.roadmaps/` and the user selects one in the browser, so `rmp web` does not require and does not accept the `-r` / `--roadmap` flag (see [Web Interface](#web-interface)).
+
+The `skills` command is not in the list either. `rmp skills install` installs the agent skills into a Claude Code skills directory and opens no roadmap, so it does not require and does not accept the `-r` / `--roadmap` flag (see [Skills Management](#skills-management)).
 
 ```bash
 # Always provide -r:
@@ -4730,6 +4733,193 @@ None of the three is a database failure, and none of them says so. A busy port, 
 
 ---
 
+## Skills Management
+
+Command: `rmp skills` (no alias)
+
+The `skills` command installs the two agent skills the repository ships,
+`roadmap-manager` and `knowledge-authority`, where Claude Code loads them. It has
+one subcommand, `install`, which takes no alias.
+
+`rmp skills` operates on no roadmap, so it does **not** require and does **not**
+accept the `-r` / `--roadmap` flag (see
+[Roadmap Selection (Always Required)](#roadmap-selection-always-required)).
+`rmp skills` with no subcommand writes the family help and exits `0`, and an
+unresolved subcommand name is a dispatch failure
+(`§ Dispatch Failures (Unresolved Command or Subcommand Names)`).
+
+| Subcommand | Operation |
+|------------|-----------|
+| `install` | Fetch the skills from the repository's `main` branch and replace the installed copy of each, in the first of three skills directories that accepts them |
+
+The behaviour behind this contract — the source, the staging directory, the
+validation of the archive, the three destination tiers and their rules, the
+replacement procedure, its rollback, and its handling of signals — is specified in
+`SKILLS.md § Skills Install Command`. This section is the command-line contract.
+
+### Skills Install
+
+**Usage:** `rmp skills install`
+
+The subcommand fetches
+`https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz`,
+validates the two skills it carries, and installs them by replacing the previous
+copy of each entirely. It tries the global, the user, and the project skills
+directory, in that order, and stops at the first that accepts both skills
+(`SKILLS.md § Destination Tiers`).
+
+It is non-interactive. It writes no prompt, reads nothing from standard input,
+asks for no confirmation, and has no confirmation flag. It replaces the installed
+skills on every run, unconditionally, subject only to the refusals of
+`SKILLS.md § Tier Destination Rules`; there is no check that skips a run whose
+skills are already current. It never invokes `sudo` or requests elevated
+privileges.
+
+An agent runs it after `rmp` has been installed or upgraded, and when the
+`rmp-version` a skill declares differs from the version `rmp --version` writes
+(`SKILLS.md § Location and Identity`, item 6).
+
+### Skills Install Options
+
+- `-h, --help` - Show the subcommand help.
+
+The subcommand has no other flag. `-r`, `--roadmap`, `--yes`, `--force`, and every
+other flag are unknown flags, refused with exit code `2` and the line
+`§ Positional Arguments` rule 5 publishes, which names the flag. The subcommand
+accepts no positional argument: its declared maximum is zero, and
+`§ Positional Arguments` is canonical for the refusal. Both refusals happen before
+the staging directory is created and before any request is made.
+
+### Skills Install Output
+
+- **On success (stdout):** one JSON object, pretty-printed with two-space
+  indentation and a trailing newline (`DATA_FORMATS.md § Implementation Notes`),
+  with exactly these keys, in this order:
+
+  | Key | Type | Value |
+  |-----|------|-------|
+  | `scope` | string | The tier the skills were installed into: `global`, `user`, or `project` (`SKILLS.md § Destination Tiers`). |
+  | `directory` | string | The absolute path of that tier's skills directory, as the command resolved it, without resolving symbolic links. |
+  | `skills` | array of string | The installed skills, in the order they were replaced: always `["roadmap-manager", "knowledge-authority"]`. |
+  | `source` | string | The URL fetched: always `https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz`. |
+  | `skipped` | array of object | One element per tier tried before the one used, in the order tried, each with exactly the keys `scope` and `reason`: the tier's `scope` value and the reason it was not used, which is the text `§ Skills Install Warnings` publishes in the `<detail>` of that tier's warning. `[]` when the first tier tried was used. |
+
+  ```json
+  {
+    "scope": "user",
+    "directory": "/home/alice/.claude/skills",
+    "skills": [
+      "roadmap-manager",
+      "knowledge-authority"
+    ],
+    "source": "https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz",
+    "skipped": [
+      {
+        "scope": "global",
+        "reason": "cannot create /etc/claude-code: mkdir /etc/claude-code: permission denied"
+      }
+    ]
+  }
+  ```
+
+- **Warnings (stderr):** one line for each tier that is tried and not used,
+  except the project tier, and one line for each temporary directory that could
+  not be removed, in the order the conditions arise. A warning does not change the
+  exit code. `§ Skills Install Warnings` publishes them.
+- **Errors (stderr):** plain text, with the standard AI-agent hint, per
+  `HELP.md § Error message format`, after any warning. `§ Skills Install Error Cases`
+  publishes the lines.
+
+### Skills Install Exit Codes
+
+| Exit Code | Cause |
+|-----------|-------|
+| 0 | Both skills were installed in one tier and the output was written to stdout. Warnings may precede it. |
+| 1 | The staging directory could not be created or trusted; the archive could not be downloaded, exceeded a bound, or failed validation; no tier accepted the skills; or a tier's rollback failed (`utils.ErrIO`). A home directory that is unset, empty, or not an absolute path is refused before the command runs, with the line `ARCHITECTURE.md § Location Rules` rule 1 publishes (`utils.ErrDatabase`). |
+| 2 | Unknown flag or unexpected positional argument (`utils.ErrInvalidInput`). |
+
+The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the
+command introduces no new code. Its handling of `SIGINT` and `SIGTERM`, which ends
+with exit code `130`, is specified in `SKILLS.md § Install Interruption`.
+
+### Skills Install Error Cases
+
+Every line below carries `utils.ErrIO`, except the two exit-code-2 lines, which
+carry `utils.ErrInvalidInput`. `<path>` is the path the line names, and `<detail>`
+is the diagnostic of the operation that failed, or, where the scenario says so, a
+description the command composes.
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
+| Unexpected positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
+| The staging directory cannot be created or trusted (`SKILLS.md § Install Staging Directory`); `<detail>` names the directory and the condition | 1 | `Error: I/O error: cannot create a private staging directory: <detail>` |
+| The request fails: connection, TLS, a refused redirect, or the time bound | 1 | `Error: I/O error: cannot download the skills from https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz: <detail>` |
+| The final response has a status other than `200`; `N` is the status | 1 | `Error: I/O error: cannot download the skills from https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz: HTTP status N` |
+| The response body exceeds 64 MiB | 1 | `Error: I/O error: the skills archive exceeds 64 MiB; nothing was installed` |
+| The decompressed stream exceeds 256 MiB | 1 | `Error: I/O error: the skills archive expands to more than 256 MiB; nothing was installed` |
+| The selected regular files exceed 16 MiB | 1 | `Error: I/O error: the skills in the archive exceed 16 MiB; nothing was installed` |
+| The selected entries exceed 1,000 | 1 | `Error: I/O error: the skills in the archive exceed 1,000 entries; nothing was installed` |
+| The body is not a gzip-compressed tar stream, or is truncated or corrupted | 1 | `Error: I/O error: the skills archive is not a valid gzip-compressed tar archive: <detail>` |
+| An entry's name begins with `/` | 1 | `Error: I/O error: the skills archive is malformed: entry "X" has an absolute name` |
+| An entry's name has a `..`, `.`, or empty component | 1 | `Error: I/O error: the skills archive is malformed: entry "X" has an empty, "." or ".." path component` |
+| A selected entry is neither a directory nor a regular file | 1 | `Error: I/O error: the skills archive is malformed: entry "X" is neither a directory nor a regular file` |
+| A selected entry names a file already extracted | 1 | `Error: I/O error: the skills archive is malformed: entry "X" appears more than once` |
+| The archive carries no regular file `SKILL.md` for `roadmap-manager` | 1 | `Error: I/O error: the skills archive is malformed: it carries no regular file skills/roadmap-manager/SKILL.md` |
+| The archive carries no regular file `SKILL.md` for `knowledge-authority` | 1 | `Error: I/O error: the skills archive is malformed: it carries no regular file skills/knowledge-authority/SKILL.md` |
+| A selected entry cannot be written into the staging directory | 1 | `Error: I/O error: cannot extract the skills archive into the staging directory: <detail>` |
+| The global and user tiers were not used, and the project tier was not used either; `<detail>` is the project tier's reason (`§ Skills Install Warnings`) | 1 | `Error: I/O error: the skills could not be installed in the global, user, or project skills directory; the project skills directory was not used: <detail>` |
+| A tier's swap failed and an undo step of its rollback failed too; `<detail>` is composed: it names the failed rename and, for each previous copy not restored, the skill and the path in the kept work directory that holds it | 1 | `Error: I/O error: the skills replacement failed and could not be rolled back: <detail>` |
+
+`X` is an entry's name as the archive records it. The value the request line's
+`<detail>` carries is the Go standard library's own diagnostic, whose wording
+belongs to that library and to the platform rather than to `rmp`.
+
+None of these is a database failure, and none says so. The staging directory, the
+network stream, the archive, and the skills directories are a stream, files, and
+directories that are not a roadmap's database, which is the class
+`ARCHITECTURE.md § Sentinel Error Catalogue` gives `utils.ErrIO` (rule 5).
+
+### Skills Install Warnings
+
+Each warning is one line on stderr. It carries no `Error: ` prefix and no
+sentinel, because it reports a condition the run survives, and it is published
+exactly all the same, on the discipline of `§ Published Error Strings Are Exact`.
+
+| Condition | Exit Code | stderr Output |
+|-----------|-----------|---------------|
+| The global tier was not used; `<detail>` is its reason | 0 | "warning: the global skills directory was not used, trying the user skills directory: <detail>" |
+| The user tier was not used; `<detail>` is its reason | 0 | "warning: the user skills directory was not used, trying the project skills directory: <detail>" |
+| A work directory or the staging directory could not be removed | 0 | "warning: the temporary directory <path> could not be removed: <detail>" |
+
+The exit code shown is that of a run that then succeeds. The same warnings are
+written, before the error line, by a run that then fails.
+
+A tier's **reason**, the `<detail>` of its warning and the `reason` of its
+`skipped` element, is exactly one of the texts below. In them `<path>` is the
+absolute path of the directory or skill path concerned, `X` is the value of
+`$CLAUDE_CONFIG_DIR` as the environment supplies it, and `<detail>` is the
+diagnostic of the operation that failed.
+
+| Condition (`SKILLS.md § Tier Destination Rules`, `SKILLS.md § Tier Replacement Procedure`) | Reason |
+|-----------|--------|
+| No managed settings directory is documented for the platform (global tier) | `no managed settings directory is documented for this platform` |
+| `$CLAUDE_CONFIG_DIR` is not an absolute path (user tier), rule 1 | `CLAUDE_CONFIG_DIR "X" is not an absolute path` |
+| The current working directory cannot be determined (project tier) | `cannot determine the current working directory: <detail>` |
+| A configuration directory, skills directory, or skill path is not a directory, rules 2 and 6 | `<path> is not a directory` |
+| A skill path is a symbolic link, rule 5 | `<path> is a symbolic link` |
+| The skills directory or a skill path is not owned by the invoking user (user and project tiers), rules 3 and 6 | `<path> is not owned by the invoking user` |
+| The skills directory or a skill path is owned neither by `root` nor by the invoking user (global tier), rules 3 and 6 | `<path> is owned neither by root nor by the invoking user` |
+| The skills directory is writable by every user and carries no sticky bit, rule 4 | `<path> is writable by every user and carries no sticky bit` |
+| A path cannot be examined, or its permissions cannot be read | `cannot examine <path>: <detail>` |
+| A missing directory cannot be created | `cannot create <path>: <detail>` |
+| The work directory cannot be created in the skills directory `<path>` | `cannot create a work directory in <path>: <detail>` |
+| The created work directory fails a check of step 2 | `<path> is not a private directory owned by the invoking user` |
+| The validated tree cannot be copied into the work directory `<path>` | `cannot copy the skills into <path>: <detail>` |
+| A rename of the swap failed, or a skill path reappeared before the new copy was moved into it, and the rollback restored the previous versions; `<path>` is the skill path | `cannot replace <path>, and the previous skills were restored: <detail>` |
+
+---
+
 ## Command Aliases Reference
 
 | Command | Aliases |
@@ -4742,6 +4932,8 @@ None of the three is a database failure, and none of them says so. A busy port, 
 | `stats` | - |
 | `graph` | - |
 | `web` | - |
+| `skills` | - |
+| `install` (under `skills`) | - |
 | `list` | `ls` |
 | `create` | `new` |
 | `remove` (under `task`, `sprint`) | `rm` |
