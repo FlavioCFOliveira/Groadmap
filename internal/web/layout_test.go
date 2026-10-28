@@ -19,7 +19,7 @@ var vendoredAssets = []string{
 	"static/vendor/tabler/tabler.min.css",
 	"static/vendor/tabler/tabler.min.js",
 	"static/vendor/tabler-icons/tabler-icons.min.css",
-	"static/vendor/tabler-icons/fonts/tabler-icons.woff2",
+	"static/vendor/tabler-icons/fonts/tabler-icons.core.woff2",
 	"static/vendor/inter/inter.css",
 	"static/vendor/inter/files/inter-latin-wght-normal.woff2",
 	"static/vendor/inter/files/inter-latin-wght-italic.woff2",
@@ -691,7 +691,7 @@ func TestStatic_VendoredAssetsServed(t *testing.T) {
 		{"/static/graph.js", "javascript"},
 		{"/static/vendor/inter/files/inter-latin-wght-normal.woff2", ""},
 		{"/static/vendor/inter/files/inter-latin-wght-italic.woff2", ""},
-		{"/static/vendor/tabler-icons/fonts/tabler-icons.woff2", ""},
+		{"/static/vendor/tabler-icons/fonts/tabler-icons.core.woff2", ""},
 		{"/static/favicon.svg", "image/svg"},
 	}
 

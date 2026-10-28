@@ -50,7 +50,8 @@ func servedCascadeRules(t *testing.T) []cascadeRule {
 const htmlDark = "html[data-bs-theme=dark][lang=en]"
 
 // pagePath is the admin-shell path down to the page body's container.
-var pagePath = []string{htmlDark, "body.layout-fluid", "div.page", "div.page-wrapper", "main.page-body", "div.container-xl"}
+var pagePath = []string{htmlDark, "body.layout-fluid", "div.page", "div.page-wrapper",
+	"main.d-flex.flex-column.flex-fill", "div.page-body", "div.container-xl"}
 
 // under returns pagePath followed by the given descriptions.
 func under(path ...string) []string {
@@ -291,15 +292,16 @@ func TestRowsPerPageActiveFill(t *testing.T) {
 	}
 }
 
-// focusTarget is one kind of element UI Framework rule 21 names on the tasks page
-// and the sprint board, described with keyboard focus.
+// focusTarget is one kind of element UI Framework rule 21 names on the tasks page,
+// the sprint board, and the scrollable tables, described with keyboard focus.
 type focusTarget struct {
 	name string
 	el   *cssElement
 }
 
 // focusTargets describes every kind of focusable element of the tasks list and
-// the sprint board, each in the state keyboard focus gives it: :focus and
+// the sprint board, and every table-responsive container UI Framework rule 22
+// makes focusable, each in the state keyboard focus gives it: :focus and
 // :focus-visible.
 func focusTargets() []focusTarget {
 	const kb = ":focus:focus-visible"
@@ -308,6 +310,13 @@ func focusTargets() []focusTarget {
 	}
 	row := under("div.card", "div.table-responsive", "table.table.table-vcenter.card-table", "tbody", "tr")
 	board := under("div.task-board.task-board--bounded.mb-3", "div.card.task-board__column")
+	// region is a focused table-responsive container named by the card title id.
+	region := func(id string) string {
+		return "div.table-responsive[tabindex=0][role=region][aria-labelledby=" + id + "]" + kb
+	}
+	dashCard := func(col, role, id string) *cssElement {
+		return describe(under("div.row.row-deck.row-cards", col, "div.card[data-role="+role+"]", region(id))...)
+	}
 	return []focusTarget{
 		{"search input", control("input.form-control.form-control-sm#task-filter-q[type=search][name=q][placeholder=Search]:placeholder-shown")},
 		{"sprint select", control("select.form-select.form-select-sm.task-list__sprint-select#task-filter-sprint[name=sprint]")},
@@ -324,12 +333,20 @@ func focusTargets() []focusTarget {
 			"a.card.card-sm.card-link.text-reset.task-card[href=/roadmaps/payments/tasks/7]"+kb)...)},
 		{"column toggle", describe(append(board, "div.card-header", "div.card-actions",
 			"button.btn-action[type=button][aria-expanded=true]"+kb)...)},
+		{"audit log table container", describe(under("div.card#audit", region("audit-log-title"))...)},
+		{"work-in-progress table container", dashCard("div.col-lg-6", "work-in-progress", "work-in-progress-title")},
+		{"most-severe table container", dashCard("div.col-lg-6", "most-severe", "most-severe-title")},
+		{"upcoming-sprints table container", dashCard("div.col-12", "upcoming-sprints", "upcoming-sprints-title")},
+		{"recent-activity table container", dashCard("div.col-12", "recent-activity", "recent-activity-title")},
+		{"tasks list table container", describe(under("div.card", region("task-list-title"))...)},
 	}
 }
 
 // TestFocusIndicatorContrast is the gate for Acceptance Criterion 247, resolved
 // from the served stylesheets by the steps of Acceptance Criterion 246: for every
-// kind of focusable element of the tasks list and the sprint board, in the state
+// kind of focusable element of the tasks list and the sprint board, and for every
+// table-responsive container of the audit log, the dashboard, and the tasks
+// list, in the state
 // keyboard focus gives it, the winning outline is solid and at least 2px wide,
 // and its colour reaches 3:1 against the element's own background and against
 // its container's — the page background with every ancestor's background
@@ -481,8 +498,13 @@ func TestCascadeResolver_ConvertsFaithfullyAndRefusesWhatItCannotResolve(t *test
 	if ratio := textContrast(text, fill, surface); ratio >= 4.5 {
 		t.Errorf("without the overrides the DOING badge reads at %.2f:1; the badge gate would pass vacuously", ratio)
 	}
-	if activeFill, err := v.colour(sizeLink(true, ""), "", "background-color"); err != nil || activeFill.a == 1 {
-		t.Errorf("without the override the active rows-per-page fill is %s (%v); the fill gate would pass vacuously", activeFill.hex(), err)
+	// The vendored btn.active fill is a color-mix() whose second colour is a
+	// light-dark() pair, which the resolver refuses rather than measures; a
+	// refusal fails TestRowsPerPageActiveFill as surely as a translucent fill
+	// does, so the gate would pass vacuously only on an opaque fill resolved
+	// without the override.
+	if activeFill, err := v.colour(sizeLink(true, ""), "", "background-color"); err == nil && activeFill.a == 1 {
+		t.Errorf("without the override the active rows-per-page fill is the opaque %s; the fill gate would pass vacuously", activeFill.hex())
 	}
 	var card focusTarget
 	for _, target := range focusTargets() {
@@ -501,8 +523,10 @@ func TestCascadeResolver_ConvertsFaithfullyAndRefusesWhatItCannotResolve(t *test
 // TestFilterBarLayoutRules is the stylesheet half of Acceptance Criterion 243,
 // resolved by the cascade the contrast gates use: at every viewport width the
 // bar's three small selects, its small search input, and its Apply button resolve
-// to one line height, and the search input to the vendored small height, so the
-// controls render at one height (the browser measurement confirms it); the sprint
+// to one line height, and the search input's height to the vendored small-control
+// height token, which holds it at the selects' 32px below 576px, where the
+// vendored 16px mobile font would otherwise make it 38px; so the controls render
+// at one height (the browser measurement confirms it); the sprint
 // select is capped at 16rem from 576px up and uncapped below; and no rule of the
 // project stylesheet that matches the list card's card-actions container
 // declares a margin, so the container keeps Tabler's own position.
@@ -540,9 +564,14 @@ func TestFilterBarLayoutRules(t *testing.T) {
 					width, name, value, heights["Apply button"])
 			}
 		}
-		if win, ok, err := c.winning(controls["search input"], "", "height"); err != nil || !ok ||
-			win.value != "calc(1rem + .625rem + calc(var(--tblr-border-width) * 2))" {
-			t.Errorf("at %.0fpx the search input's height is %+v (%v), want the vendored small height", width, win, err)
+		// The height pin: a missing rule leaves the search input with no
+		// declared height, and a wrong value names anything but the token.
+		win, ok, err := c.winning(controls["search input"], "", "height")
+		if err != nil || !ok || win.value != "var(--tblr-btn-input-sm-min-height)" {
+			t.Errorf("at %.0fpx the search input's height is %+v (set=%v, %v), want var(--tblr-btn-input-sm-min-height)",
+				width, win, ok, err)
+		} else if _, err := c.substitute(controls["search input"], win.value, 0); err != nil {
+			t.Errorf("at %.0fpx the search input's height token does not resolve: %v", width, err)
 		}
 
 		capped, ok, err := c.winning(controls["sprint select"], "", "max-width")

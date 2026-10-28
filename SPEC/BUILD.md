@@ -21,7 +21,7 @@ three:
    older than the minimum any of its dependencies declares. GoGraph is the dependency this
    floor is recorded for; see `GRAPH.md § Dependency Maturity Risk` for the
    dependency itself.
-2. **Security floor, set by a reachable-advisory requirement.** Thirteen Go
+2. **Security floor, set by a reachable-advisory requirement.** Fourteen Go
    standard library advisories are reachable from Groadmap's own code — the vulnerable
    functions are called, not merely present in the module graph. The `go`
    directive MUST name a stable release that carries the fix for every one of
@@ -36,7 +36,7 @@ three:
    is chosen and not inherited, and Rule 5 requires it to be treated as a change to
    both.
 
-The thirteen advisories item 2 names:
+The fourteen advisories item 2 names:
 
 | Advisory | Package | Defect |
 |----------|---------|--------|
@@ -53,13 +53,14 @@ The thirteen advisories item 2 names:
 | GO-2026-6612 | `net/http` | Double flow-control refund on HTTP/2 server streams |
 | GO-2026-6613 | `net/http` | HTTP/1 server connection desynchronisation after a 2xx `CONNECT` response |
 | GO-2026-6617 | `net/http` | HTTP/2 server crash from an HPACK encoder race |
+| GO-2026-6809 | `crypto/x509` | Compromised intermediate certificates not distrusted by `Certificate.Verify` |
 
 `html/template` and `net/http` sit on the `rmp web` request path, which serves
-HTML over HTTP (see `WEB.md`). All thirteen are toolchain
+HTML over HTTP (see `WEB.md`). All fourteen are toolchain
 vulnerabilities rather than module vulnerabilities: the toolchain version alone
-remediates them, and no dependency change can. The last nine are fixed in the
+remediates them, and no dependency change can. The last one is fixed in the
 patch release that follows the one the floor previously named, on the same minor
-line, so recording them raises the patch component of the floor and nothing else.
+line, so recording it raises the patch component of the floor and nothing else.
 
 **Raising the patch floor changes no Unicode data.** `Unicode Data Rules`, Rule
 5, makes a change of toolchain a change to the tasks page's search and to the key

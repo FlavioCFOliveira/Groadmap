@@ -438,7 +438,8 @@ func (s *Server) Stop() error {
 		return nil
 	case <-time.After(StopDeadline):
 		_ = s.cmd.Process.Kill() //nolint:errcheck // already failing; the kill is to stop the run leaking a process
-		<-done
+		// The reaped exit status is the kill's own; errChildLingered is the failure reported.
+		_ = <-done
 		s.waited = true
 		return fmt.Errorf("%w: it was killed after %s\nstderr:\n%s",
 			errChildLingered, StopDeadline, s.Diagnostics())

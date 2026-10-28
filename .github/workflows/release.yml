@@ -40,7 +40,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
-          version: v2.14.0
+          version: v2.15.0
           args: --timeout=5m
 
       - name: Run tests
@@ -52,7 +52,7 @@ jobs:
       # in CI and in a local `make check`. A failure to install fails the job:
       # the gate is never skipped.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.1-0.20261012130337-71577268350e
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.30.0
 
       - name: Run gosec
         run: gosec -exclude-dir=.claude/worktrees ./...
@@ -77,9 +77,9 @@ jobs:
           go-version-file: go.mod
 
       - name: Set up Python
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Build rmp
         run: go build -o ./bin/rmp ./cmd/rmp

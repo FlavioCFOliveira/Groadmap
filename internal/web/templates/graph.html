@@ -18,6 +18,7 @@
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
     <div class="page-wrapper">
+      <main class="d-flex flex-column flex-fill">
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -52,7 +53,7 @@
           </div>
         </div>
       </div>
-      <main class="page-body">
+      <div class="page-body">
         <div class="container-xl">
           <form id="query-bar" class="graph-query-bar card mb-3" novalidate>
             <div class="card-body">
@@ -167,6 +168,7 @@
             </div>
           </div>
         </div>
+      </div>
       </main>
     </div>
   </div>

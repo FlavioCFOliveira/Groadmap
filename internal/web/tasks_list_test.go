@@ -476,7 +476,7 @@ func TestTaskList_IsOneListCard(t *testing.T) {
 	if got := strings.Count(main, `<div class="card">`); got != 1 {
 		t.Errorf("the page renders %d list cards, want exactly 1", got)
 	}
-	if got := strings.Count(main, `<div class="table-responsive">`); got != 1 {
+	if got := strings.Count(main, `<div class="table-responsive" tabindex="0" role="region" aria-labelledby="task-list-title">`); got != 1 {
 		t.Errorf("the page renders %d table-responsive containers, want exactly 1", got)
 	}
 	if got := strings.Count(main, "<table"); got != 1 {
@@ -537,7 +537,7 @@ func TestTaskList_CardFollowsTheTablerExamples(t *testing.T) {
 	want := []string{
 		`<div class="card">`,
 		`<div class="card-header flex-wrap gap-2">`,
-		`<div>`, `<h2 class="card-title">Task list</h2>`, `</div>`,
+		`<div>`, `<h2 id="task-list-title" class="card-title">Task list</h2>`, `</div>`,
 		`<div class="card-actions">`, `<form class="row g-2 align-items-end justify-content-end" method="get" action="/roadmaps/` + f.name + `/tasks">`,
 	}
 	cursor := 0
@@ -551,7 +551,7 @@ func TestTaskList_CardFollowsTheTablerExamples(t *testing.T) {
 		}
 		cursor += at + len(piece)
 	}
-	header := card[:mustIndex(t, card, `<div class="table-responsive">`)]
+	header := card[:mustIndex(t, card, `<div class="table-responsive" tabindex="0" role="region" aria-labelledby="task-list-title">`)]
 	if strings.Contains(header, "card-subtitle") {
 		t.Errorf("the card header carries a card-subtitle; the footer's range text states the count")
 	}
@@ -563,8 +563,9 @@ func TestTaskList_CardFollowsTheTablerExamples(t *testing.T) {
 	}
 
 	// The table and its headings.
-	table := card[mustIndex(t, card, `<div class="table-responsive">`):]
-	if !strings.HasPrefix(strings.TrimSpace(table[len(`<div class="table-responsive">`):]), `<table class="table table-vcenter card-table">`) {
+	const container = `<div class="table-responsive" tabindex="0" role="region" aria-labelledby="task-list-title">`
+	table := card[mustIndex(t, card, container):]
+	if !strings.HasPrefix(strings.TrimSpace(table[len(container):]), `<table class="table table-vcenter card-table">`) {
 		t.Errorf("the table-responsive container does not hold the table directly")
 	}
 	if strings.Contains(table, "table-selectable") {
@@ -588,8 +589,9 @@ func TestTaskList_CardFollowsTheTablerExamples(t *testing.T) {
 		`<div class="col-auto">\s*<p class="m-0 text-secondary">Showing.*?</p>\s*</div>\s*` +
 		`<div class="col-auto">\s*<span class="text-secondary me-2" id="task-list-size-label">Rows per page</span>\s*<div class="btn-group" role="group" aria-labelledby="task-list-size-label">.*?</div>\s*</div>\s*` +
 		`<div class="col-auto ms-auto">\s*<nav aria-label="Task list pages">.*?</nav>\s*</div>\s*</div>\s*</div>` +
-		// The footer closes the card, and the card closes the page's container.
-		`\s*</div>\s*</div>\s*$`)
+		// The footer closes the card, the card closes the page's container, and
+		// the container closes the page body.
+		`\s*</div>\s*</div>\s*</div>\s*$`)
 	if !reFooter.MatchString(strings.TrimSpace(footer)) {
 		t.Errorf("the card footer is not a row g-2 align-items-center of exactly three col-auto columns "+
 			"(range text, rows-per-page selector, pagination bar with ms-auto), closing the card:\n%s", footer)
@@ -656,18 +658,24 @@ func TestTaskList_RowContent(t *testing.T) {
 		}
 	}
 
-	// No <tr> carries an href, a role, a tabindex, or an event handler, and nothing
-	// carries role="button" or a tabindex (Acceptance Criterion 93).
+	// No <tr> carries an href, a role, a tabindex, or an event handler, nothing
+	// carries role="button", and the one tabindex is the list's table-responsive
+	// container's, which makes the scrollable table a focusable region rather than
+	// standing in for a row (Acceptance Criteria 93 and 295).
 	reTR := regexp.MustCompile(`<tr\b([^>]*)>`)
 	for _, m := range reTR.FindAllStringSubmatch(body, -1) {
 		if strings.TrimSpace(m[1]) != "" {
 			t.Errorf("a table row carries attributes %q; a row is not a link", m[1])
 		}
 	}
-	for _, forbidden := range []string{`role="button"`, "tabindex=", " onclick="} {
+	for _, forbidden := range []string{`role="button"`, " onclick="} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("the page carries %q", forbidden)
 		}
+	}
+	if got, want := strings.Count(body, "tabindex="), strings.Count(body, `<div class="table-responsive" tabindex="0" role="region" aria-labelledby="task-list-title">`); got != 1 || want != 1 {
+		t.Errorf("the page carries %d tabindex attributes and %d list containers; want exactly one of each, the "+
+			"tabindex being the container's", got, want)
 	}
 
 	// Following a row's link serves that task's page.
@@ -702,7 +710,7 @@ func TestTaskList_TitleColumnIsNotSqueezed(t *testing.T) {
 	_ = database.Close()
 
 	body := servePage(t, buildMux(), listPath(f.name, nil))
-	table := body[mustIndex(t, body, `<div class="table-responsive">`):mustIndex(t, body, "</table>")]
+	table := body[mustIndex(t, body, `<div class="table-responsive" tabindex="0" role="region" aria-labelledby="task-list-title">`):mustIndex(t, body, "</table>")]
 	if strings.Contains(table, "text-break") {
 		t.Errorf("a cell of the table carries text-break, which lets the title column shrink to a few characters")
 	}
