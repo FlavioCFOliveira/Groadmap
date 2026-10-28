@@ -5,6 +5,130 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-10-28
+
+### Added
+
+- **`rmp skills install` installs the two agent skills `rmp` ships**
+  (`2f6a484`, `10f14a3`, `38e5d02`; `SPEC/SKILLS.md § Skills Install Command`,
+  `SPEC/COMMANDS.md § Skills Management`). It downloads the archive of the
+  repository's `main` branch from `github.com` over HTTPS, extracts only
+  `skills/roadmap-manager` and `skills/knowledge-authority` into a private
+  staging directory, validates them, and replaces both skills entirely in the
+  first skills directory that accepts them: global
+  (`/etc/claude-code/.claude/skills` on Linux), then user
+  (`$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`), then project
+  (`.claude/skills` in the working directory). Every other skill is left
+  untouched. The replacement is rename-based with rollback, so the installed
+  skills are never left partially replaced.
+  - It is non-interactive and has no confirmation flag: `--yes` and `--force`
+    are unknown flags, refused with exit `2` before anything is downloaded.
+  - It operates on no roadmap and does not accept `-r`.
+  - On success it writes one JSON object, `{"scope", "directory", "skills",
+    "source", "skipped"}`; each tier tried and not used is a warning on stderr
+    and an element of `skipped`.
+  - `SIGINT` or `SIGTERM` undoes the swap in progress, removes the temporary
+    directories and exits `130` with nothing on stdout.
+  - GitHub publishes no checksum for a branch archive, so none is verified; the
+    integrity of what is installed rests on the authenticated HTTPS connection
+    and the structural validation of the archive.
+- **Each shipped skill states when to run the command** (`10f14a3`): after `rmp`
+  is installed or upgraded, and when its declared `rmp-version` differs from
+  `rmp --version`. The AI Agent Contract gains the `skills` command and the
+  pitfall `skills_install_confirmation_flag`; nothing else in it changes.
+
+### Fixed
+
+- **A graph store killed twice, the first time with a torn log tail, opens
+  again** (`57714ee`, rmp task #631). Each open restarted the write-ahead log's
+  transaction sequence at `1`, so the log could hold two transactions under one
+  number, and recovery then refused the store
+  (`op names a node key the commit annex does not bind`). The sequence now
+  resumes from the recovered maximum on every open. Covered by
+  `TestServe_ResumesTheTransactionSequenceAcrossATornReopen`.
+- **A store whose recovery did not replay the log cleanly is refused instead of
+  served** (`57714ee`, #632). Serving it could acknowledge writes that a restart
+  then lost. `rmp graph serve` exits `1` under `utils.ErrGraphStore` with the
+  new line
+  `Error: graph store error: graph store recovery was not clean; the write-ahead log was left unchanged and the store was not served: <detail>`.
+  Covered by `TestServe_RefusesAStoreWhoseRecoveryWasNotClean` and `tests/test_55`.
+- **A fail-stopped graph engine shuts the server down** (`57714ee`, #635). The
+  engine fail-stops when a commit-time index update fails, and then refuses
+  every statement. The server now recognises it, performs no further fold or
+  shutdown checkpoint, drains, and exits `1` under `utils.ErrGraphServer` with
+  the new line
+  `Error: graph server error: the graph engine fail-stopped and refuses every statement; the server has shut down. Restart rmp graph serve to rebuild the indexes from the store.`
+  Every acknowledged commit stays durable. Covered by
+  `TestServe_AFailStoppedEngineShutsTheServerDownWithoutAFold`.
+- **The graph store closes the engine before releasing its lock** (`57714ee`,
+  #636), so no GoGraph goroutine outlives the server. Covered by
+  `TestServe_LeavesNoGoGraphGoroutineBehind`.
+- **GoGraph's recovery warnings use the server's log format** (`9c1462f`, #640).
+  The `WARN` record the engine's recovery writes before the store opens was
+  rendered with the standard `log` package's local-time prefix; it is now a
+  server record with a UTC `Z` timestamp, as
+  `SPEC/GRAPH.md § Server Diagnostics on Stderr` requires. Covered by
+  `TestServe_UncleanRecoveryWritesOnlyServerRecordsToStderr`, under a non-UTC
+  `TZ`.
+
+### Internal
+
+These change no output of the binary.
+
+- **README and `DOCS/commands/skills.md`** document `rmp skills install` and
+  when to run it (`38e5d02`).
+- **The specification documents three limitations of GoGraph `v0.17.2`**
+  (`57714ee`, #633, #634, #638; `SPEC/GRAPH.md`): see **Known Issues**.
+- **The shipped `knowledge-authority` skill is re-measured on GoGraph `v0.17.2`**
+  (`69090e1`, #639): the socket path limits are corrected to the measured values,
+  and the census and integrity queries carry a caution about unlabelled reads
+  during a rollback. The release cut aligns both skills with `1.20.0`.
+- **New tests**: 33 Go tests of `internal/skillsinstall` against a local
+  `httptest` server, with no network and no real user directory (`10f14a3`); the
+  E2E suite `test_79` (`10f14a3`); the recovery and fail-stop regression tests
+  above (`57714ee`, `9c1462f`). `tests/test_55`, `test_60` and `test_70` follow
+  the new error lines and the new command.
+- **The engine-constructor gate recognises the recovery handoff**, and the test
+  helper `WALFrame` exposes each record's transaction sequence (`57714ee`).
+
+### Known Issues
+
+- **Node `id()` values jump across a restart of `rmp graph serve`** and are not
+  dense (#634; `SPEC/GRAPH.md`). Measured with both `1.19.0` and `1.20.0`: a node
+  created before a restart received `id()` `140`, the next one after it `165`.
+  Identity is the `key` property, never `id()`.
+- **While a write cut by the statement budget rolls back, an unlabelled read can
+  observe uncommitted state** (#633). Reads anchored on a label or filtered on a
+  property value stay correct, and the exposure ends with the rollback.
+- **A write of a `UNIQUE` value that a concurrent transaction is freeing can be
+  refused** with `Neo.ClientError.Schema.ConstraintValidationFailed`, and the
+  shipped clients do not retry it (#638); the same write run again succeeds.
+- **`rmp audit list --help` still says `TASK_STATUS_BACKLOG` carries `null` "from
+  'task stat'"**, which `task stat` cannot produce since `1.18.0`.
+- **`rmp backlog --help` and `rmp backlog list --help` still say no 0-9
+  validation is enforced on `--priority`.** The binary refuses `-p 12` with exit
+  `6`.
+- **`1.20.0` does not re-check sprint membership on open**, as in `1.19.0`.
+- **`modernc.org/libc` is a later release than `modernc.org/sqlite` requires**
+  (`v1.79.1` against the `v1.79.0` that `modernc.org/sqlite v1.61.0` declares).
+  The project accepts the risk deliberately (`SPEC/BUILD.md § SQLite Driver
+  Rules`).
+- **The web query bar's `EXPLAIN`/`PROFILE` prefix check runs outside the
+  5-second budget**, because the engine's parser takes no context.
+
+### Notes
+
+- **`1.20.0` is `MINOR` under a strict reading of Semantic Versioning 2.0.0**,
+  and matches the owner's decision of 2026-10-28. The release adds a command and
+  fixes defects. Apart from `tool.binary_version`, the AI Agent Contract only
+  gains entries. The two new `rmp graph serve` exit-`1` lines replace serving a
+  store or an engine that could no longer guarantee durability or answer any
+  statement; the `1.19.0` specification promised neither behaviour, so they are
+  classified as fixes.
+- **No SQLite schema change.** Databases stay at schema `1.17.0`.
+- **No dependency change.** `go.mod` and `go.sum` are unchanged since `1.19.0`;
+  the graph engine stays at GoGraph `v0.17.2`.
+
 ## [1.19.0] - 2026-10-28
 
 ### Changed - BREAKING
@@ -4500,6 +4624,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.20.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.3...v1.18.0
 [1.17.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.2...v1.17.3

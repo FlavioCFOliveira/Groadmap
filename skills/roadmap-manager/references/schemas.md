@@ -1,4 +1,4 @@
-# JSON shapes and field semantics (binary v1.19.0)
+# JSON shapes and field semantics (binary v1.20.0)
 
 Load this file when inspecting an unfamiliar field in `rmp` output, building a custom view, or verifying exact field names and types. Field lists below were verified against a live v1.18.0 binary.
 

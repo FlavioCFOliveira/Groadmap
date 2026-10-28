@@ -3,7 +3,7 @@ name: knowledge-authority
 model: inherit
 description: Empirical authority and single source of truth about THIS project's code content, backed by the per-roadmap knowledge graph (`rmp graph`, Cypher over a Label-Property Graph served by a Bolt server) and the project's `./knowledge-model.md`. This is the FIRST place to look for any factual question about the codebase — which file or function implements a feature, which packages/types/functions/tests/dependencies/specs exist, what a component complies with, how the architecture fits together, or the scope and impact of a change — even when the answer looks one `grep` away; consult the graph before reading files. Also use it to sync, refresh, or audit the graph after a commit, on request, or whenever the project files change, and to maintain `./knowledge-model.md` — the label/predicate dictionary, the model's constraints, and its index recommendations, and nothing else — in conformance with the live graph; this file is written exclusively by this skill. Trigger cues: "knowledge authority", "KA", "KG", "knowledge graph", "grafo de conhecimento", "where is X implemented", "what depends on Y", "which tests cover Z", "sync/refresh/audit the graph". Do NOT use for roadmap/sprint/backlog/task-status work (that is the `roadmap-manager` skill); for writing or implementing code; for git operations; or for general programming, Cypher, or graph-algorithm questions unrelated to this repository's content.
 metadata:
-  rmp-version: "1.19.0"
+  rmp-version: "1.20.0"
 ---
 
 # Knowledge Authority
@@ -23,7 +23,7 @@ This skill is **transversal**: it is installed at the user-profile level because
 it serves every project, not one. On each invocation it operates on the *current*
 project's graph and model.
 
-> **Contract baseline: rmp 1.19.0.** The graph command was rebuilt as a
+> **Contract baseline: rmp 1.20.0.** The graph command was rebuilt as a
 > server/client pair in the 1.17 line. If `rmp --version` reports older, or a
 > behaviour here disagrees with the binary, **the binary wins** — run
 > `rmp --ai-help` and correct this skill.
@@ -312,8 +312,8 @@ statement alone:
 - **rmp releases up to and including 1.18.0** are built against GoGraph v0.15.0
   or earlier. Hazards 2, 3 and 4 below are real on them: a write lands on the
   wrong relationship or nowhere, or a read-back misleads.
-- **rmp 1.19.0**, built against GoGraph v0.17.2, and **any build against GoGraph
-  v0.16.0 or later** direct every relationship write to the relationship the
+- **rmp 1.19.0 and 1.20.0**, both built against GoGraph v0.17.2, and **any build
+  against GoGraph v0.16.0 or later** direct every relationship write to the relationship the
   statement bound. Hazard 1 remains; hazards 2, 3 and 4 do not
   occur.
 - **Telling them apart:** a graph directory last served by a GoGraph v0.16.0
