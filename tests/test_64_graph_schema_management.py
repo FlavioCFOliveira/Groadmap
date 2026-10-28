@@ -68,7 +68,9 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase, assert_graph_write_shape
+from tests.base_test import (
+    GroadmapTestBase, assert_graph_write_shape, write_ahead_log_fingerprint,
+)
 
 
 EXIT_OK = 0
@@ -198,14 +200,17 @@ class SchemaTestBase:
     def graph_dir(self):
         return self.test.home_dir / ".roadmaps" / self.roadmap / "graph"
 
-    def wal_bytes(self):
-        """The size of the store's write-ahead log, in bytes.
+    def log_fingerprint(self):
+        """Every file of the store's write-ahead log, each by content hash.
 
-        A checkpoint folds the log's events into the snapshot and truncates the
-        log, so this figure falling to zero is the fold, observed from outside
-        the engine rather than inferred from a statement's answer.
+        A change in it is a record appended to the log, observed from outside
+        the engine rather than inferred from a statement's answer. The fold is
+        observed through the snapshot it writes instead: a fold discards only
+        whole segments, so a log shorter than one segment keeps its one segment
+        whatever the fold covered (SPEC/GRAPH.md § Synchronous Checkpoint on
+        Write, step 3).
         """
-        return os.path.getsize(self.graph_dir() / "wal")
+        return write_ahead_log_fingerprint(self.graph_dir())
 
     def snapshot_files(self):
         """Every file under the store's snapshot directory, relative to it.
@@ -329,26 +334,24 @@ class TestGraphSchemaStatements(SchemaTestBase):
 
         "The definition survives a checkpoint" is only worth asserting if a
         checkpoint really happened, and nothing in a statement's answer says
-        whether one did. The three files on disk do: before the stop the
-        write-ahead log holds the events and there is no snapshot at all; after
-        it the snapshot exists and the log is empty. Reading the schema back
+        whether one did. The files on disk do: before the stop the write-ahead log
+        has gained the events and there is no snapshot at all; after it the
+        snapshot exists. Reading the schema back
         through a new server is then an assertion about a snapshot, which is
         exactly the artefact the destroyed-schema defect wrote without it.
         """
+        empty_log = self.log_fingerprint()
         self.ok("CREATE INDEX spec_key FOR (n:Spec) ON (n.key)")
         self.ok("CREATE CONSTRAINT spec_title_nn FOR (n:Spec) REQUIRE n.title IS NOT NULL")
 
-        assert self.wal_bytes() > 0, (
+        assert self.log_fingerprint() != empty_log, (
             "AC33: the definitions must be living in the write-ahead log before the "
-            "checkpoint; an empty log here would mean the fold had already happened "
-            "and this case could not observe it")
+            "checkpoint; a log they did not change would mean this case could not "
+            "observe the fold")
         before_snapshot = self.snapshot_files()
 
         self.restart_server()
 
-        assert self.wal_bytes() == 0, (
-            f"AC33: the shutdown checkpoint must truncate the write-ahead log it folded; "
-            f"it still holds {self.wal_bytes()} bytes")
         after_snapshot = self.snapshot_files()
         assert after_snapshot and after_snapshot != before_snapshot, (
             f"AC33: the shutdown checkpoint must have written the snapshot the schema now "

@@ -1,63 +1,29 @@
-// Package graphstore — the engine's two field-length refusals, classified.
+// Package graphstore — the snapshot format's field-length refusal, classified.
 //
 // A statement's labels, property keys and property values go into TWO durable
-// formats, and each bounds how long a field it will carry. The write-ahead log
-// bounds one at commit, by the capacity of the length prefix its frame reserves;
-// the snapshot bounds one at checkpoint, by what its own reader is required to
-// accept. The bounds are the engine's, they are set independently, and neither is
-// uniformly the stricter (SPEC/GRAPH.md § Field Length Limits).
+// formats, and each bounds how long a field it will carry: the write-ahead log at
+// commit, and the snapshot at checkpoint. The bounds are the engine's, they are
+// set independently, and neither is uniformly the stricter (SPEC/GRAPH.md § Field
+// Length Limits).
 //
-// This file holds the two predicates that say WHICH format refused, and the one
-// wording of the consequence a refused checkpoint carries. It holds no wording
-// for a refused COMMIT: that one reaches the caller as a published error line,
-// and the line belongs to the surface that publishes it
-// (SPEC/COMMANDS.md § Graph Management).
+// A refusal at commit is the statement's, and it reaches the caller across the
+// server's Bolt connection under a failure code of its own, which the shared Bolt
+// client recognises (rules 3 and 13); nothing in this package sees it. A refusal
+// at checkpoint is this package's to recognise: graphstore is what the server's
+// fold passes through, so "the snapshot format refused a committed field" is a
+// question about the seam it owns. This file holds the predicate that answers it,
+// and the one wording of the consequence.
 //
-// # Why the predicates live here rather than at their call sites
-//
-// Because the question they answer is this package's. graphstore is what opens
-// the write-ahead log and what writes the snapshot, so "which of the two durable
-// formats refused this field" is a question about the seam it owns, and an
-// answer written at a call site would be a second opinion about a file this
-// package is the one to have opened.
-//
-// It also stops the one mistake the specification names twice: recognising the
-// condition by matching the engine's message text. The engine's wording is the
-// engine's to reword, a match on it fails silently at the next version bump, and
-// the whole point of a sentinel is that it survives the wording
-// (SPEC/GRAPH.md § Field Length Limits, rule 3). A predicate named for the
-// condition, with the errors.Is inside it, is what a caller reaches for instead.
+// The predicate matches the engine's sentinel and never the engine's message
+// text: the wording is the engine's to reword, and a match on it fails silently at
+// the next version bump (rule 3).
 package graphstore
 
 import (
 	"errors"
 
 	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
-	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 )
-
-// CommitRefusedFieldTooLong reports whether err is the write-ahead log refusing a
-// field the statement writes as longer than its length prefix can express.
-//
-// It is the COMMIT half of SPEC/GRAPH.md § Field Length Limits. The engine wraps
-// store/txn.ErrFieldTooLong around every such refusal and formats it with the
-// field kind and both figures; nothing was written when it fires — the refused
-// transaction consumes a sequence number and applies nothing, so the graph holds
-// no part of the statement, not even the elements it created before the over-long
-// field (rule 5).
-//
-// Two neighbouring refusals are deliberately OUTSIDE what this reports, and the
-// specification requires that they stay outside (rule 10). A node key over the
-// log's unsigned 32-bit prefix is refused by the engine's node-key codec, which
-// wraps no sentinel at all, and an assembled frame over the log's frame ceiling —
-// which one list property of individually-legal elements can reach — is refused
-// under store/wal.ErrFrameTooLarge. Both are length refusals in spirit; neither
-// is this class, because the class is the sentinel a caller matches and not the
-// shape of the complaint. Matching the sentinel and nothing else is what keeps
-// them out, which is why this function has no second clause.
-func CommitRefusedFieldTooLong(err error) bool {
-	return errors.Is(err, txn.ErrFieldTooLong)
-}
 
 // CheckpointRefusedFieldTooLong reports whether err is the snapshot format
 // refusing a field the capture must write because its own reader would have to
@@ -70,11 +36,10 @@ func CommitRefusedFieldTooLong(err error) bool {
 // refuses for the same reason, until a statement removes or shortens the field
 // (rule 6).
 //
-// The sentinel is the snapshot package's, and it is NOT the same value
-// CommitRefusedFieldTooLong matches even though the two share a name in their own
-// packages. Confusing them would report a commit-time refusal as an unhealable
-// checkpoint condition, and an unhealable checkpoint condition as a statement to
-// re-run, so each predicate matches exactly one.
+// The sentinel is the snapshot package's, and it is NOT the write-ahead log's
+// field-length sentinel even though the two share a name in their own packages.
+// Confusing them would report a commit-time refusal as an unhealable checkpoint
+// condition, so this predicate matches the snapshot's and nothing else.
 func CheckpointRefusedFieldTooLong(err error) bool {
 	return errors.Is(err, snapshot.ErrFieldTooLong)
 }

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,9 +37,10 @@ import (
 // Every fake records each invocation that is not a version query, so "runs the
 // pinned copy" and "does not run the tool" are read from what actually ran. The
 // fake linter answers `version --short` as golangci-lint does. The fake scanner
-// is a Go program built from a repository tagged with the version it must
-// report, so `go version -m` reads that version from the `mod` line of its build
-// information, as it does for a gosec built by `go install`; it answers nothing
+// is a Go program installed by `go install <module>@<version>` from a module
+// proxy on disk, at the version it must report, so `go version -m` reads that
+// version from the `mod` line of its build information exactly as it does for a
+// gosec installed the same way; it answers nothing
 // to `--version`, so a gate that asked it would find no version. The expected
 // pins, variable names and install commands are read from the Makefile and from
 // SPEC/BUILD.md, never restated here.
@@ -628,11 +631,16 @@ func main() {
 }
 `
 
-// buildFakeScanners builds the fake scanner twice from a git repository: once
-// with HEAD tagged pin, exiting 0, and once with HEAD tagged other, exiting 1.
-// Go stamps a clean checkout's tag into the main module's version, which is the
-// field `go version -m` prints on the `mod` line. The module path carries the
-// major-version suffix the tags require.
+// buildFakeScanners installs the fake scanner twice with `go install
+// <module>@<version>`, the way a real gosec is installed: once at pin, exiting 0,
+// and once at other, exiting 1. Each version is served by a module proxy laid out
+// on disk (the GOPROXY protocol's file:// form), so the version the go command
+// records as the main module's — the field `go version -m` prints on the `mod`
+// line — is exactly the one requested. A proxy serves any version string the
+// go command accepts, a pseudo-version as readily as a release, which a git tag
+// could not: the go command never stamps a pseudo-version-shaped tag into a
+// build, but derives a pseudo-version of its own from the commit. The module
+// path carries the major-version suffix the versions require.
 func buildFakeScanners(t *testing.T, dir, pin, other string) [2]string {
 	t.Helper()
 
@@ -644,59 +652,87 @@ func buildFakeScanners(t *testing.T, dir, pin, other string) [2]string {
 	if n, _ := strconv.Atoi(major[1]); n >= 2 {
 		module += "/v" + major[1]
 	}
+	goMod := "module " + module + "\n\ngo 1.24\n"
 
-	src := filepath.Join(dir, "fakegosec")
-	if err := os.MkdirAll(src, 0o700); err != nil {
+	proxy := filepath.Join(dir, "goproxy")
+	versionDir := filepath.Join(proxy, filepath.FromSlash(module), "@v")
+	if err := os.MkdirAll(versionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	files := map[string]string{
-		"go.mod":  "module " + module + "\n\ngo 1.24\n",
-		"main.go": fakeScannerSource,
+	releases := []struct{ version, status string }{{pin, "0"}, {other, "1"}}
+	list := make([]string, 0, len(releases))
+	for _, release := range releases {
+		writeProxyVersion(t, versionDir, module, release.version, goMod)
+		list = append(list, release.version)
 	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(src, name), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(versionDir, "list"), []byte(strings.Join(list, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A file:// URL names an absolute path after its third slash, which a
+	// Windows path (C:/...) does not begin with.
+	proxyURL := "file:///" + strings.TrimPrefix(filepath.ToSlash(proxy), "/")
+	var built [2]string
+	for i, release := range releases {
+		gobin := filepath.Join(dir, "gosec-install-"+strconv.Itoa(i))
+		cmd := exec.Command("go", "install", "-ldflags=-X main.exitStatus="+release.status,
+			module+"@"+release.version)
+		cmd.Dir = dir
+		// The module cache is written read-only by default, which t.TempDir
+		// could not remove; -modcacherw keeps it removable.
+		cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off", "GOFLAGS=-modcacherw",
+			"GOPROXY="+proxyURL, "GOSUMDB=off", "GONOSUMDB=", "GOPRIVATE=", "GONOPROXY=",
+			"GOMODCACHE="+filepath.Join(dir, "gomodcache"), "GOBIN="+gobin)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go install %s@%s: %v\n%s", module, release.version, err, out)
+		}
+		built[i] = filepath.Join(dir, "gosec-"+release.version)
+		if err := os.Rename(filepath.Join(gobin, "fakegosec"), built[i]); err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
-		"GOTOOLCHAIN=local", "GOWORK=off", "GOFLAGS=-buildvcs=true")
-	run := func(name string, args ...string) {
-		t.Helper()
-		cmd := exec.Command(name, args...)
-		cmd.Dir = src
-		cmd.Env = env
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
-		}
-	}
-	git := func(args ...string) {
-		t.Helper()
-		run("git", append([]string{"-c", "user.name=Fake Scanner", "-c", "user.email=fake@example.com",
-			"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
-	}
-
-	var built [2]string
-	git("init", "-q", ".")
-	for i, release := range []struct {
-		tag, status string
-	}{{pin, "0"}, {other, "1"}} {
-		if i > 0 {
-			if err := os.WriteFile(filepath.Join(src, "release.txt"), []byte(release.tag+"\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		git("add", "-A")
-		git("commit", "-q", "-m", "release "+release.tag)
-		git("tag", release.tag)
-		built[i] = filepath.Join(dir, "gosec-"+release.tag)
-		run("go", "build", "-ldflags=-X main.exitStatus="+release.status, "-o", built[i], ".")
 
 		out, err := exec.Command("go", "version", "-m", built[i]).Output()
-		if err != nil || !regexp.MustCompile(`(?m)^\s+mod\s+\S+\s+`+regexp.QuoteMeta(release.tag)+`\s`).Match(out) {
-			t.Fatalf("the fake scanner built at tag %s does not report that version on its mod line (%v):\n%s",
-				release.tag, err, out)
+		if err != nil || !regexp.MustCompile(`(?m)^\s+mod\s+\S+\s+`+regexp.QuoteMeta(release.version)+`\s`).Match(out) {
+			t.Fatalf("the fake scanner installed at %s does not report that version on its mod line (%v):\n%s",
+				release.version, err, out)
 		}
 	}
 	return built
+}
+
+// writeProxyVersion writes the three files a module proxy serves for one
+// version of module under versionDir: the .info, the .mod and the .zip, the zip
+// holding the module's go.mod and the fake scanner's source under the
+// <module>@<version>/ prefix the module zip format requires.
+func writeProxyVersion(t *testing.T, versionDir, module, version, goMod string) {
+	t.Helper()
+
+	info := fmt.Sprintf(`{"Version":%q,"Time":"2026-01-01T00:00:00Z"}`, version)
+	if err := os.WriteFile(filepath.Join(versionDir, version+".info"), []byte(info), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versionDir, version+".mod"), []byte(goMod), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, file := range []struct{ name, content string }{
+		{"go.mod", goMod},
+		{"main.go", fakeScannerSource},
+	} {
+		w, err := zw.Create(module + "@" + version + "/" + file.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(w, file.content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(versionDir, version+".zip"), buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }

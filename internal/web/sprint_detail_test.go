@@ -45,9 +45,10 @@ func TestSprintPage_RendersNoStatusSummaryLine(t *testing.T) {
 		t.Errorf("the sprint page carries summary-line text %q", m)
 	}
 
-	// The presentation opens with the Sprint details card: it is the first thing
-	// the page body's container holds.
-	const container = `<main class="page-body">`
+	// The presentation opens with the sprint summary row, whose first column
+	// holds the Sprint details card: it is the first thing the page body's
+	// container holds (Acceptance Criterion 287).
+	const container = `<div class="page-body">`
 	start := strings.Index(body, container)
 	if start < 0 {
 		t.Fatalf("the sprint page carries no %s", container)
@@ -59,9 +60,11 @@ func TestSprintPage_RendersNoStatusSummaryLine(t *testing.T) {
 		t.Fatalf("the page body holds no %s", opening)
 	}
 	first := strings.TrimSpace(rest[at+len(opening):])
-	const detailsCard = `<div class="card mb-3">
-            <div class="card-header">
-              <h3 class="card-title">Sprint details</h3>`
+	const detailsCard = `<div class="row row-deck row-cards mb-3">
+            <div class="col-12 col-lg">
+              <div class="card">
+                <div class="card-header">
+                  <h3 class="card-title">Sprint details</h3>`
 	if !strings.HasPrefix(first, detailsCard) {
 		t.Errorf("the sprint presentation does not open with the Sprint details card; it opens with %q",
 			first[:min(160, len(first))])
@@ -87,7 +90,7 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	f := seedSprintFixture(t, "web-shared-detail")
 	mux := buildMux()
 
-	sprintsPage := servePage(t, mux, "/roadmaps/"+f.name)
+	sprintsPage := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 	sprintPage := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
 
 	// Slice the Actual pane out of the sprints page so the absence assertions
@@ -170,7 +173,7 @@ func TestSprintsPage_SharedCardAcrossAllTabs(t *testing.T) {
 	f := seedSprintFixture(t, "web-shared-card")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	const cardMarker = `class="card card-sm card-link text-reset"`
 
@@ -230,7 +233,7 @@ func TestSprintsPage_ClosedCardsShowTaskCount(t *testing.T) {
 	f := seedSprintFixture(t, "web-closed-counts")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 	closed := paneSlice(t, body, `<div id="tab-closed"`)
 
 	// Both CLOSED sprints in the fixture have zero member tasks, so each card
@@ -252,7 +255,7 @@ func TestSprintsPage_UpcomingCardsShowTaskCount(t *testing.T) {
 	f := seedSprintFixture(t, "web-upcoming-counts")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 	upcoming := paneSlice(t, body, `<div id="tab-upcoming"`)
 
 	if got := strings.Count(upcoming, "task(s)"); got != 2 {

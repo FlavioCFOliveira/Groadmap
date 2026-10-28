@@ -39,8 +39,8 @@ vet:
 # this file and both workflows in the same commit. `override` keeps a value given
 # on the make command line or in the environment from replacing a pin, because
 # nothing may disable the check.
-override GOLANGCI_LINT_VERSION := v2.14.0
-override GOSEC_VERSION := v2.29.0
+override GOLANGCI_LINT_VERSION := v2.15.0
+override GOSEC_VERSION := v2.30.0
 
 # The install command of each tool's own section of SPEC/BUILD.md, with the pin
 # in place of its placeholder. A failed version check prints it. The linter's

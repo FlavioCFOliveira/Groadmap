@@ -121,9 +121,7 @@ func setupCommitTrackingRoadmap(t *testing.T, name string) *commitTrackingFixtur
 	if len(tasks) != len(seedTasks) {
 		t.Fatalf("seeded %d tasks, found %d", len(seedTasks), len(tasks))
 	}
-	for i := range tasks {
-		fixture.taskIDs = append(fixture.taskIDs, tasks[i].ID)
-	}
+	fixture.taskIDs = taskIDsInIDOrder(tasks)
 
 	_ = captureStdout(t, func() {
 		if err := sprintCreate([]string{

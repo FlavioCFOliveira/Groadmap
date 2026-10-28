@@ -18,6 +18,7 @@
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
     <div class="page-wrapper">
+      <main class="d-flex flex-column flex-fill">
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
@@ -25,9 +26,11 @@
             {{/*
               The actions column carries the layout dropdown and nothing else: a
               control that acts on this page. The link that stood beside it was
-              labelled "Tasks & sprints" but pointed at /roadmaps/{name}, the
-              sprints page alone — a leftover from before those two endpoints were
-              split, and the same retired label the roadmap index already forbids.
+              labelled "Tasks & sprints" but pointed at the roadmap's sprints page
+              alone — then served at /roadmaps/{name}, now the dashboard, and since
+              moved to /roadmaps/{name}/sprints — a leftover from before the tasks
+              and sprints endpoints were split, and the same retired label the
+              roadmap index already forbids.
               It was also a second route to a page the sidebar lists on every page
               (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
             */}}
@@ -50,7 +53,7 @@
           </div>
         </div>
       </div>
-      <main class="page-body">
+      <div class="page-body">
         <div class="container-xl">
           <form id="query-bar" class="graph-query-bar card mb-3" novalidate>
             <div class="card-body">
@@ -165,6 +168,7 @@
             </div>
           </div>
         </div>
+      </div>
       </main>
     </div>
   </div>

@@ -27,8 +27,9 @@ const stampBinaryPlaceholder = "{binary}"
 // version-control stamp the Go toolchain records, and the two workflows guard
 // that stamp twice: every build job builds with -buildvcs=true, so a build that
 // finds the repository but cannot stamp the binary fails, and a stamp-check step
-// between the build and the upload fails the job when the binary carries no
-// vcs.revision, whatever the cause (SPEC/DEPLOY.md § How a Released Binary
+// after the build — and, in the release workflow, before the upload; the CI
+// workflow's build job uploads nothing — fails the job when the binary carries
+// no vcs.revision, whatever the cause (SPEC/DEPLOY.md § How a Released Binary
 // Carries Its Commit, conditions 2 and 4). Neither workflow passes a -X linker
 // flag, because the version is a constant and the commit is the toolchain's.
 //
@@ -99,7 +100,9 @@ func parseStampCheckSuffix(t *testing.T) string {
 
 // assertBuildStamp holds one workflow to the three guards: no -X linker flag
 // anywhere in the file, -buildvcs=true on every `go build` of its build job, and
-// the stamp-check step placed after the build and before the upload.
+// the stamp-check step placed after the build. In the release workflow the step
+// must also precede the upload; in the CI workflow, which publishes nothing, the
+// build job must upload nothing at all.
 func assertBuildStamp(t *testing.T, p pipeline, suffix string) {
 	t.Helper()
 
@@ -144,10 +147,16 @@ func assertBuildStamp(t *testing.T, p pipeline, suffix string) {
 	upload := slices.IndexFunc(build.steps, func(step wfStep) bool {
 		return strings.HasPrefix(step.uses, "actions/upload-artifact@")
 	})
-	if upload < 0 {
+	switch {
+	case p.publishes() && upload < 0:
 		t.Errorf("%s: job %q has no step that uses actions/upload-artifact, so the stamp check cannot be shown "+
-			"to run before the artefact leaves the job (SPEC/DEPLOY.md § How a Released Binary Carries Its "+
+			"to run before the binary leaves the job (SPEC/DEPLOY.md § How a Released Binary Carries Its "+
 			"Commit, condition 4).", p.rel(), p.buildJob)
+	case !p.publishes() && upload >= 0:
+		t.Errorf("%s: job %q uploads an artefact in step %q, but the CI workflow's build job uploads none: "+
+			"it runs the `go build` and then the stamp check, and the binary does not leave the job "+
+			"(SPEC/BUILD.md § CI Workflow; SPEC/DEPLOY.md § How a Released Binary Carries Its Commit, "+
+			"condition 4).", p.rel(), p.buildJob, build.steps[upload].name)
 	}
 
 	// Candidates are the steps with a command, not a comment, that runs
@@ -160,8 +169,9 @@ func assertBuildStamp(t *testing.T, p pipeline, suffix string) {
 	}
 	if len(candidates) == 0 {
 		t.Errorf("%s: job %q has no step that runs `go version -m` on the built binary, so a binary that "+
-			"carries no vcs.revision can be uploaded and published. SPEC/DEPLOY.md § How a Released Binary "+
-			"Carries Its Commit (condition 4) requires the stamp check after the build and before the upload.",
+			"carries no vcs.revision passes the job. SPEC/DEPLOY.md § How a Released Binary Carries Its "+
+			"Commit (condition 4) requires the stamp check after the build and, in the release workflow, "+
+			"before the upload.",
 			p.rel(), p.buildJob)
 		return
 	}
@@ -184,9 +194,9 @@ func assertBuildStamp(t *testing.T, p pipeline, suffix string) {
 		reports = append(reports, fmt.Sprintf("step %q: %s", step.name, strings.Join(problems, "; ")))
 	}
 	t.Errorf("%s: job %q runs `go version -m`, but not as the stamp check SPEC/DEPLOY.md § How a Released "+
-		"Binary Carries Its Commit (condition 4) specifies — after the step that runs `go build`, before the "+
-		"upload, deciding on the command's output, and writing the published line to standard error with "+
-		"exit status 1:\n  %s", p.rel(), p.buildJob, strings.Join(reports, "\n  "))
+		"Binary Carries Its Commit (condition 4) specifies — after the step that runs `go build` (and, in the "+
+		"release workflow, before the upload), deciding on the command's output, and writing the published "+
+		"line to standard error with exit status 1:\n  %s", p.rel(), p.buildJob, strings.Join(reports, "\n  "))
 }
 
 // stampExit matches a shell command that exits with status 1.

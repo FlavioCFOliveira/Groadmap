@@ -1,21 +1,20 @@
-// Regression fence for the checkpoint GATE, and for the one thing that can
-// defeat it.
+// Regression fence for the checkpoint GATE, stated in log positions.
 //
 // The gate is the rule that a fold is owed when, and only when, the write-ahead
-// log holds bytes no fold has covered (SPEC/GRAPH.md § What a Statement That
-// Writes Nothing Changes on Disk; § Durability and Checkpointing in a Long-Lived
-// Process, rules 4, 5 and 10). The dedicated graph server puts both of its
-// checkpoints through it, and folds through the engine's own checkpointer, which
-// cuts the folded prefix itself and keeps the unfolded suffix.
+// log holds a durable record no fold has covered (SPEC/GRAPH.md § What a
+// Statement That Writes Nothing Changes on Disk; § Durability and Checkpointing
+// in a Long-Lived Process, rules 4, 5, 9 and 10). Every record carries a logical
+// position that only grows, and a fold neither resets positions nor moves them
+// when it discards the folded prefix, so the gate compares the log's durable end
+// with the position the last fold covered and with nothing else.
 //
-// So there are two properties here and they pull in opposite directions. The gate
+// There are two properties here and they pull in opposite directions. The gate
 // must REFUSE a fold nothing owes — that is what keeps an idle server off the
-// disk, and one cut, rolled-back write from publishing a mapper and a tombstone
-// set the graph no longer holds — and it must never refuse a fold that IS owed: a
-// tail the store opened with, bytes a writer appended while a fold ran, or a
-// suffix somebody else's truncation left behind. A gate that only ever said "no"
-// would pass the first pair of tests below and lose committed history to the next
-// open's replay for ever.
+// disk — and it must never refuse a fold that IS owed: records the store opened
+// with, records a writer appended while a fold ran, and history the single-file
+// log still held when the engine converted the store. A gate that only ever said
+// "no" would pass the first pair of tests below and leave committed history to
+// the next open's replay for ever.
 package graphstore
 
 import (
@@ -23,7 +22,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/FlavioCFOliveira/GoGraph/store/checkpoint"
+	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 )
 
 // errFoldRefused is the failure a test's own fold reports. It is a package-level
@@ -71,40 +74,59 @@ func commitWrite(t *testing.T, st *Store, statement string) {
 	}
 }
 
-// TestCheckpointIfAppended_RefusesAFoldNothingAppended is the half the graph
-// server needed and did not have.
+// engineFold is the fold the dedicated graph server performs, built the way the
+// server builds it: the engine's own checkpointer, under the store's commit
+// serialiser, carrying the mapper codec and the registered schema. It writes a
+// snapshot that records the position it covers, records that position in the
+// log's control file, and discards the segments wholly below it.
 //
-// A statement that appended nothing must leave the store alone. What made this
-// worth a fence of its own rather than an implicit property of Checkpoint is that
-// the fold is now a PARAMETER: a caller supplies its own, and the only thing
-// standing between an unconditional checkpointer and the disk is this decision.
+// It is a test's copy of the server's construction, and deliberately so: this
+// package owns the gate and not the fold, and a test of the gate needs a REAL
+// fold, because the property under test is how the gate's opening mark reads
+// the position a real snapshot recorded.
+func engineFold(st *Store) func() error {
+	return func() error {
+		var unused sync.Mutex
+		cp := checkpoint.New[string, float64](
+			checkpoint.Config{Dir: st.Dir()},
+			st.Graph(), st.WAL(), &unused,
+			checkpoint.WithCommitSerialiser[string, float64](st.Txn().RunUnderCommitLock),
+			checkpoint.WithMapperCodec[string, float64](st.Txn().Codec()),
+			checkpoint.WithWeightCodec[string, float64](st.Txn().WeightCodec()),
+			checkpoint.WithConstraintSpecs[string, float64](st.Engine().ConstraintSpecsForSnapshot),
+			checkpoint.WithIndexSpecs[string, float64](st.Engine().IndexSpecsForSnapshot),
+		)
+		return cp.RunCheckpoint()
+	}
+}
+
+// TestCheckpointIfAppended_RefusesAFoldNothingAppended is the half an idle
+// server depends on: a store nothing has written to owes no fold.
 func TestCheckpointIfAppended_RefusesAFoldNothingAppended(t *testing.T) {
 	st := openTestStore(t, filepath.Join(t.TempDir(), "graph"))
 
 	folds := 0
-	ran, err := st.CheckpointIfAppended(func() (int64, error) { folds++; return 0, nil })
+	ran, err := st.CheckpointIfAppended(func() error { folds++; return nil })
 	if err != nil {
 		t.Fatalf("the gate reported an error over a store nothing has written to: %v", err)
 	}
 	if ran || folds != 0 {
 		t.Errorf("the gate ran the fold %d time(s) and reported ran=%v over a store nothing has "+
-			"appended to. An ungated fold serialises the whole graph and rewrites the whole "+
-			"snapshot, and after a rolled-back write it publishes the key mapper and the "+
-			"tombstone set that write left behind (rmp task #380: 80 KB to 134 MB, permanently)",
-			folds, ran)
+			"appended to. An ungated fold serialises the whole graph and rewrites the whole snapshot "+
+			"for no change at all", folds, ran)
 	}
 }
 
-// TestCheckpointIfAppended_RunsOnceForOneAppend pins the other half of the
-// ordinary case: the fold runs when something was written, and the mark it leaves
-// behind refuses the NEXT call. A gate that ran but forgot to move the mark would
-// fold on every shutdown for ever after one write.
+// TestCheckpointIfAppended_RunsOnceForOneAppend pins the ordinary case: the fold
+// runs when something was written, and the mark it leaves behind refuses the NEXT
+// call. A gate that ran but forgot to move the mark would fold on every due
+// instant for ever after one write.
 func TestCheckpointIfAppended_RunsOnceForOneAppend(t *testing.T) {
 	st := openTestStore(t, filepath.Join(t.TempDir(), "graph"))
 	commitWrite(t, st, "CREATE (n:Gate {key:'one-append'})")
 
 	folds := 0
-	fold := func() (int64, error) { folds++; return 0, nil }
+	fold := func() error { folds++; return nil }
 
 	ran, err := st.CheckpointIfAppended(fold)
 	if err != nil {
@@ -115,9 +137,6 @@ func TestCheckpointIfAppended_RunsOnceForOneAppend(t *testing.T) {
 			"the write-ahead log grew, so the fold is owed", folds, ran)
 	}
 
-	// The supplied fold truncated nothing — it is a counter — so the durable
-	// offset has NOT moved and only the mark can refuse the second call. That is
-	// the point: the gate must record what it let through.
 	ran, err = st.CheckpointIfAppended(fold)
 	if err != nil {
 		t.Fatalf("the gate reported an error on the second call: %v", err)
@@ -130,14 +149,14 @@ func TestCheckpointIfAppended_RunsOnceForOneAppend(t *testing.T) {
 }
 
 // TestCheckpointIfAppended_ReturnsTheFoldsFailure keeps rmp task #369's
-// requirement reachable through the gate: a shutdown checkpoint that fails must
-// reach the reader as a diagnostic, and it can only do that if the error survives
-// the call. The gate must also not record a fold that did not happen.
+// requirement reachable through the gate: a checkpoint that fails must reach the
+// reader as a diagnostic, and it can only do that if the error survives the call.
+// The gate must also not record a fold that did not happen.
 func TestCheckpointIfAppended_ReturnsTheFoldsFailure(t *testing.T) {
 	st := openTestStore(t, filepath.Join(t.TempDir(), "graph"))
 	commitWrite(t, st, "CREATE (n:Gate {key:'a-failing-fold'})")
 
-	ran, err := st.CheckpointIfAppended(func() (int64, error) { return 0, errFoldRefused })
+	ran, err := st.CheckpointIfAppended(func() error { return errFoldRefused })
 	if ran {
 		t.Errorf("the gate reported ran=true for a fold that failed")
 	}
@@ -148,85 +167,57 @@ func TestCheckpointIfAppended_ReturnsTheFoldsFailure(t *testing.T) {
 			"swallows it", err)
 	}
 
-	// And the failure did not move the mark: the fold is still owed.
 	folds := 0
-	ran, err = st.CheckpointIfAppended(func() (int64, error) { folds++; return 0, nil })
+	ran, err = st.CheckpointIfAppended(func() error { folds++; return nil })
 	if err != nil {
 		t.Fatalf("the gate reported an error after a failed fold: %v", err)
 	}
 	if !ran || folds != 1 {
 		t.Errorf("the gate refused the retry after a fold that FAILED (ran=%v, %d folds). A mark "+
-			"advanced by a fold that did not happen loses the log to the next truncation",
+			"advanced by a fold that did not happen records unfolded history as folded",
 			ran, folds)
 	}
 }
 
-// TestCheckpointIfAppended_FoldsWhatAnotherPartysTruncationLeftBehind is the
-// clause that keeps the gate honest when a party it did not gate truncates the
-// log, and the one a reader is most likely to take for defensive noise.
-//
-// # The state this reproduces
-//
-// A fold the gate let through truncated nothing, so the mark sits at the offset
-// that fold was proven to cover, above zero. A party outside the gate then cuts
-// the prefix it folded with wal.Writer.TruncatePrefix, and the durable offset
-// DROPS below that mark. Writes after it land in a log shorter than the one the
-// mark describes.
-//
-// A gate that compared the offset against the mark and nothing else would read
-// that as "nothing unfolded" and refuse the next fold — and the surviving suffix
-// is precisely the part no snapshot covers, so the refusal would hand the next
-// open a replay of history that a fold was owed for. The clause exists to stop
-// exactly that, and this test is what makes deleting it go red.
-//
-// The truncation here is the engine's own call, made directly rather than
-// simulated: TruncatePrefix is what the checkpointer runs in its third phase, and
-// a test that moved the offset any other way would fence a different mechanism.
-func TestCheckpointIfAppended_FoldsWhatAnotherPartysTruncationLeftBehind(t *testing.T) {
+// TestCheckpointIfAppended_ARealFoldMovesNoPosition is what makes the gate's
+// comparison sound in positions: a fold that records its position and discards
+// the folded prefix leaves the durable end where it was, and a write after it
+// lands beyond the mark. Under the single-file log a truncation moved the log's
+// coordinates back to zero, and a gate in offsets had to recognise that; in
+// positions there is nothing to recognise, and this test fails if the engine ever
+// starts resetting them again (SPEC/GRAPH.md § Synchronous Checkpoint on Write,
+// step 3).
+func TestCheckpointIfAppended_ARealFoldMovesNoPosition(t *testing.T) {
 	st := openTestStore(t, filepath.Join(t.TempDir(), "graph"))
+	commitWrite(t, st, "CREATE (s:Spec {key:'SPEC/GRAPH.md'})")
 
-	for i := 0; i < 40; i++ {
-		commitWrite(t, st, "CREATE (n:Carried {key:'folded-without-a-cut'})")
+	before := st.WAL().DurableOffset()
+	ran, err := st.CheckpointIfAppended(engineFold(st))
+	if err != nil || !ran {
+		t.Fatalf("the first fold did not run (ran=%v, err=%v) after a committed write", ran, err)
 	}
-	// A fold that cut nothing: the mark moves to the offset it covered.
-	if ran, err := st.CheckpointIfAppended(func() (int64, error) { return 0, nil }); err != nil || !ran {
-		t.Fatalf("the first fold did not run (ran=%v, err=%v) over 40 committed writes", ran, err)
-	}
-	mark := st.WAL().DurableOffset()
-
-	// A party outside the gate folds the durable prefix and cuts it away.
-	if _, err := st.WAL().TruncatePrefix(mark); err != nil {
-		t.Fatalf("truncating the folded prefix at %d: %v", mark, err)
+	if after := st.WAL().DurableOffset(); after != before {
+		t.Fatalf("the log's durable end moved from %d to %d across a fold. Positions only grow and "+
+			"a fold does not move them; a gate comparing positions is unsound on an engine that does",
+			before, after)
 	}
 
-	// One write after that cut. It is deliberately far smaller than the mark, so
-	// the log is now SHORTER than the mark describes — which is the whole of the
-	// trap.
-	commitWrite(t, st, "CREATE (n:Served {key:'written-after-the-cut'})")
-
-	suffix := st.WAL().DurableOffset()
-	if suffix <= 0 || suffix >= mark {
-		t.Fatalf("the log holds %d bytes after the cut against a mark of %d; this test needs a "+
-			"non-empty suffix BELOW the mark, or it proves nothing", suffix, mark)
+	if ran, err := st.CheckpointIfAppended(func() error { t.Error("a fold ran with nothing appended"); return nil }); err != nil || ran {
+		t.Fatalf("the gate folded again (ran=%v, err=%v) with nothing appended since the real fold", ran, err)
 	}
 
+	commitWrite(t, st, "CREATE (s:Spec {key:'SPEC/WEB.md'})")
 	folds := 0
-	ran, err := st.CheckpointIfAppended(func() (int64, error) { folds++; return 0, nil })
-	if err != nil {
-		t.Fatalf("the gate reported an error: %v", err)
-	}
-	if !ran || folds != 1 {
-		t.Fatalf("the gate REFUSED the fold (ran=%v, %d folds) over a log holding %d bytes that no "+
-			"snapshot covers, because another party's TruncatePrefix left the durable offset "+
-			"below the mark of %d. Those bytes are committed history: refusing here hands them "+
-			"to the next open's replay instead of folding them",
-			ran, folds, suffix, mark)
+	ran, err = st.CheckpointIfAppended(func() error { folds++; return nil })
+	if err != nil || !ran || folds != 1 {
+		t.Fatalf("the gate refused (ran=%v, %d folds, err=%v) a write committed after a real fold; "+
+			"its records lie beyond the position that fold covered", ran, folds, err)
 	}
 }
 
 // leaveUnfoldedTail writes to a fresh store and closes it WITHOUT a fold, which
 // is the store a killed server leaves behind: a write-ahead log holding committed
-// frames that no snapshot covers. It returns the log's length.
+// records that no snapshot covers. It returns the log's durable end.
 func leaveUnfoldedTail(t *testing.T, graphDir string) int64 {
 	t.Helper()
 
@@ -243,138 +234,149 @@ func leaveUnfoldedTail(t *testing.T, graphDir string) int64 {
 		t.Fatalf("closing the first store: %v", err)
 	}
 	if tail <= 0 {
-		t.Fatalf("a committed write left a write-ahead log of %d bytes; this test needs a store "+
+		t.Fatalf("a committed write left a log whose durable end is %d; this test needs a store "+
 			"that opens with an unfolded tail", tail)
 	}
 	return tail
 }
 
-// TestCheckpointIfAppended_FoldsATailTheStoreOpenedWith is the owner's decision
-// on rmp task #383, pinned: the mark starts at the beginning of the log, not at
-// its length at open (SPEC/GRAPH.md § Durability and Checkpointing in a
-// Long-Lived Process, rule 4).
+// TestCheckpointIfAppended_FoldsATailTheStoreOpenedWith pins the opening mark at
+// the position the snapshot covers — the start of the log when there is no
+// snapshot — and not at the log's end at open (SPEC/GRAPH.md § Durability and
+// Checkpointing in a Long-Lived Process, rule 4; acceptance criterion 83).
 //
-// A server that was killed leaves a log tail no snapshot covers, and the next
-// server replays it at open without folding it. A gate whose mark started at the
-// log's length would find nothing grown and fold that tail never — neither in
-// flight nor at shutdown — so every later open would replay it again. The fold
-// here is owed with NO write in this Store at all.
+// A server that was killed leaves records no snapshot covers, and the next
+// server replays them at open without folding them. A gate whose mark started at
+// the log's end would find nothing grown and fold them never.
 func TestCheckpointIfAppended_FoldsATailTheStoreOpenedWith(t *testing.T) {
 	graphDir := filepath.Join(t.TempDir(), "graph")
 	tail := leaveUnfoldedTail(t, graphDir)
 
 	st := openTestStore(t, graphDir)
 	if got := st.WAL().DurableOffset(); got != tail {
-		t.Fatalf("the reopened log holds %d bytes, want the %d the first store left", got, tail)
+		t.Fatalf("the reopened log's durable end is %d, want the %d the first store left", got, tail)
 	}
 
 	folds := 0
-	ran, err := st.CheckpointIfAppended(func() (int64, error) { folds++; return 0, nil })
+	ran, err := st.CheckpointIfAppended(func() error { folds++; return nil })
 	if err != nil {
 		t.Fatalf("the gate reported an error: %v", err)
 	}
 	if !ran || folds != 1 {
-		t.Fatalf("the gate refused to fold (ran=%v, %d folds) a %d-byte tail the store opened "+
-			"with. That tail is committed history no snapshot covers; a mark taken at the log's "+
-			"length at open records it as folded, and it is then folded neither in flight nor "+
-			"at shutdown", ran, folds, tail)
+		t.Fatalf("the gate refused to fold (ran=%v, %d folds) records up to position %d the store "+
+			"opened with. They are committed history no snapshot covers", ran, folds, tail)
 	}
 }
 
-// TestCheckpointIfAppended_RefusesAgainOnceTheOpeningTailIsFolded is the other
-// half of the decision above: the tail is owed ONE fold, not one per call. Once a
-// fold has cut it away the log is empty and the gate refuses, which is what lets
-// an idle server that opened with a tail write nothing after its first fold
-// (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process, rule 10).
-func TestCheckpointIfAppended_RefusesAgainOnceTheOpeningTailIsFolded(t *testing.T) {
+// TestCheckpointIfAppended_ReopenedAfterAFoldOwesNothing is the other half of the
+// opening mark, and the one the change to positions made necessary: a store
+// whose last fold covered the whole log, reopened, owes no fold — although its
+// log still holds every record of that history, because a log shorter than one
+// segment is not shortened by a fold at all.
+//
+// A gate that took the start of the log as its opening mark would see those
+// retained records as grown and rewrite the snapshot at the first due instant of
+// every idle server, which is the defect acceptance criterion 81 names
+// (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process, rules 4
+// and 10).
+func TestCheckpointIfAppended_ReopenedAfterAFoldOwesNothing(t *testing.T) {
 	graphDir := filepath.Join(t.TempDir(), "graph")
 	leaveUnfoldedTail(t, graphDir)
-	st := openTestStore(t, graphDir)
 
-	// The real fold: a snapshot, then the whole log truncated.
-	ran, err := st.Checkpoint()
-	if err != nil || !ran {
-		t.Fatalf("the first checkpoint did not fold the opening tail (ran=%v, err=%v)", ran, err)
+	first, err := Open(graphDir)
+	if err != nil {
+		t.Fatalf("opening the graph store: %v", err)
 	}
-	if off := st.WAL().DurableOffset(); off != 0 {
-		t.Fatalf("the log holds %d bytes after a fold that truncated it", off)
+	if ran, err := first.CheckpointIfAppended(engineFold(first)); err != nil || !ran {
+		_ = first.Close() //nolint:errcheck // the test is failing; the close error adds nothing
+		t.Fatalf("the fold of the opening tail did not run (ran=%v, err=%v)", ran, err)
+	}
+	covered := first.WAL().DurableOffset()
+	if err := first.Close(); err != nil {
+		t.Fatalf("closing the folded store: %v", err)
+	}
+
+	st := openTestStore(t, graphDir)
+	if end := st.WAL().DurableOffset(); end != covered || end <= 0 {
+		t.Fatalf("the reopened log's durable end is %d, want the %d the fold covered; the test needs a "+
+			"log that still holds the folded records", end, covered)
+	}
+	ran, err := st.CheckpointIfAppended(func() error { t.Error("a fold ran over a folded log"); return nil })
+	if err != nil || ran {
+		t.Errorf("the gate folded (ran=%v, err=%v) a reopened store whose snapshot covers its whole "+
+			"log. The opening mark is the position the snapshot records, not the start of the log, "+
+			"because positions do not restart at a fold", ran, err)
+	}
+}
+
+// TestCheckpointIfAppended_FoldsAWriteThatLandedDuringTheFold pins the rule that
+// the mark is a position the fold is proven to have covered — the durable end
+// read before the fold was requested — never the end read after it returns
+// (SPEC/GRAPH.md § Durability and Checkpointing in a Long-Lived Process, rule 4
+// and rule 10, third bullet).
+//
+// The fold here commits a write while it "writes its snapshot", as writers do
+// while the engine's checkpointer works lock-free. A gate that took the end after
+// the fold as its mark would record that write as folded, and a server that then
+// received no further write would fold it neither in flight nor at shutdown.
+func TestCheckpointIfAppended_FoldsAWriteThatLandedDuringTheFold(t *testing.T) {
+	st := openTestStore(t, filepath.Join(t.TempDir(), "graph"))
+	commitWrite(t, st, "CREATE (n:Folded {key:'before-the-fold'})")
+
+	ran, err := st.CheckpointIfAppended(func() error {
+		commitWrite(t, st, "CREATE (n:Concurrent {key:'committed-while-the-snapshot-was-written'})")
+		return nil
+	})
+	if err != nil || !ran {
+		t.Fatalf("the fold did not run (ran=%v, err=%v)", ran, err)
 	}
 
 	folds := 0
-	ran, err = st.CheckpointIfAppended(func() (int64, error) { folds++; return 0, nil })
+	ran, err = st.CheckpointIfAppended(func() error { folds++; return nil })
 	if err != nil {
 		t.Fatalf("the gate reported an error: %v", err)
 	}
-	if ran || folds != 0 {
-		t.Errorf("the gate folded again (ran=%v, %d folds) over an empty log whose tail was "+
-			"already folded; an idle server would rewrite its snapshot at every due instant",
-			ran, folds)
+	if !ran || folds != 1 {
+		t.Fatalf("the gate REFUSED to fold (ran=%v, %d folds) a write that committed while the "+
+			"previous fold was running. Nothing proves that fold covered it; a mark taken from the "+
+			"durable end after the fold records it as folded", ran, folds)
 	}
 }
 
-// TestCheckpointIfAppended_FoldsAWriteThatLandedDuringTheFold pins the rule rmp
-// task #383 turns on: the mark is the point the fold CAPTURED, never the offset
-// read after it returns (SPEC/GRAPH.md § Durability and Checkpointing in a
-// Long-Lived Process, rule 10, third bullet).
-//
-// # What the fold below does, and why it is the engine's shape
-//
-// The engine's checkpointer captures the graph and the durable offset W at one
-// transaction boundary, releases the commit lock while it writes the snapshot —
-// writers commit throughout — and then cuts only the prefix [0, W). What writers
-// appended meanwhile survives as the log's new content, and no snapshot covers
-// it. The fold here does exactly that with the engine's own calls: it reads W,
-// commits a write while "writing the snapshot", cuts [0, W) with TruncatePrefix,
-// and reports W as what it cut.
-//
-// A gate that took the offset after the fold as its mark — which is what this
-// gate did before #383 — would record the surviving write as folded and refuse
-// the next call, and a server that then received no further write would fold that
-// write neither in flight nor at shutdown. Both sub-tests run the same scenario
-// for the two shapes a fold's report can take.
-func TestCheckpointIfAppended_FoldsAWriteThatLandedDuringTheFold(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		// cut is whether the fold cuts the prefix it captured, as the engine's
-		// checkpointer does when its snapshot is self-sufficient, or keeps the
-		// whole log, as it does when it is not.
-		cut bool
-	}{
-		{name: "a fold that cuts the prefix it captured", cut: true},
-		{name: "a fold that keeps the whole log", cut: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			st := openTestStore(t, filepath.Join(t.TempDir(), "graph"))
-			commitWrite(t, st, "CREATE (n:Folded {key:'before-the-fold'})")
+// TestCheckpointIfAppended_ConvertedHistoryIsOwedOneFold is acceptance
+// criterion 93's gate half: history the single-file log held when the engine
+// converted the store lies outside the segmented log's positions, so no durable
+// end can stand for it, and it is owed one fold all the same (SPEC/GRAPH.md §
+// Durability and Checkpointing in a Long-Lived Process, rule 4; § Graph Store
+// Format Migration, rule 11). The fold that pays it replaces the single-file log
+// with the engine's one-record stub, and after it the gate refuses.
+func TestCheckpointIfAppended_ConvertedHistoryIsOwedOneFold(t *testing.T) {
+	graphDir := filepath.Join(t.TempDir(), "graph")
+	copySingleFileFixture(t, graphDir)
 
-			ran, err := st.CheckpointIfAppended(func() (int64, error) {
-				watermark := st.WAL().DurableOffset()
-				commitWrite(t, st, "CREATE (n:Concurrent {key:'committed-while-the-snapshot-was-written'})")
-				if !tc.cut {
-					return 0, nil
-				}
-				return st.WAL().TruncatePrefix(watermark)
-			})
-			if err != nil || !ran {
-				t.Fatalf("the fold did not run (ran=%v, err=%v)", ran, err)
-			}
-			if off := st.WAL().DurableOffset(); off <= 0 {
-				t.Fatalf("the log holds %d bytes after the fold; the write committed during it "+
-					"should have survived the cut, so this test proves nothing", off)
-			}
+	st := openTestStore(t, graphDir)
+	ctl, ok, err := InspectLog(graphDir)
+	if err != nil || !ok || ctl.Flags&wal.ControlLegacyV1Pending == 0 {
+		t.Fatalf("the converted fixture's log reports control=%v flags=%#x err=%v; this test needs a "+
+			"store whose single-file history is still unfolded", ok, ctl.Flags, err)
+	}
+	if end := st.WAL().DurableOffset(); end != 0 {
+		t.Fatalf("the freshly converted log's durable end is %d; the test is about history that lies "+
+			"before every segmented position, so it needs an empty segmented log", end)
+	}
 
-			folds := 0
-			ran, err = st.CheckpointIfAppended(func() (int64, error) { folds++; return 0, nil })
-			if err != nil {
-				t.Fatalf("the gate reported an error: %v", err)
-			}
-			if !ran || folds != 1 {
-				t.Fatalf("the gate REFUSED to fold (ran=%v, %d folds) a write that committed while "+
-					"the previous fold was writing its snapshot. That fold captured the log before "+
-					"the write, so no snapshot covers it; a mark taken from the offset after the fold "+
-					"records it as folded, and it would then be folded neither in flight nor at "+
-					"shutdown", ran, folds)
-			}
-		})
+	ran, err := st.CheckpointIfAppended(engineFold(st))
+	if err != nil || !ran {
+		t.Fatalf("the gate did not fold (ran=%v, err=%v) the history the single-file log held at the "+
+			"conversion. No fold in the segmented format covers it", ran, err)
+	}
+	ctl, _, err = InspectLog(graphDir)
+	if err != nil || ctl.Flags&wal.ControlLegacyV1Pending != 0 {
+		t.Fatalf("after the fold the log reports flags=%#x err=%v; the fold should have replaced the "+
+			"single-file log with its stub", ctl.Flags, err)
+	}
+
+	if ran, err := st.CheckpointIfAppended(func() error { t.Error("a second fold ran"); return nil }); err != nil || ran {
+		t.Errorf("the gate folded again (ran=%v, err=%v) once the converted history was folded", ran, err)
 	}
 }

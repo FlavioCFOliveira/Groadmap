@@ -244,11 +244,13 @@ func TestHandleGraphData_RefusesBothPlanPrefixesInEverySpelling(t *testing.T) {
 // TestHandleGraphData_ARefusedPrefixIsNeverSentAndNeedsNoServer is Acceptance
 // Criterion 167, in its three halves.
 //
-// The no-write half alone asserts little: an EXPLAIN executes nothing and the
-// engine refuses a PROFILE of a write wherever either runs, so an endpoint that
-// sent both would leave the graph unchanged too. What establishes that the
-// refusal is decided before any graph server is resolved is the kind, and the two
-// pairs that set its 400 against a 503 and against a 500 for the same roadmap.
+// The no-write half asserts only part of the refusal. A PROFILE of a write
+// performs the write, so an endpoint that sent `PROFILE CREATE (n:Probe ...)`
+// would leave a Probe node behind and fail the read-back; but an EXPLAIN executes
+// nothing wherever it runs, so an endpoint that sent the EXPLAIN would leave the
+// graph unchanged too. What establishes that the refusal is decided before any
+// graph server is resolved is the kind, and the two pairs that set its 400
+// against a 503 and against a 500 for the same roadmap.
 func TestHandleGraphData_ARefusedPrefixIsNeverSentAndNeedsNoServer(t *testing.T) {
 	line := specPlanPrefixLine(t)
 	prefixedWrites := []string{

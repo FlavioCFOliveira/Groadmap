@@ -254,7 +254,7 @@ func TestSprintsPage_CardFooterShowsTheSprintsOwnTaskCount(t *testing.T) {
 			"discriminate between cards", memberCounts)
 	}
 
-	body := servePage(t, buildMux(), "/roadmaps/"+name)
+	body := servePage(t, buildMux(), "/roadmaps/"+name+"/sprints")
 
 	rendered := map[int]int{}
 	for _, m := range sprintCardFooter.FindAllStringSubmatch(body, -1) {

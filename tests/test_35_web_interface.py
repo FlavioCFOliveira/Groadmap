@@ -10,19 +10,21 @@ running HTTP server:
   machine-readable {"url": ...} startup object, and the graceful SIGINT/SIGTERM
   shutdown of acceptance criterion 24 — asserted as the OUTCOME the
   criterion's adverb names and not merely as the exit code, since runServer
-  returns nil on the signal path unconditionally. Each of step 7's four promises
-  is driven or explicitly declined: the listener refusing new connections while
-  the process is still alive, an in-flight response still arriving whole across
-  the signal, the drain giving up inside internal/web/server.go's shutdownGrace
-  when a client stops reading, and the store/database handles, whose closure at
-  shutdown is unobservable from outside the process and whose antecedent is
-  driven instead. The scope step 7 puts on those promises is driven on both
-  sides: after the URL the answer is a graceful exit 0, and before it — reached
-  by widening the startup migration sweep with a service estate of roadmaps — an
-  interruption exiting 130.
+  returns nil on the signal path unconditionally. Of step 7's four promises,
+  this module drives the clean exit after the signal and the listener gone with
+  the process, and declines the closure of the store/database handles, which is
+  unobservable from outside the process, driving its antecedent instead. The
+  listener refusing new connections while the server is still running, an
+  in-flight response arriving whole across the signal, and the drain giving up
+  at internal/web/server.go's shutdownGrace when a client stops reading are
+  driven in-process by internal/web/shutdown_drain_test.go. The scope step 7
+  puts on those promises is driven on both sides: after the URL the answer is a
+  graceful exit 0, and before it — reached by widening the startup migration
+  sweep with a service estate of roadmaps — an interruption exiting 130.
 - Routes and pages: index with discovery + empty state, the read-only
-  sprints landing page (GET /roadmaps/{name}: three sprint tabs, Actual
-  active by default) and the separate tasks page (GET /roadmaps/{name}/tasks:
+  dashboard landing page (GET /roadmaps/{name}), the read-only sprints page
+  (GET /roadmaps/{name}/sprints: three sprint tabs, Actual active by default)
+  and the separate tasks page (GET /roadmaps/{name}/tasks:
   one paginated task list in a Tabler card, narrowed on the server by the card
   header's GET filter bar — search, sprint, status, and type, with an Apply
   button and no Reset — which compose conjunctively and travel, with the page and
@@ -31,7 +33,7 @@ running HTTP server:
   growth, name validation / path-traversal guard, the knowledge-graph page
   and its JSON data endpoint, and the read-only proof that graph reads create
   no snapshot/ directory. Choosing a roadmap on the index lands the user on
-  the sprints page with the current (OPEN) sprint selected by default.
+  the dashboard; the sprints page selects the current (OPEN) sprint by default.
 - Read-only enforcement: non-read HTTP methods answered 405 (AC21).
 - Self-contained delivery: static assets served only from /static/, a
   missing asset 404s (AC22), the vendored D3.js bundle and the d3-sankey
@@ -73,7 +75,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import REPO_ROOT, GroadmapTestBase, commit_flags_for
+from tests.base_test import (
+    REPO_ROOT, GroadmapTestBase, commit_flags_for, write_ahead_log_fingerprint,
+)
 
 ROADMAP = "platform"
 
@@ -170,26 +174,12 @@ SHUTDOWN_EXIT_MARGIN_SECONDS = 3.0
 # servers. Cost is not what bounds this number. The rate is.
 #
 # AND NOTE WHAT THE REPETITION IS FOR. Only the DELIVERY of the signal is
-# stochastic. Everything the other cases assert about the outcome — the listener
-# refusing while the process is still alive, the in-flight body completing whole,
-# the bound holding — is deterministic, and one run settles each. The seventeen
-# are here for the single property that is a race.
+# stochastic. Everything else asserted about the outcome — the listener
+# refusing while the server is still running, the in-flight body completing
+# whole, the bound holding, all three in internal/web/shutdown_drain_test.go —
+# is deterministic, and one run settles each. The seventeen are here for the
+# single property that is a race.
 GRACEFUL_STOP_RUNS = 17
-
-# The asset used to hold a request IN FLIGHT across the signal, and the file it
-# is served from. It is chosen for its size: at nearly three megabytes it cannot
-# fit in the socket buffers at either end, so the handler is still writing when
-# the signal arrives. A small asset would be delivered into the kernel and be
-# over before anything could be signalled, and the case would pass while driving
-# nothing at all — which is why _asset_size asserts a floor on it.
-IN_FLIGHT_ASSET_PATH = "/static/vendor/tabler-icons/fonts/tabler-icons.ttf"
-IN_FLIGHT_ASSET_FILE = "internal/web/static/vendor/tabler-icons/fonts/tabler-icons.ttf"
-IN_FLIGHT_ASSET_MIN_BYTES = 1 << 20
-
-# The receive buffer given to a deliberately slow reader. The kernel rounds and
-# clamps it, and the server's own send buffer adds a few more kilobytes, but the
-# total stays four orders of magnitude below the asset's size.
-SLOW_READER_RCVBUF = 2048
 
 # The longest stdout the announcement reader will take before giving up. It
 # stands in for a deadline, which that reader deliberately cannot afford: the
@@ -559,27 +549,6 @@ class TestWebInterface:
         except OSError:
             return False
 
-    @classmethod
-    def _wait_refusing(cls, port, host="127.0.0.1", timeout=5.0):
-        """Wait until host:port refuses connections; return how long that took.
-
-        Used on a server that has been signalled but has NOT yet exited, which
-        is the only vantage point from which "stops accepting new connections"
-        is a real assertion: once the process is gone the kernel has closed the
-        listening socket whatever the code did.
-        """
-        start = time.time()
-        deadline = start + timeout
-        while time.time() < deadline:
-            if cls._connect_refused(port, host):
-                return time.time() - start
-            time.sleep(0.005)
-        raise AssertionError(
-            f"server on {host}:{port} was still accepting connections {timeout:.1f}s "
-            f"after it was signalled; SPEC/WEB.md section \"Server Lifecycle\" step 7 "
-            f"requires it to stop accepting new connections"
-        )
-
     @staticmethod
     def _drain(stream):
         try:
@@ -932,29 +901,213 @@ class TestWebInterface:
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
         assert ROADMAP in body, "index must list the roadmap name"
-        assert f"/roadmaps/{ROADMAP}" in body, "index must link the sprints landing page"
+        assert f"/roadmaps/{ROADMAP}" in body, "index must link the dashboard landing page"
         assert f"/roadmaps/{ROADMAP}/graph" in body, "index must link the graph page"
 
-    def test_choosing_roadmap_lands_on_sprints_page(self):
-        """Selecting a roadmap on the index lands on the sprints page
-        (GET /roadmaps/{name}) with the current (OPEN) sprint selected by
-        default — the Actual tab is the active tab (SPEC/WEB.md § Roadmap Index
-        Page and § Roadmap Sprints Page)."""
+    def test_choosing_roadmap_lands_on_dashboard_page(self):
+        """Selecting a roadmap on the index lands on the dashboard page
+        (GET /roadmaps/{name}); the sprints page, reached at
+        /roadmaps/{name}/sprints, selects the current (OPEN) sprint by default —
+        the Actual tab is the active tab (SPEC/WEB.md § Roadmap Index Page,
+        § Roadmap Dashboard Page, and § Roadmap Sprints Page; Acceptance
+        Criteria 265 and 267)."""
         proc, port = self._start(["--port", "0"])
-        # The index card's primary link for the roadmap is the sprints landing
+        # The index card's primary link for the roadmap is the dashboard landing
         # page (href="/roadmaps/{name}" exactly, not the tasks or graph URL).
         _, _, index = self._req(port, "/")
         assert f'href="/roadmaps/{ROADMAP}"' in index, (
-            "index must link the roadmap to its sprints landing page"
+            "index must link the roadmap to its dashboard landing page"
         )
-        # Following that link lands on the sprints page with Actual active.
+        # Following that link lands on the dashboard.
         status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        assert status == 200
+        assert headers.get("content-type", "").startswith("text/html")
+        assert '<h2 class="page-title">Dashboard</h2>' in body, "landing must be the dashboard"
+        assert body.count('<script type="application/json" id="dashboard-data">') == 1, (
+            "the dashboard must carry its one chart data block"
+        )
+        # The sprints page, at /sprints, has Actual active.
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
         assert re.search(
             r'href="#tab-current"[^>]*\bclass="nav-link active"[^>]*aria-selected="true">Actual',
             body,
-        ), "landing must select the current (Actual/OPEN) sprint tab by default"
+        ), "the sprints page must select the current (Actual/OPEN) sprint tab by default"
+
+    def _seed_dashboard_roadmap(self, roadmap, tasks):
+        """Build a roadmap through the CLI from (title, type, status) triples and
+        return their ids. Every task that is not BACKLOG joins one sprint, which
+        is started so its members can move through DOING, TESTING, and
+        COMPLETED; a BACKLOG task belongs to no sprint."""
+        self._run(["roadmap", "create", roadmap])
+        ids = []
+        for title, task_type, _ in tasks:
+            _, out, _ = self._run([
+                "task", "create", "-r", roadmap, "-t", title, "-y", task_type,
+                "-fr", "Finance operations must see the state of the ledger close.",
+                "-tr", "Recorded in the roadmap database and read by the dashboard.",
+                "-ac", "The dashboard counts the task under its type and status.",
+            ])
+            ids.append(json.loads(out)["id"])
+        members = [i for i, (_, _, status) in zip(ids, tasks) if status != "BACKLOG"]
+        if members:
+            sprint = self.test.create_sprint(roadmap, "Close the month-end ledger",
+                                             title="Month-end ledger close")
+            self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(map(str, members))])
+            self._run(["sprint", "start", "-r", roadmap, str(sprint)])
+
+        def stat(status, wanted, *extra):
+            chosen = [i for i, (_, _, s) in zip(ids, tasks) if s in wanted]
+            if chosen:
+                self._run(["task", "stat", "-r", roadmap, ",".join(map(str, chosen)), status, *extra])
+
+        stat("DOING", ("DOING", "TESTING", "COMPLETED"), "--commit-open", "5d6a2cd")
+        stat("TESTING", ("TESTING", "COMPLETED"))
+        stat("COMPLETED", ("COMPLETED",), "--commit-close", "4999725")
+        return ids
+
+    @staticmethod
+    def _kpi_card(body, role):
+        """The markup of one dashboard KPI card, up to the next card."""
+        start = body.index(f'<div class="card" data-role="{role}">')
+        end = body.find('<div class="card" data-role="', start + 1)
+        return body[start:end]
+
+    def test_dashboard_kpi_type_donuts_and_removed_blocks(self):
+        """The Open tasks, Completed, and Backlog KPI cards each carry a donut of
+        their tasks by type, fed by tasks_by_type {types, open, completed,
+        backlog}; a card whose value is 0 renders no donut column; the Tasks by
+        type, Tasks by status, Tasks per sprint, and Throughput blocks are gone;
+        Current sprint takes a col-12 of its own and draws no chart; and the chart
+        data block holds tasks_by_type alone (SPEC/WEB.md § Roadmap Dashboard
+        Page; SPEC/DATA_FORMATS.md § Dashboard Chart Data; Acceptance Criteria
+        269, 270, 271, 272, 273, 274, 279, and 286)."""
+        self._seed_dashboard_roadmap("ledger-close", [
+            ("Draft the intercompany elimination entries", "TASK", "BACKLOG"),
+            ("Document the accrual reversal schedule", "TASK", "BACKLOG"),
+            ("Reconcile the suspense account balances", "TASK", "DOING"),
+            ("Publish the trial balance to the controllers", "TASK", "COMPLETED"),
+            ("FX revaluation posts to the wrong period", "BUG", "COMPLETED"),
+            ("Duplicate journal lines after a re-import", "BUG", "SPRINT"),
+            ("Archive the prior-year close workpapers", "CHORE", "BACKLOG"),
+        ])
+        self._seed_dashboard_roadmap("card-settlement", [
+            ("Settle the scheme fees for September", "TASK", "COMPLETED"),
+            ("Reprocess the rejected clearing file", "BUG", "COMPLETED"),
+        ])
+        self._run(["roadmap", "create", "treasury-greenfield"])
+        proc, port = self._start(["--port", "0"])
+
+        status, _, body = self._req(port, "/roadmaps/ledger-close")
+        assert status == 200
+        blocks = re.findall(
+            r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S)
+        assert len(blocks) == 1, "the dashboard must carry exactly one chart data block"
+        data = json.loads(blocks[0])
+        assert list(data) == ["tasks_by_type"], (
+            f"the chart data block's members are {list(data)}")
+        assert data["tasks_by_type"] == {
+            "types": ["TASK", "BUG", "CHORE"],
+            "open": [3, 1, 1], "completed": [1, 1, 0], "backlog": [2, 0, 1],
+        }, f"tasks_by_type = {data['tasks_by_type']}"
+
+        for role, chart, label in (
+            ("kpi-open", "chart-open-by-type",
+             "Open tasks by type: TASK 3 (60%), BUG 1 (20%), CHORE 1 (20%)"),
+            ("kpi-completed", "chart-completed-by-type",
+             "Completed tasks by type: TASK 1 (50%), BUG 1 (50%)"),
+            ("kpi-backlog", "chart-backlog-by-type",
+             "Backlog tasks by type: TASK 2 (66%), CHORE 1 (33%)"),
+        ):
+            card = self._kpi_card(body, role)
+            assert '<div class="row align-items-center">' in card and '<div class="col">' in card, (
+                f"{role} lacks the row-and-column layout")
+            assert re.search(
+                r'<div class="col-auto">\s*<div id="' + chart + r'" role="img" aria-label="'
+                + re.escape(label) + r'"></div>\s*</div>', card), (
+                f"{role} lacks its donut container labelled {label!r}; card={card!r}")
+        velocity = self._kpi_card(body, "kpi-velocity")
+        assert "col-auto" not in velocity and 'role="img"' not in velocity, (
+            "the Average velocity card must carry no donut")
+
+        for removed in ("Tasks by type", "Tasks by status", "Tasks per sprint",
+                        "tasks-by-type", "tasks-by-status", "tasks-per-sprint",
+                        "tasks_by_status", "tasks_per_sprint"):
+            assert removed not in body, f"the dashboard still carries {removed!r}"
+        for removed in ('<h3 class="card-title">Throughput</h3>', 'data-role="throughput"',
+                        "chart-lg", "chart-burndown", "chart-throughput",
+                        "No activity in the last 12 weeks", "No completed task yet"):
+            assert removed not in body, f"the dashboard still carries {removed!r}"
+        # Current sprint stands alone in a col-12, directly before Work in
+        # progress in its col-lg-6, and its card draws no chart although its
+        # OPEN sprint holds a COMPLETED member.
+        assert re.search(
+            r'<div class="col-12">\s*<div class="card" data-role="current-sprint">', body), (
+            "Current sprint must stand in a col-12")
+        cols = [c for c in re.findall(r'<div class="(col-[^"]+)">', body) if c != "col-auto"]
+        assert cols[4:7] == ["col-12", "col-lg-6", "col-lg-6"], (
+            f"the grid columns after the KPI row are {cols[4:7]}")
+        sprint_card = self._kpi_card(body, "current-sprint")
+        # The card title names the OPEN sprint: "Current sprint: " is plain text
+        # and the sprint's title alone links to the sprint's page; the card body
+        # no longer carries that link and opens with the progress row: the
+        # completion text, then the start text in an ms-auto div, immediately
+        # followed by the status breakdown.
+        open_sprints = self.test.list_sprints("ledger-close", status="OPEN")
+        assert len(open_sprints) == 1, f"ledger-close must hold one OPEN sprint, got {open_sprints}"
+        sprint_href = f'/roadmaps/ledger-close/sprints/{open_sprints[0]["id"]}'
+        header = re.search(r'<h3 class="card-title">(.*?)</h3>', sprint_card, re.S)
+        assert header and header.group(1) == (
+            f'Current sprint: <a href="{sprint_href}" data-role="current-sprint-link">'
+            'Month-end ledger close</a>'), f"the Current sprint card title is {header and header.group(1)!r}"
+        card_body = sprint_card[sprint_card.index('<div class="card-body">'):]
+        for absent in ("<a ", sprint_href, "Month-end ledger close"):
+            assert absent not in card_body, f"the Current sprint card body carries {absent!r}"
+        assert re.match(
+            r'<div class="card-body">\s*<div class="d-flex mb-2"><div>50% complete</div>'
+            r'<div class="ms-auto">Started <time datetime="[^"]+">[^<]+</time>, 0 days elapsed</div></div>'
+            r'\s*<div class="progress-stacked mb-2" data-role="sprint-breakdown">',
+            card_body), f"the Current sprint card body does not open with the progress row: {card_body[:400]!r}"
+        assert "current-sprint-started" not in sprint_card and "current-sprint-complete" not in sprint_card, (
+            "the separate Started and completion lines must be gone")
+        assert "COMPLETED<span class=\"legend-value\">2</span>" in sprint_card, (
+            "the OPEN sprint must hold a COMPLETED member, or the no-burndown check is vacuous")
+        assert "<div>50% complete</div>" in sprint_card and "progress-stacked" in sprint_card, (
+            "the Current sprint card must keep its completion text and its status breakdown")
+        for absent in ("chart-", 'role="img"', "burndown", "Burndown", '<div class="empty">'):
+            assert absent not in sprint_card, f"the Current sprint card carries {absent!r}"
+        charts = re.findall(r'<div [^>]*id="(chart-[a-z-]+)"', body)
+        assert charts == ["chart-open-by-type", "chart-completed-by-type", "chart-backlog-by-type"], (
+            f"the dashboard's charts are {charts}; only the three KPI donuts may remain")
+        assert 'style="' not in body, "the dashboard must carry no style attribute"
+
+        # Every task COMPLETED: Open tasks and Backlog read 0 and draw no donut.
+        _, _, body = self._req(port, "/roadmaps/card-settlement")
+        for role in ("kpi-open", "kpi-backlog"):
+            card = self._kpi_card(body, role)
+            assert '<div class="h1 mb-3">0</div>' in card, f"{role} must read 0"
+            assert '<div class="row align-items-center">' in card
+            for absent in ('<div class="col-auto">', 'role="img"', '<div class="empty">'):
+                assert absent not in card, f"{role}, whose value is 0, carries {absent!r}"
+        assert ('aria-label="Completed tasks by type: TASK 1 (50%), BUG 1 (50%)"'
+                in self._kpi_card(body, "kpi-completed")), "the Completed card must hold its donut"
+
+        # A roadmap with no task: no KPI card holds a donut.
+        status, _, body = self._req(port, "/roadmaps/treasury-greenfield")
+        assert status == 200
+        assert 'class="col-auto"' not in body and "-by-type" not in body, (
+            "an empty roadmap must render no type-breakdown donut")
+        data = json.loads(re.search(
+            r'<script type="application/json" id="dashboard-data">(.*?)</script>', body, re.S).group(1))
+        assert data == {"tasks_by_type": {"types": [], "open": [], "completed": [], "backlog": []}}, (
+            f"the empty roadmap's chart data block is {data}")
+        assert "Throughput" not in body and "chart-lg" not in body, (
+            "a roadmap with no OPEN sprint must render no Throughput card and no chart-lg")
+        empty_sprint_card = self._kpi_card(body, "current-sprint")
+        assert "No open sprint" in empty_sprint_card
+        assert re.search(r'<h3 class="card-title">(.*?)</h3>', empty_sprint_card, re.S).group(1) == (
+            "Current sprint"), "with no OPEN sprint the card title must read exactly Current sprint, with no link"
 
     def test_index_empty_state_when_no_roadmaps(self):
         proc, port = self._start(["--port", "0"], home=self._fresh_home())
@@ -969,13 +1122,13 @@ class TestWebInterface:
     # ====================================================================
 
     def test_sprints_page_shows_sprint_cards_not_full_task_table(self):
-        """The sprints landing page renders every sprint as a compact shared
+        """The sprints page renders every sprint as a compact shared
         sprint card (header, description, task-count footer) but NOT the full
         task table and NOT any inline member-task list or modal — those live on
         the tasks page and the single sprint page (SPEC/WEB.md § Shared
         Sprint-Card Partial; Acceptance Criteria 8/38)."""
         proc, port = self._start(["--port", "0"])
-        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
         assert "authentication hardening sprint" in body.lower(), "must show sprint cards"
@@ -1014,11 +1167,11 @@ class TestWebInterface:
         """Return the markup of each column of the sprint page's board, in the
         order rendered.
 
-        The board lives inside <main class="page-body">, so slicing main keeps
+        The board lives inside <div class="page-body">, so slicing the page body keeps
         the page header and the scripts after it out of every card assertion.
         """
-        main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S)
-        assert main, 'the page has no <main class="page-body"> region'
+        main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S)
+        assert main, 'the page has no <div class="page-body"> region'
         region = main.group(1)
         assert 'data-role="task-board"' in region, "the page renders no Kanban board"
         return region, region.split('data-role="task-board-column"')[1:]
@@ -1324,7 +1477,7 @@ class TestWebInterface:
         headers, body, parsed = self._list(port, "/roadmaps/payments_catalogue/tasks?size=25")
 
         assert headers.get("cache-control") == "no-store", headers.get("cache-control")
-        main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+        main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S).group(1)
         assert main.count('<div class="card">') == 1, "the page renders more than one card"
         assert main.count("<table") == 1 and '<table class="table table-vcenter card-table">' in main
         for forbidden in ("task-board", "card-sm card-link", "table-selectable",
@@ -1334,7 +1487,7 @@ class TestWebInterface:
         form = body[body.index("<form"):body.index("</form>")]
         assert body.count('type="checkbox"') == form.count('type="checkbox"') == 15, "a checkbox outside the dropdowns"
         assert re.search(
-            r'<div class="card-header flex-wrap gap-2">\s*<div>\s*<h2 class="card-title">Task list</h2>\s*</div>\s*'
+            r'<div class="card-header flex-wrap gap-2">\s*<div>\s*<h2 id="task-list-title" class="card-title">Task list</h2>\s*</div>\s*'
             r'<div class="card-actions">\s*(?:\{\{.*?\}\}\s*)?<form class="row g-2 align-items-end justify-content-end" method="get" '
             r'action="/roadmaps/payments_catalogue/tasks">', main, re.S), "the card header is not the Tabler title block and card-actions form"
         assert "card-subtitle" not in main
@@ -1702,7 +1855,7 @@ class TestWebInterface:
             ("/roadmaps/archived_settlements/tasks", "No task matches the filters"),
         ):
             _, body, parsed = self._list(port, path)
-            main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+            main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S).group(1)
             assert parsed["empty"] == title, f"{path}: empty state {parsed['empty']!r}, want {title!r}"
             for gone in ("<table", '<div class="card-footer">', "Rows per page", "Task list pages"):
                 assert gone not in main, f"{path}: the empty list still carries {gone!r}"
@@ -1986,7 +2139,7 @@ class TestWebInterface:
             f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
         ):
             _, _, body = self._req(port, path)
-            main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S).group(1)
+            main = re.search(r'<div class="page-body">(.*?)</main>', body, re.S).group(1)
             tags = self._opening_tags(main)
             assert tags, f"{path}: no markup parsed; the extraction is broken"
 
@@ -2021,10 +2174,19 @@ class TestWebInterface:
             assert "<tr" not in main, f"{path}: a table row remains"
 
             # No script was added: the vendored bundle plus the page's own board
-            # script, all from /static/, under the unchanged policy.
-            scripts = re.findall(r"<script\b([^>]*)>", body)
+            # script and the Sprint progress card's chart library and gauge
+            # script, all from /static/, under the unchanged policy. The card's
+            # chart data block is a data block, not a script (SPEC/WEB.md
+            # § Sprint Detail Sub-Template, rule 7; Acceptance Criteria 293, 294).
+            data_block = ' type="application/json" id="sprint-progress-data"'
+            all_scripts = re.findall(r"<script\b([^>]*)>", body)
+            assert all_scripts.count(data_block) == 1, (
+                f"{path}: the page carries {all_scripts.count(data_block)} chart data blocks, want 1"
+            )
+            scripts = [s for s in all_scripts if s != data_block]
             srcs = {re.search(r'src="([^"]*)"', s).group(1) for s in scripts}
-            want_srcs = {"/static/vendor/tabler/tabler.min.js", "/static/sprint-board.js"}
+            want_srcs = {"/static/vendor/tabler/tabler.min.js", "/static/sprint-board.js",
+                         "/static/vendor/apexcharts/apexcharts.min.js", "/static/sprint-progress.js"}
             assert srcs == want_srcs and len(scripts) == len(want_srcs), (
                 f"{path}: unexpected scripts {srcs!r}"
             )
@@ -2124,7 +2286,7 @@ class TestWebInterface:
             # The shell itself is untouched: the sidebar, the top navbar, the page
             # header and the main landmark keep their places.
             assert '<aside class="navbar navbar-vertical' in body, f"{path}: lost its sidebar"
-            assert '<main class="page-body">' in body, f"{path}: lost its main landmark"
+            assert '<main class="d-flex flex-column flex-fill">' in body, f"{path}: lost its main landmark"
 
     def test_serving_pages_writes_no_audit_entry(self):
         before = self._run(["audit", "stats", "-r", ROADMAP])[1]
@@ -2322,7 +2484,7 @@ class TestWebInterface:
         """AC11: three tabs labelled Próximos / Actual / Concluídos, left to
         right, with Actual active by default on load."""
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
 
         # The exact Portuguese labels appear in the required left-to-right order.
         i_prox = body.find(">Próximos")
@@ -2378,7 +2540,7 @@ class TestWebInterface:
         """AC12/AC13: sprints are classified by status into the right tab and
         each links to its own page."""
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints")
 
         # Every sprint links to its page.
         for sid in (self.pending_sid, self.open_sid, self.closed_sid):
@@ -2492,7 +2654,7 @@ class TestWebInterface:
         }
 
         proc, port = self._start(["--port", "0"])
-        status, _, body = self._req(port, f"/roadmaps/{roadmap}")
+        status, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints")
         assert status == 200
 
         def pane(marker):
@@ -3963,18 +4125,19 @@ class TestWebInterface:
         self._run(["sprint", "start", "-r", roadmap, str(current)])
 
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{roadmap}")
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints")
         for sprint_id, want_pane in ((upcoming, "tab-upcoming"), (current, "tab-current"), (closed, "tab-closed")):
             card, pane = self._sprint_card(body, roadmap, sprint_id)
             assert pane == want_pane, f"sprint #{sprint_id} is under {pane}, want {want_pane}"
             assert '<div class="markdown mb-1">' in card, f"sprint #{sprint_id}: no markdown container"
-            for want in ("<strong>settlement</strong>", "window.<br>", "<li>export the settlement day</li>",
+            for want in ("<strong>settlement</strong>", "window.\nKeep the ledger frozen.", "<li>export the settlement day</li>",
                          "the runbook, https://example.org/status and flow chart.",
                          '<li class="task-list-item"><span class="task-list-marker">[x]</span> freeze announced</li>',
                          '<li class="task-list-item"><span class="task-list-marker">[ ]</span> residual published</li>',
                          "<h4>Runbook</h4>", '<pre class="chroma">',
                          "The last line of the description."):
                 assert want in card, f"sprint #{sprint_id}: the card lacks {want!r}"
+            assert "window.<br>" not in card, f"sprint #{sprint_id}: a single newline renders as <br>"
             assert "**" not in card.split("card-title")[1].split("</h4>")[1], (
                 f"sprint #{sprint_id}: literal asterisks are displayed in the description"
             )
@@ -4053,7 +4216,9 @@ class TestWebInterface:
         for label, card in (("functional", functional_card), ("technical", technical_card),
                             ("criteria", criteria_card), ("summary", summary_card)):
             assert card.count('<div class="markdown">') == 1, f"the {label} card has no single markdown container"
-        assert "<strong>residual</strong>" in functional_card and "<br>" in functional_card
+        assert "<strong>residual</strong>" in functional_card
+        assert "<strong>residual</strong>.\nPer settlement window" in functional_card
+        assert "<br" not in functional_card
         assert "<code>!time.Now().Before(exp)</code>" in technical_card
         self._assert_no_raw_html("technical requirements", technical_card)
         assert '<input checked="" disabled="" type="checkbox">' in criteria_card
@@ -4120,7 +4285,7 @@ class TestWebInterface:
             self._assert_no_raw_html("sprint page", fragment)
             assert "alpha bravo charlie delta javascript:alert(1)" in fragment
         assert "<script>alert(1)" not in page and "<iframe" not in page
-        _, _, cards = self._req(port, f"/roadmaps/{roadmap}")
+        _, _, cards = self._req(port, f"/roadmaps/{roadmap}/sprints")
         card, _ = self._sprint_card(cards, roadmap, sprint_id)
         self._assert_no_raw_html("sprint card", card)
 
@@ -4150,7 +4315,7 @@ class TestWebInterface:
         # stylesheet (Acceptance Criterion 182).
         _, _, board_page = self._req(port, f"/roadmaps/{roadmap}/tasks")
         assert "/static/highlight.css" not in board_page, "the tasks page links highlight.css"
-        for path in (f"/roadmaps/{roadmap}", f"/roadmaps/{roadmap}/sprints/{sprint_id}",
+        for path in (f"/roadmaps/{roadmap}/sprints", f"/roadmaps/{roadmap}/sprints/{sprint_id}",
                      f"/roadmaps/{roadmap}/tasks/{hl_task}"):
             _, page_headers, page = self._req(port, path)
             assert page.count(link) == 1, f"{path} does not link the highlighting stylesheet once"
@@ -4160,6 +4325,10 @@ class TestWebInterface:
                 "frame-ancestors 'none'; base-uri 'self'"
             ), f"{path}: the Content-Security-Policy changed"
             for attrs in re.findall(r"<script([^>]*)>", page):
+                # The sprint page's chart data block is a data block, not a
+                # script (SPEC/WEB.md Acceptance Criterion 293).
+                if attrs == ' type="application/json" id="sprint-progress-data"':
+                    continue
                 assert 'src="/static/' in attrs, f"{path}: an inline or remote script"
         _, _, page = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
         assert '<pre class="chroma">' in page and '<span class="kd">func</span>' in page
@@ -4248,7 +4417,7 @@ class TestWebInterface:
         assert f'<time datetime="{cli["created_at"]}">' in page
         assert "end users must authenticate without a stored password" in page.lower()
         assert "specialists" not in page.lower(), "the removed specialists field reached the task page"
-        main = page[page.index('<main class="page-body">'):page.index("</main>")].lower()
+        main = page[page.index('<div class="page-body">'):page.index("</main>")].lower()
         for bad in ("<form", 'type="submit"', "<button", "<textarea", "<select", "<input"):
             assert bad not in main, f"the task page is read-only but carries {bad!r}"
         # The page loads no script of its own (Acceptance Criterion 98).
@@ -4307,7 +4476,7 @@ class TestWebInterface:
         assert '<h2 class="page-title">Rotate the signing keys</h2>' in page
         assert (f'<a class="nav-link" href="/roadmaps/{roadmap}/tasks" aria-current="page">' in page
                 and page.count('aria-current="page"') == 1), "the sidebar's Tasks entry is not the active one"
-        header = page[page.index('<div class="page-header d-print-none">'):page.index('<main class="page-body">')]
+        header = page[page.index('<div class="page-header d-print-none">'):page.index('<div class="page-body">')]
         actions = header[header.index('<div class="col-12 col-sm-auto ms-auto d-print-none">'):]
         assert actions.count("<a ") == 1 and f'href="/roadmaps/{roadmap}/tasks">' in actions, actions
         assert "Back to tasks</a>" in actions
@@ -4378,7 +4547,7 @@ class TestWebInterface:
         assert ">Position 10 of 10</div>" in moved_card and ">4 of 10 tasks completed</div>" in moved_card
 
         # AC225: the layout, in the served markup.
-        body = moved[moved.index('<main class="page-body">'):]
+        body = moved[moved.index('<div class="page-body">'):]
         order_marks = ['<div class="col-12 col-lg-4 order-lg-last">', 'data-role="task-sprint-card"',
                        'data-role="task-details-card"', '<div class="col-12 col-lg-8">',
                        ">Functional requirements</h3>", ">Technical requirements</h3>",
@@ -4437,7 +4606,7 @@ class TestWebInterface:
         assert f'<h2 class="page-title">{escaped}</h2>' in page, "the hostile title is not escaped in the header"
         title = re.search(r"<title>(.*?)</title>", page).group(1)
         assert "<b>" not in title and title.startswith(f"#{hostile_id} {escaped} - {ROADMAP}"), title
-        main = page[page.index('<main class="page-body">'):page.index("</main>")]
+        main = page[page.index('<div class="page-body">'):page.index("</main>")]
         for raw in ("<b>bold</b>", "<script", "<img", "onerror"):
             assert raw not in main, f"{raw!r} reached the task page as markup"
         assert page.count("<script") == 1
@@ -4616,16 +4785,21 @@ class TestWebInterface:
         )
 
     def test_roadmap_landing_page_renders_no_comment_log(self):
-        """The sprints landing page is the negative control: no comment surface.
+        """The dashboard and the sprints page are the negative controls: no
+        comment surface.
 
-        It renders compact sprint cards only, so neither the timeline, nor the
-        Comments card, nor any comment body may appear there.
+        They render figures and compact sprint cards only, so neither the
+        timeline, nor the Comments card, nor any comment body may appear there.
         """
         self._seed_comments()
         proc, port = self._start(["--port", "0"])
-        status, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
-        assert status == 200
+        for path in (f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/sprints"):
+            status, _, body = self._req(port, path)
+            assert status == 200
+            self._assert_no_comment_surface(body)
 
+    def _assert_no_comment_surface(self, body):
+        """No timeline, no Comments card, and no comment body in body."""
         assert '<ul class="timeline">' not in body
         assert '<li class="timeline-event">' not in body
         assert '<h3 class="card-title">Comments' not in body
@@ -5098,7 +5272,7 @@ class TestWebInterface:
         proc, port = self._start(["--port", "0"])
 
         graph_dir = Path(self.home) / ".roadmaps" / ROADMAP / "graph"
-        wal_before = (graph_dir / "wal").stat().st_size
+        log_before = write_ahead_log_fingerprint(graph_dir)
 
         # CREATE: executed, committed, and found by a separate client process
         # afterwards.
@@ -5114,12 +5288,12 @@ class TestWebInterface:
             f"this criterion exists against; got {result!r}")
 
         # The commit reached the write-ahead log, which is where a committed
-        # change is durable before it is acknowledged.
-        wal_after_write = (graph_dir / "wal").stat().st_size
-        assert wal_after_write > wal_before, (
-            f"AC47: the committed write must have been appended to the "
-            f"write-ahead log; it is {wal_after_write} bytes and was "
-            f"{wal_before} before the request")
+        # change is durable before it is acknowledged. The log is read as its
+        # files' content: its single-file `wal` is a fixed stub beside the
+        # segments, so no one file's size says whether it grew.
+        assert write_ahead_log_fingerprint(graph_dir) != log_before, (
+            "AC47: the committed write must have been appended to the "
+            "write-ahead log; no file of the log changed across the request")
 
         # SET: the property change is committed and visible afterwards.
         status, _, body = self._req(port, self._graph_data(
@@ -5210,9 +5384,10 @@ class TestWebInterface:
 
     # The spellings AC166 names, each paired with the member `rmp graph client`
     # publishes for its prefix: `plan` for EXPLAIN, `profile` for PROFILE. A
-    # PROFILE of a write is left out because the engine refuses it wherever it
-    # runs, so the client could not confirm its premise; its EXPLAIN executes
-    # nothing and can.
+    # PROFILE of a write is left out because confirming its premise through the
+    # client would perform the write: the engine executes a PROFILE of a write and
+    # applies it, so the fixture would change under the cases that follow. Its
+    # EXPLAIN executes nothing and can be confirmed.
     _PLAN_PREFIX_CASES = (
         ("EXPLAIN MATCH (n) RETURN n", "plan"),
         ("PROFILE MATCH (n) RETURN n", "profile"),
@@ -6212,12 +6387,12 @@ class TestWebInterface:
 
     @staticmethod
     def _page_header(path, body):
-        """Return the page-header block, from its opening div to the <main>."""
+        """Return the page-header block, from its opening div to the page body."""
         opening = '<div class="page-header d-print-none">'
         start = body.find(opening)
         assert start >= 0, f"page {path} renders no page header, so any assertion on it would be vacuous"
         rest = body[start:]
-        end = rest.find('<main class="page-body">')
+        end = rest.find('<div class="page-body">')
         assert end >= 0, f"page {path}: no page body follows the page header"
         return rest[:end]
 
@@ -6235,7 +6410,8 @@ class TestWebInterface:
 
         titles = {
             "/": "Roadmaps",
-            f"/roadmaps/{ROADMAP}": "Sprints",
+            f"/roadmaps/{ROADMAP}": "Dashboard",
+            f"/roadmaps/{ROADMAP}/sprints": "Sprints",
             f"/roadmaps/{ROADMAP}/tasks": "Tasks",
             f"/roadmaps/{ROADMAP}/audit": "Audit",
             f"/roadmaps/{ROADMAP}/graph": "Knowledge graph",
@@ -6371,19 +6547,23 @@ class TestWebInterface:
                 )
 
     def test_roadmap_pages_link_sprints_tasks_graph_in_sidebar(self):
-        """A roadmap's pages surface its Sprints/Tasks/Graph in the sidebar, each
+        """A roadmap's pages surface its five views in the sidebar, each
         resolving to its own endpoint (no #anchors on a combined page):
-        Sprints -> /roadmaps/{name}, Tasks -> /roadmaps/{name}/tasks,
-        Graph -> /roadmaps/{name}/graph (SPEC/WEB.md § UI Framework)."""
+        Dashboard -> /roadmaps/{name}, Sprints -> /roadmaps/{name}/sprints,
+        Tasks -> /roadmaps/{name}/tasks, Audit -> /roadmaps/{name}/audit,
+        Graph -> /roadmaps/{name}/graph (SPEC/WEB.md § UI Framework; Acceptance
+        Criterion 266)."""
         proc, port = self._start(["--port", "0"])
         for path in (
             f"/roadmaps/{ROADMAP}",
+            f"/roadmaps/{ROADMAP}/sprints",
             f"/roadmaps/{ROADMAP}/tasks",
             f"/roadmaps/{ROADMAP}/audit",
             f"/roadmaps/{ROADMAP}/graph",
         ):
             _, _, body = self._req(port, path)
-            assert f'href="/roadmaps/{ROADMAP}"' in body, "sidebar must link the roadmap's Sprints (landing)"
+            assert f'href="/roadmaps/{ROADMAP}"' in body, "sidebar must link the roadmap's Dashboard (landing)"
+            assert f'href="/roadmaps/{ROADMAP}/sprints"' in body, "sidebar must link the roadmap's Sprints"
             assert f'href="/roadmaps/{ROADMAP}/tasks"' in body, "sidebar must link the roadmap's Tasks"
             assert f'href="/roadmaps/{ROADMAP}/audit"' in body, "sidebar must link the roadmap's Audit"
             assert f'href="/roadmaps/{ROADMAP}/graph"' in body, "sidebar must link the roadmap's Graph"
@@ -6414,7 +6594,7 @@ class TestWebInterface:
         assert self._req(port, "/static/vendor/inter/files/inter-latin-wght-normal.woff2")[0] == 200, (
             "the Inter web font must be served"
         )
-        assert self._req(port, "/static/vendor/tabler-icons/fonts/tabler-icons.woff2")[0] == 200, (
+        assert self._req(port, "/static/vendor/tabler-icons/fonts/tabler-icons.core.woff2")[0] == 200, (
             "the Tabler Icons web font must be served"
         )
 
@@ -6558,28 +6738,28 @@ class TestWebInterface:
     #      tautological, because the kernel closes the listening socket at exit
     #      whatever the code did; the one thing it does still catch is a
     #      listener LEAKED to a child that outlived the server, so the repeated
-    #      case keeps it. The real assertion is in
-    #      test_{sigint,sigterm}_stops_accepting_while_a_request_is_in_flight,
-    #      which wedges a request open so the server is still running, and
-    #      requires a new connection to be refused while it is. Measured here:
-    #      the listener refuses about a millisecond after the signal, with the
-    #      process still alive.
+    #      case keeps it. The real assertion is in internal/web, in
+    #      TestRunServer_SignalDrainsAnInFlightResponse
+    #      (internal/web/shutdown_drain_test.go), which holds a response
+    #      mid-write so runServer is still running, and requires a new
+    #      connection to be refused while it is.
     #
     #   2. "allows in-flight requests a brief BOUNDED period to complete" — both
     #      words DRIVEN, by opposite cases, because they fail in opposite
     #      directions. A shutdown that cut its connections immediately would
     #      honour the bound and break "complete"; an unbounded one would honour
-    #      "complete" and break the bound. So
-    #      test_{sigint,sigterm}_lets_an_in_flight_request_finish stalls a
-    #      2.8 MB response across the signal and requires the whole body to
-    #      arrive with its declared Content-Length, while
-    #      test_{sigint,sigterm}_shutdown_is_bounded_by_the_grace_window wedges
-    #      the same response and never reads it, so Shutdown can never go
-    #      quiescent, and requires the process to exit between shutdownGrace and
-    #      shutdownGrace plus a margin. The floor proves it really waited; the
-    #      ceiling proves the wait was bounded. Measured: 5.05 s. Without the
-    #      bound that same case stops at the server's 30 s WriteTimeout instead,
-    #      so the two outcomes are eight margins apart and cannot be confused.
+    #      "complete" and break the bound. Both are driven in internal/web,
+    #      through runServer, by internal/web/shutdown_drain_test.go:
+    #      TestRunServer_SignalDrainsAnInFlightResponse holds a response
+    #      mid-write across the signal and requires the whole body to arrive
+    #      with its declared Content-Length, and
+    #      TestRunServer_SignalDrainIsBoundedByShutdownGrace wedges a response
+    #      that is never read, so Shutdown can never go quiescent, and requires
+    #      runServer to return at shutdownGrace and not before. They moved there
+    #      from this module because an end-to-end case can hold a response in
+    #      flight only with an asset larger than the kernel's socket buffers,
+    #      and no embedded asset is that large any more; in-process, the
+    #      response is held by construction.
     #
     #   3. "closes any graph store or database handle it opened" — the shutdown
     #      half is DECLINED as unobservable, with the reasoning and the
@@ -6656,55 +6836,6 @@ class TestWebInterface:
             f"take-over had not happened when the signal arrived, so a URL had been "
             f"published for a process that did not yet own its own shutdown"
         )
-
-    @classmethod
-    def _asset_size(cls):
-        """The on-disk size of the asset used to hold a request in flight.
-
-        The floor is the anti-vacuity guard for every in-flight case below: the
-        response has to be far larger than the socket buffers at both ends, or
-        the handler never blocks, the request is over before the signal is sent,
-        and the cases assert their properties against nothing.
-        """
-        size = (REPO_ROOT / IN_FLIGHT_ASSET_FILE).stat().st_size
-        assert size >= IN_FLIGHT_ASSET_MIN_BYTES, (
-            f"{IN_FLIGHT_ASSET_FILE} is {size} bytes, below the "
-            f"{IN_FLIGHT_ASSET_MIN_BYTES}-byte floor the in-flight cases need. A "
-            f"response that fits in the kernel's buffers completes before it can be "
-            f"signalled, so those cases would stop driving the drain"
-        )
-        return size
-
-    @staticmethod
-    def _slow_reader(port, host="127.0.0.1"):
-        """Open a connection whose receive buffer is far smaller than the reply.
-
-        The client's buffer and the server's send buffer hold a few tens of
-        kilobytes between them and the asset is megabytes, so the handler
-        genuinely blocks in Write and the request is still in flight when the
-        signal arrives. The request is sent here and deliberately NOT read.
-        """
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SLOW_READER_RCVBUF)
-        sock.settimeout(SHUTDOWN_GRACE_SECONDS + SHUTDOWN_EXIT_MARGIN_SECONDS)
-        sock.connect((host, port))
-        sock.sendall(
-            f"GET {IN_FLIGHT_ASSET_PATH} HTTP/1.1\r\n"
-            f"Host: {host}:{port}\r\n"
-            "Connection: close\r\n"
-            "\r\n".encode()
-        )
-        return sock
-
-    @staticmethod
-    def _declared_length(headers_blob):
-        """The Content-Length the server declared, as an int."""
-        match = re.search(rb"(?im)^Content-Length:[ \t]*(\d+)[ \t]*\r?$", headers_blob)
-        assert match, (
-            "the response carried no Content-Length, so there is nothing to hold the "
-            f"delivered body against: {headers_blob[:200]!r}"
-        )
-        return int(match.group(1))
 
     # ---- the four promises and the boundary ----------------------------
 
@@ -6790,133 +6921,6 @@ class TestWebInterface:
     def test_sigterm_stops_serving_gracefully_on_every_run(self):
         for run in range(1, GRACEFUL_STOP_RUNS + 1):
             self._graceful_stop_once(signal.SIGTERM, run)
-
-    def _in_flight_case(self, sig):
-        """Signal a server with a request still in flight and drain it after.
-
-        Drives promise 1 on a live process and promise 2's "complete" half: the
-        listener must already refuse while the server is still running, and the
-        response the server was midway through writing must still arrive whole.
-        """
-        label = f"{sig.name} with a request in flight"
-        size = self._asset_size()
-        proc, port = self._start(["--port", "0"])
-        sock = self._slow_reader(port)
-        try:
-            head = sock.recv(4096)
-            assert head.startswith(b"HTTP/1.1 200 OK"), (
-                f"{label}: the in-flight request was not answered 200: {head[:80]!r}"
-            )
-            assert len(head) < size, (
-                f"{label}: the whole {size}-byte response arrived in one read, so it was "
-                f"never in flight and this case drives nothing"
-            )
-
-            started = time.time()
-            proc.send_signal(sig)
-
-            # PROMISE 1, observed on a LIVE process: the listener is already
-            # gone while the server is still running, because the request it is
-            # draining has not finished.
-            refused_after = self._wait_refusing(port)
-            assert proc.poll() is None, (
-                f"{label}: the server exited before the in-flight response was drained, "
-                f"so the refusal observed {refused_after * 1000:.1f}ms after the signal "
-                f"proves only that the process is gone, not that it stopped accepting"
-            )
-
-            # PROMISE 2, "complete": read the rest and require the whole body.
-            buffered = bytearray(head)
-            while True:
-                try:
-                    chunk = sock.recv(65536)
-                except socket.timeout:
-                    raise AssertionError(
-                        f"{label}: the in-flight response never completed; "
-                        f"{len(buffered)} of {size} bytes arrived before the client's "
-                        f"own deadline. SPEC/WEB.md section \"Server Lifecycle\" step 7 "
-                        f"allows in-flight requests a bounded period to COMPLETE, not to "
-                        f"be cut"
-                    ) from None
-                if not chunk:
-                    break
-                buffered += chunk
-
-            code, elapsed = self._await_exit(proc, sig, started)
-        finally:
-            sock.close()
-
-        self._assert_clean_exit(code, sig, label)
-
-        headers_blob, separator, body = bytes(buffered).partition(b"\r\n\r\n")
-        assert separator, f"{label}: the response had no header terminator"
-        declared = self._declared_length(headers_blob)
-        assert declared == size, (
-            f"{label}: the server declared Content-Length {declared} for an asset of "
-            f"{size} bytes"
-        )
-        assert len(body) == declared, (
-            f"{label}: the in-flight response was CUT — {len(body)} of the declared "
-            f"{declared} bytes arrived. The shutdown stopped accepting new connections "
-            f"and took the live one with it, which is not the bounded drain step 7 "
-            f"specifies"
-        )
-        assert elapsed <= SHUTDOWN_GRACE_SECONDS + SHUTDOWN_EXIT_MARGIN_SECONDS, (
-            f"{label}: the server took {elapsed:.3f}s to stop"
-        )
-
-    def test_sigint_stops_accepting_while_a_request_is_in_flight(self):
-        self._in_flight_case(signal.SIGINT)
-
-    def test_sigterm_stops_accepting_while_a_request_is_in_flight(self):
-        self._in_flight_case(signal.SIGTERM)
-
-    def _bounded_case(self, sig):
-        """Wedge a response open and require the shutdown to give up on time.
-
-        The client stops reading and never resumes, so the handler stays blocked
-        in Write and http.Server.Shutdown can never go quiescent. The only thing
-        that can end this process is the deadline runServer put on it, which
-        makes the exit time a direct reading of shutdownGrace. Without that
-        deadline the same case would run to the server's 30 s WriteTimeout.
-        """
-        label = f"{sig.name} with a wedged response"
-        size = self._asset_size()
-        proc, port = self._start(["--port", "0"])
-        sock = self._slow_reader(port)
-        try:
-            head = sock.recv(4096)
-            assert head.startswith(b"HTTP/1.1 200 OK"), (
-                f"{label}: the wedged request was not answered 200: {head[:80]!r}"
-            )
-            assert len(head) < size, (
-                f"{label}: the whole {size}-byte response arrived in one read, so nothing "
-                f"is wedged and the grace window would never be reached"
-            )
-            started = time.time()
-            proc.send_signal(sig)
-            code, elapsed = self._await_exit(proc, sig, started)
-        finally:
-            sock.close()
-
-        self._assert_clean_exit(code, sig, label)
-        assert elapsed >= SHUTDOWN_GRACE_SECONDS, (
-            f"{label}: the server stopped {elapsed:.3f}s after the signal, before "
-            f"internal/web/server.go's shutdownGrace of {SHUTDOWN_GRACE_SECONDS:.0f}s "
-            f"had elapsed, with a request still in flight. It cut the connection instead "
-            f"of allowing the bounded period step 7 promises"
-        )
-        assert elapsed <= SHUTDOWN_GRACE_SECONDS + SHUTDOWN_EXIT_MARGIN_SECONDS, (
-            f"{label}: the server took {elapsed:.3f}s to stop, past shutdownGrace plus "
-            f"its margin. The period step 7 promises is BOUNDED, and a shutdown that "
-            f"waits on a client that never reads is bounded by nothing else"
-        )
-
-    def test_sigint_shutdown_is_bounded_by_the_grace_window(self):
-        self._bounded_case(signal.SIGINT)
-
-    def test_sigterm_shutdown_is_bounded_by_the_grace_window(self):
-        self._bounded_case(signal.SIGTERM)
 
     def _widened_startup_home(self):
         """A throwaway HOME whose startup sweep is wide enough to signal into.
@@ -7533,7 +7537,7 @@ class TestWebInterface:
             f"exactly one ERROR record expected; got {[r['raw'] for r in records]}"
         )
         rec = errors[0]
-        assert rec["msg"] == "sprints page load failed", f"msg = {rec['msg']!r}"
+        assert rec["msg"] == "dashboard load failed", f"msg = {rec['msg']!r}"
         for fragment in ("method=GET", f"path=/roadmaps/{ROADMAP}",
                          f"roadmap={ROADMAP}", "status=500", "err="):
             assert fragment in rec["raw"], (

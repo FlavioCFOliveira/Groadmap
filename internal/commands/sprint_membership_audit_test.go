@@ -106,9 +106,7 @@ func setupMembershipRoadmap(t *testing.T, name string) *membershipFixture {
 	if len(tasks) != len(seedTasks) {
 		t.Fatalf("seeded %d tasks, found %d", len(seedTasks), len(tasks))
 	}
-	for i := range tasks {
-		f.taskIDs = append(f.taskIDs, tasks[i].ID)
-	}
+	f.taskIDs = taskIDsInIDOrder(tasks)
 
 	for _, s := range []struct{ title, description string }{
 		{"Transport hardening", "Close the TLS and connection-pool findings raised by the review."},

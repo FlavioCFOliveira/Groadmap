@@ -22,7 +22,7 @@ func TestSprintCard_ShowsTitle(t *testing.T) {
 	f := seedSprintFixture(t, "web-sprint-card-title")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	// The fixture's titles double as descriptions; assert each distinct sprint
 	// title is present on the sprints landing page (rendered by the card header).
@@ -212,7 +212,7 @@ func TestSprint_TitleIsHTMLEscaped(t *testing.T) {
 	mux := buildMux()
 
 	for _, path := range []string{
-		"/roadmaps/" + name, // sprints landing (card header)
+		"/roadmaps/" + name + "/sprints",                   // sprints page (card header)
 		"/roadmaps/" + name + "/sprints/" + itoa(sprintID), // single sprint page (H2 header)
 	} {
 		body := servePage(t, mux, path)

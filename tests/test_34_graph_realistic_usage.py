@@ -197,9 +197,13 @@ class TestGraphRealisticUsage:
     def graph_dir(self) -> Path:
         return Path(self.test.roadmaps_dir) / self.roadmap / "graph"
 
-    def wal_size(self):
-        wal = self.graph_dir() / "wal"
-        return wal.stat().st_size if wal.exists() else None
+    def has_snapshot(self):
+        """Whether a fold has published a snapshot manifest. The log's files no
+        longer say whether it was folded -- a fold discards only whole segments,
+        and a log shorter than one segment keeps its one segment -- so the
+        snapshot a fold publishes is what a process outside the engine can
+        observe (SPEC/GRAPH.md § Synchronous Checkpoint on Write, step 3)."""
+        return (self.graph_dir() / "snapshot" / "manifest.json").is_file()
 
     # ---- modelled mutations (real store + model kept in lockstep) ----
 
@@ -529,20 +533,19 @@ class TestGraphRealisticUsage:
         assert direct == self.model.successors("comp-api-gateway", "DEPENDS_ON"), direct
 
         # ---------------------------------------------------------------
-        # PHASE 9 - Final invariants: full consistency, bounded WAL after
+        # PHASE 9 - Final invariants: full consistency, a folded log after
         # the long write session, and the >= 100 distinct-call requirement.
         # ---------------------------------------------------------------
         self.assert_consistent("final")
         # The WAL is bounded by the CHECKPOINT, and a server checkpoints when it
         # shuts down rather than after every write -- it holds the store open for
-        # its whole life, which is the point of it. Under `graph execute` each
-        # invocation opened, wrote and checkpointed, so the WAL was 0 between
-        # calls; asserting that here now would be asserting the old process
-        # model, not durability. The subject survives intact by driving the
-        # shutdown the SPEC specifies and measuring after it.
+        # its whole life, which is the point of it. The subject survives intact
+        # by driving the shutdown the SPEC specifies and observing the snapshot
+        # it publishes; that the fold covers the whole log is asserted, in log
+        # positions, by SPEC/GRAPH.md acceptance criterion 14's Go test.
+        assert not self.has_snapshot(), "precondition: nothing has folded before the shutdown"
         assert self.server.stop() == 0, "a graceful shutdown must exit 0"
-        assert self.wal_size() == 0, (
-            f"the shutdown checkpoint must truncate the WAL to 0; got {self.wal_size()}")
+        assert self.has_snapshot(), "the shutdown checkpoint must fold the log into a snapshot"
         assert self.calls >= 100, (
             f"realistic session must issue >= 100 distinct graph calls; issued {self.calls}")
 
@@ -611,12 +614,12 @@ class TestGraphRealisticUsage:
         # `graph execute` every call was already a fresh process, so deleting and
         # reading was enough. A server is one long-lived process, so the delete
         # and the read would be served from the same open store and would prove
-        # nothing about durability. Stopping the server checkpoints (truncating
-        # the WAL) and starting a new one is what makes the next read reconstruct
-        # purely from the snapshot's tombstone set -- a stricter test of the same
-        # thing, not a weaker one.
+        # nothing about durability. Stopping the server checkpoints and starting a
+        # new one is what makes the next read reconstruct
+        # from the snapshot's tombstone set -- a stricter test of the same thing,
+        # not a weaker one.
         assert self.server.stop() == 0, "a graceful shutdown must exit 0"
-        assert self.wal_size() == 0
+        assert self.has_snapshot(), "the shutdown checkpoint must fold the deletion into a snapshot"
         self.server = self.test.start_graph_server(self.roadmap)
         assert self.scalar("MATCH (n) RETURN count(n) AS c", "c") == 0, (
             "deleted node resurrected (tombstone not durable)")

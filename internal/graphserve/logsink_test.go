@@ -97,10 +97,22 @@ func (b *blockingWriter) records() [][]byte {
 // # Why the load is what it is
 //
 // The hazard needs BOTH an undrained destination and enough records to fill it.
-// Sixteen writers on ONE node is what produces the conflict flood — MEASURED at
-// 1.19 ERROR records per statement at that width — and 60 statements each gives
-// roughly 1,100 records against the ~304 that fill a 64 KiB pipe, so the buffer
-// is passed several times over rather than approached.
+// Sixteen writers on ONE node is what produces the conflict flood, and each
+// ROUND of 60 statements per writer is sent against the same blocked pipe.
+//
+// The number of rounds is not fixed, and that is the repair of rmp task #600.
+// How many ERROR records one statement produces is the engine's, not this
+// test's: it was MEASURED at 1.19 per statement when this test was written and
+// at 0.45 under GoGraph v0.16.0 (about 430 records from 960 statements).
+// GoGraph v0.17.0 did not move it: one round sent to a destination that is read,
+// five times per engine on the same machine, gave 0.25 to 0.32 records per
+// statement under v0.17.0 and 0.26 to 0.33 under v0.16.0. At 0.45, a single
+// round filled the pipe (~297 records) but not the pipe AND the queue
+// (logQueueDepth more), so nothing was dropped, no report was owed, and the
+// report assertion failed in 3 to 4 runs of 5 on a sink that was behaving
+// correctly. The test therefore sends rounds until the sink HAS dropped a record
+// while the destination is still blocked — the condition every assertion below
+// is about — and fails, rather than passes, if the budget ends first.
 //
 // # Why the assertions are what they are
 //
@@ -149,9 +161,12 @@ func TestDropSink_AServerWhoseStderrIsNotReadKeepsServing(t *testing.T) {
 
 	const writers = 16
 	const perWriter = 60
+	// maxRounds bounds the load when the engine produces far fewer records
+	// than measured; the context budget below bounds it in time.
+	const maxRounds = 20
 
-	// The budget is the wedge detector. Unwedged, this load takes about 1.5 s;
-	// wedged, the writers park behind statements that never return and the
+	// The budget is the wedge detector. Unwedged, one round takes about 1 s and
+	// two or three rounds reach a drop; wedged, the writers park behind statements that never return and the
 	// deadline is what ends the run.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -159,46 +174,15 @@ func TestDropSink_AServerWhoseStderrIsNotReadKeepsServing(t *testing.T) {
 	var answered, conflicts, unanswered atomic.Int64
 	var firstUnanswered atomic.Pointer[string]
 
-	var wg sync.WaitGroup
-	for writer := range writers {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for statement := range perWriter {
-				_, err := graphclient.Send(ctx, socket,
-					fmt.Sprintf("MATCH (n:Hot {key:'contended'}) SET n.counter = %d",
-						id*perWriter+statement))
-				if err == nil {
-					answered.Add(1)
-					continue
-				}
-				var sendErr *graphclient.SendError
-				if errors.As(err, &sendErr) && sendErr.Kind == graphclient.FailureConflict {
-					// A conflict that exhausted the ladder IS an answer: the
-					// server told the client what happened. It is a normal
-					// outcome of MVCC under this load
-					// (SPEC/GRAPH.md § Concurrency Inside the Server, rule 4).
-					conflicts.Add(1)
-					answered.Add(1)
-					continue
-				}
-				unanswered.Add(1)
-				text := err.Error()
-				firstUnanswered.CompareAndSwap(nil, &text)
-			}
-		}(writer)
+	rounds := 0
+	for ; rounds < maxRounds && sinkDropped(sink) == 0 && ctx.Err() == nil; rounds++ {
+		sendContendedRound(ctx, socket, rounds, writers, perWriter, &answered, &conflicts, &unanswered, &firstUnanswered)
 	}
-	wg.Wait()
+	statements := rounds * writers * perWriter
 
-	// 1. The destination really did fill. Without this the rest is vacuous.
-	const bufferFloor = 60 * 1024
-	if got := accepted.written.Load(); got < bufferFloor {
-		t.Fatalf("the unread destination accepted only %d bytes, want at least %d: the load did not "+
-			"fill the buffer, so this run never reached the condition the test exists for. "+
-			"Raise the writer count or the statements per writer", got, bufferFloor)
-	}
-
-	// 2. Every statement was answered. This is the criterion.
+	// 1. Every statement was answered. This is the criterion, and it is checked
+	//    first so a wedge is reported as a wedge: a wedged server is also one
+	//    whose sink may never have dropped anything.
 	if n := unanswered.Load(); n != 0 {
 		first := "<none captured>"
 		if p := firstUnanswered.Load(); p != nil {
@@ -208,10 +192,28 @@ func TestDropSink_AServerWhoseStderrIsNotReadKeepsServing(t *testing.T) {
 			"%d of them as exhausted conflicts).\nfirst failure: %s\n"+
 			"A blocked diagnostic write is stalling the goroutine that serves the session, which is "+
 			"rmp task #389: the logger must not put a write to stderr on the serving path",
-			n, writers*perWriter, answered.Load(), conflicts.Load(), first)
+			n, statements, answered.Load(), conflicts.Load(), first)
 	}
 
-	// 3. The loss was DECLARED. A sink that drops silently trades a noisy
+	// 2. The sink really did drop records while the destination was blocked.
+	//    Without this the report assertion below is about a loss that never
+	//    happened, and the rest is vacuous.
+	if sinkDropped(sink) == 0 {
+		t.Fatalf("%d statements in %d rounds left the sink without a single dropped record "+
+			"(the destination accepted %d bytes): the load never filled the pipe and the queue, "+
+			"so this run never reached the condition the test exists for",
+			statements, rounds, accepted.written.Load())
+	}
+
+	// 3. The destination really did fill.
+	const bufferFloor = 60 * 1024
+	if got := accepted.written.Load(); got < bufferFloor {
+		t.Fatalf("the unread destination accepted only %d bytes, want at least %d: the load did not "+
+			"fill the buffer, so this run never reached the condition the test exists for. "+
+			"Raise the writer count or the statements per writer", got, bufferFloor)
+	}
+
+	// 4. The loss was DECLARED. A sink that drops silently trades a noisy
 	//    failure for a quiet one, which is the whole objection to this design.
 	//    Draining the destination now lets the queued records and the report
 	//    through; the flush is what production runs before it exits.
@@ -235,6 +237,53 @@ func TestDropSink_AServerWhoseStderrIsNotReadKeepsServing(t *testing.T) {
 		t.Errorf("the dropped-records report carries no count.\nlast bytes of the stream:\n%s",
 			lastBytes(tail.String(), 600))
 	}
+}
+
+// sinkDropped reads the count of records the sink has discarded since its last
+// report reached the destination. While the destination is blocked no report can
+// be written, so a non-zero value is a loss the report still owes.
+func sinkDropped(s *dropSink) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped
+}
+
+// sendContendedRound sends one round of the contended load: writers goroutines,
+// each sending perWriter statements against the one contended node, and returns
+// when every statement has an outcome. Each outcome is classified into the
+// counters the acceptance test asserts on.
+func sendContendedRound(ctx context.Context, socket string, round, writers, perWriter int,
+	answered, conflicts, unanswered *atomic.Int64, firstUnanswered *atomic.Pointer[string]) {
+	var wg sync.WaitGroup
+	for writer := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for statement := range perWriter {
+				_, err := graphclient.Send(ctx, socket,
+					fmt.Sprintf("MATCH (n:Hot {key:'contended'}) SET n.counter = %d",
+						(round*writers+id)*perWriter+statement))
+				if err == nil {
+					answered.Add(1)
+					continue
+				}
+				var sendErr *graphclient.SendError
+				if errors.As(err, &sendErr) && sendErr.Kind == graphclient.FailureConflict {
+					// A conflict that exhausted the ladder IS an answer: the
+					// server told the client what happened. It is a normal
+					// outcome of MVCC under this load
+					// (SPEC/GRAPH.md § Concurrency Inside the Server, rule 4).
+					conflicts.Add(1)
+					answered.Add(1)
+					continue
+				}
+				unanswered.Add(1)
+				text := err.Error()
+				firstUnanswered.CompareAndSwap(nil, &text)
+			}
+		}(writer)
+	}
+	wg.Wait()
 }
 
 // lastBytes renders the tail of a captured stream for a failure message.

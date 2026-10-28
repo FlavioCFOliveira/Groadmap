@@ -48,10 +48,12 @@ const (
 	makefilePath        = "../../Makefile"
 )
 
-// pipeline names three of the jobs SPEC/BUILD.md § GitHub Actions Workflow
-// declares for one workflow: the job that runs the gates, the job that is the
-// `build` gate, and the job that publishes artefacts. The fourth, the job that
-// runs the end-to-end suite, has the same ID in both workflows, e2eJobID.
+// pipeline names the jobs SPEC/BUILD.md § GitHub Actions Workflow declares for
+// one workflow: the job that runs the gates, the job that is the `build` gate,
+// and the job that publishes the release. The job that runs the end-to-end
+// suite has the same ID in both workflows, e2eJobID. publishJob is empty for
+// the CI workflow, which publishes nothing: the release workflow is the only
+// workflow that publishes.
 type pipeline struct {
 	path       string
 	gateJob    string
@@ -67,13 +69,17 @@ const e2eJobID = "e2e"
 // SPEC/BUILD.md § GitHub Actions Workflow uses for each.
 func pipelines() []pipeline {
 	return []pipeline{
-		{path: ciWorkflowPath, gateJob: "test", buildJob: "build", publishJob: "dev-release"},
+		{path: ciWorkflowPath, gateJob: "test", buildJob: "build"},
 		{path: releaseWorkflowPath, gateJob: "test", buildJob: "build", publishJob: "release"},
 	}
 }
 
 // rel is the repository-relative path of the workflow, for failure messages.
 func (p pipeline) rel() string { return strings.TrimPrefix(p.path, "../../") }
+
+// publishes reports whether the workflow publishes a release, and so whether
+// its build job hands its artefacts on to a publishing job.
+func (p pipeline) publishes() bool { return p.publishJob != "" }
 
 // TestWorkflowsRunTheCompleteGateSet is the core regression gate: both
 // workflows MUST run every gate of SPEC/BUILD.md § Validation Gates other than
@@ -790,12 +796,12 @@ func TestWorkflowGateStepsCannotBeSkipped(t *testing.T) {
 // TestWorkflowJobsDependOnTheGates enforces the `needs:` chain of
 // SPEC/BUILD.md § Where the Gate Set Is Enforced: nothing is built or published
 // in parallel with the gates or the end-to-end job, or independently of them.
+// Only the release workflow has a publishing job to hold to the chain.
 func TestWorkflowJobsDependOnTheGates(t *testing.T) {
 	for _, p := range pipelines() {
 		t.Run(filepath.Base(p.path), func(t *testing.T) {
 			wf := parseWorkflow(t, p.path)
 			build := mustJob(t, wf, p.buildJob)
-			publish := mustJob(t, wf, p.publishJob)
 
 			if !slices.Contains(build.needs, p.gateJob) {
 				t.Errorf("%s: the build job %q does not declare `needs: %s`, so it can build artefacts in "+
@@ -810,7 +816,10 @@ func TestWorkflowJobsDependOnTheGates(t *testing.T) {
 					"end-to-end job.",
 					p.rel(), p.buildJob, e2eJobID, build.needs)
 			}
-			if !slices.Contains(publish.needs, p.buildJob) {
+			if !p.publishes() {
+				return
+			}
+			if publish := mustJob(t, wf, p.publishJob); !slices.Contains(publish.needs, p.buildJob) {
 				t.Errorf("%s: the publishing job %q does not declare `needs: %s`, so it can publish artefacts "+
 					"independently of the gates (it declares needs: %v). SPEC/BUILD.md § Where the Gate Set Is "+
 					"Enforced requires the publishing job to declare `needs:` on the build job.",
@@ -822,8 +831,9 @@ func TestWorkflowJobsDependOnTheGates(t *testing.T) {
 
 // TestWorkflowPermissionsAreLeastPrivilege enforces SPEC/BUILD.md § GitHub
 // Actions Workflow and the matching acceptance criterion: each workflow grants
-// `contents: read`, and exactly one job — the one that publishes — raises that
-// to `contents: write`.
+// `contents: read`; exactly one job of the release workflow — `release`, the
+// one that publishes — raises that to `contents: write`, and no job of the CI
+// workflow raises it.
 func TestWorkflowPermissionsAreLeastPrivilege(t *testing.T) {
 	for _, p := range pipelines() {
 		t.Run(filepath.Base(p.path), func(t *testing.T) {
@@ -850,7 +860,13 @@ func TestWorkflowPermissionsAreLeastPrivilege(t *testing.T) {
 					writers = append(writers, id)
 				}
 			}
-			if len(writers) != 1 || writers[0] != p.publishJob {
+			switch {
+			case !p.publishes() && len(writers) != 0:
+				t.Errorf("%s: the jobs holding `contents: write` are %v, but SPEC/BUILD.md § GitHub Actions "+
+					"Workflow allows none: the CI workflow publishes nothing, and no job of it raises the "+
+					"workflow-level `contents: read`.",
+					p.rel(), writers)
+			case p.publishes() && (len(writers) != 1 || writers[0] != p.publishJob):
 				t.Errorf("%s: the jobs holding `contents: write` are %v, but SPEC/BUILD.md § GitHub Actions "+
 					"Workflow allows exactly one — %q, the job that publishes.",
 					p.rel(), writers, p.publishJob)
@@ -865,6 +881,244 @@ func TestWorkflowPermissionsAreLeastPrivilege(t *testing.T) {
 					}
 				}
 			}
+		})
+	}
+}
+
+// ciJobs are the jobs SPEC/BUILD.md § CI Workflow declares for the CI workflow,
+// which declares no other.
+var ciJobs = []string{"test", e2eJobID, "build"}
+
+// publishingActions are the `uses` prefixes of the actions that hand a build
+// artefact out of a job or write a release: the artefact upload the release
+// workflow's build job runs, and the actions that create a GitHub release or
+// attach assets to one.
+var publishingActions = []string{
+	"actions/upload-artifact@",
+	"actions/upload-release-asset@",
+	"actions/create-release@",
+	"softprops/action-gh-release@",
+	"ncipollo/release-action@",
+	"svenstaro/upload-release-action@",
+}
+
+// checksumTools are the commands that generate a checksum file.
+var checksumTools = []string{"sha256sum", "sha512sum", "sha1sum", "shasum", "md5sum", "b2sum"}
+
+// TestCIWorkflowPublishesNothing is the regression gate for the rolling `dev`
+// pre-release the CI workflow used to publish. SPEC/BUILD.md § GitHub Actions
+// Workflow makes the release workflow the only workflow that publishes anything,
+// and the matching acceptance criterion states what reading
+// .github/workflows/ci.yml must show: the jobs `test`, `e2e` and `build` and no
+// other, no step that packs an archive, generates a checksum, uploads a build
+// artefact, or creates or deletes a release or a tag, and no job that raises the
+// workflow-level permission. TestCIPublishingCheckRejectsEveryPublishingStep
+// proves each rejection this test relies on.
+func TestCIWorkflowPublishesNothing(t *testing.T) {
+	for _, problem := range ciPublishingProblems(parseWorkflow(t, ciWorkflowPath)) {
+		t.Error(problem)
+	}
+}
+
+// ciPublishingProblems describes every way a parsed CI workflow departs from
+// "publishes nothing", or returns nothing when it publishes nothing. A command
+// is matched on its shell words wherever they stand in it, so the check errs on
+// the side of reporting: a CI step has no reason to name a packing, checksum,
+// release or tag command at all.
+func ciPublishingProblems(wf wfWorkflow) []string {
+	rel := strings.TrimPrefix(wf.path, "../../")
+	problems := make([]string, 0, 4)
+
+	if got, want := slices.Sorted(slices.Values(wf.jobOrder)), slices.Sorted(slices.Values(ciJobs)); !slices.Equal(got, want) {
+		problems = append(problems, fmt.Sprintf("%s: declares the jobs %v, but SPEC/BUILD.md § CI Workflow "+
+			"declares exactly %v and no other", rel, wf.jobOrder, ciJobs))
+	}
+
+	for _, id := range wf.jobOrder {
+		job := wf.jobs[id]
+		for _, scope := range sortedKeys(scopesAt(job.permissions, "write")) {
+			problems = append(problems, fmt.Sprintf("%s: job %q raises its permission to `%s: write`, but "+
+				"SPEC/BUILD.md § CI Workflow grants `contents: read` at workflow level and no job raises it",
+				rel, id, scope))
+		}
+		for _, step := range job.steps {
+			for _, prefix := range publishingActions {
+				if strings.HasPrefix(step.uses, prefix) {
+					problems = append(problems, fmt.Sprintf("%s: job %q, step %q uses %s, which publishes out of "+
+						"the job. SPEC/BUILD.md § GitHub Actions Workflow: the CI workflow publishes nothing — "+
+						"no release, no pre-release, and no build artefact", rel, id, step.name, step.uses))
+				}
+			}
+		}
+		for _, cmd := range jobCommands(&job) {
+			if what := publishingCommand(shellWords(cmd.text)); what != "" {
+				problems = append(problems, fmt.Sprintf("%s: job %q, step %q runs %q, which %s. SPEC/BUILD.md § "+
+					"GitHub Actions Workflow: the CI workflow publishes nothing, and no step of it packs an archive, "+
+					"generates a checksum, uploads a build artefact, or creates or deletes a release or a tag",
+					rel, id, job.steps[cmd.step].name, cmd.text, what))
+			}
+		}
+	}
+	return problems
+}
+
+// scopesAt returns the permission scopes granted at the given level.
+func scopesAt(permissions map[string]string, level string) map[string]bool {
+	scopes := make(map[string]bool, len(permissions))
+	for scope, granted := range permissions {
+		if granted == level {
+			scopes[scope] = true
+		}
+	}
+	return scopes
+}
+
+// publishingCommand describes what a shell command does towards publishing —
+// packing an archive, generating a checksum, or writing a release or a tag — or
+// returns the empty string when it does none of these.
+func publishingCommand(words []string) string {
+	for i, word := range words {
+		next := ""
+		if i+1 < len(words) {
+			next = words[i+1]
+		}
+		switch {
+		case word == "tar" && tarCreates(words[i+1:]):
+			return "packs an archive"
+		case word == "zip":
+			return "packs an archive"
+		case slices.Contains(checksumTools, word):
+			return "generates a checksum"
+		case word == "gh" && next == "release":
+			return "creates or deletes a release"
+		case word == "git" && (next == "tag" || next == "push"):
+			return "creates, deletes or pushes a tag"
+		}
+	}
+	return ""
+}
+
+// tarCreates reports whether the arguments of a `tar` command select its create
+// mode: `--create`, a short-flag cluster that holds `c` (`-czf`), or the
+// dash-less cluster of the traditional form (`tar czf`) as its first argument.
+func tarCreates(arguments []string) bool {
+	for i, argument := range arguments {
+		switch {
+		case argument == "--create":
+			return true
+		case strings.HasPrefix(argument, "--"):
+		case strings.HasPrefix(argument, "-"):
+			if strings.Contains(argument, "c") {
+				return true
+			}
+		case i == 0 && strings.Contains(argument, "c") && strings.Trim(argument, "abcdfhjklmoprtuvwxzABCGJMOPSTUVWZ") == "":
+			return true
+		}
+	}
+	return false
+}
+
+// TestCIPublishingCheckRejectsEveryPublishingStep proves that
+// ciPublishingProblems, which TestCIWorkflowPublishesNothing relies on, passes a
+// CI workflow that publishes nothing and reports each shape the rolling `dev`
+// pre-release took, and each other way of publishing out of the workflow. The
+// fixtures are parsed by the same reader as the real file.
+func TestCIPublishingCheckRejectsEveryPublishingStep(t *testing.T) {
+	// clean is a CI workflow of the specified shape: three jobs, a build job that
+	// compiles and checks the stamp, and a coverage upload that is reporting, not
+	// a build artefact.
+	const clean = "on: push\npermissions:\n  contents: read\njobs:\n" +
+		"  test:\n    runs-on: ubuntu-latest\n    steps:\n" +
+		"      - name: Run tests\n        run: go test ./...\n" +
+		"      - name: Upload coverage\n        uses: codecov/codecov-action@v7.0.0\n" +
+		"  e2e:\n    runs-on: ubuntu-latest\n    steps:\n" +
+		"      - name: Run end-to-end tests\n        run: python3 -u tests/run_tests.py\n" +
+		"  build:\n    runs-on: ubuntu-latest\n    needs: [test, e2e]\n    steps:\n" +
+		"      - name: Build binary\n        run: go build -buildvcs=true -o dist/rmp ./cmd/rmp\n" +
+		"      - name: Check build stamp\n        run: go version -m dist/rmp\n"
+
+	// step appends one step to the build job of the clean workflow.
+	step := func(body string) string { return clean + "      - name: Extra\n" + body }
+
+	cases := []struct {
+		name     string
+		src      string
+		problems []string
+	}{
+		{name: "the specified workflow", src: clean},
+		{
+			name: "a publishing job",
+			src: clean + "  dev-release:\n    needs: build\n    runs-on: ubuntu-latest\n" +
+				"    permissions:\n      contents: write\n    steps:\n" +
+				"      - name: Create dev release\n        uses: softprops/action-gh-release@v3.0.2\n",
+			problems: []string{
+				"declares the jobs [test e2e build dev-release]",
+				"job \"dev-release\" raises its permission to `contents: write`",
+				"job \"dev-release\", step \"Create dev release\" uses softprops/action-gh-release@v3.0.2",
+			},
+		},
+		{
+			name: "a missing job",
+			src: "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n" +
+				"      - name: Run tests\n        run: go test ./...\n",
+			problems: []string{"declares the jobs [test]"},
+		},
+		{
+			name:     "a tar archive",
+			src:      step("        run: tar -czf dist/rmp-dev.tar.gz -C dist rmp LICENSE README.md\n"),
+			problems: []string{"which packs an archive"},
+		},
+		{
+			name:     "a traditional-form tar archive",
+			src:      step("        run: tar czf rmp.tar.gz rmp\n"),
+			problems: []string{"which packs an archive"},
+		},
+		{
+			name:     "a zip archive",
+			src:      step("        run: (cd dist && zip -q rmp.zip rmp.exe)\n"),
+			problems: []string{"which packs an archive"},
+		},
+		{
+			name:     "a checksum",
+			src:      step("        run: sha256sum rmp.tar.gz > rmp.tar.gz.sha256\n"),
+			problems: []string{"which generates a checksum"},
+		},
+		{
+			name:     "an artefact upload",
+			src:      step("        uses: actions/upload-artifact@v7.0.1\n"),
+			problems: []string{"uses actions/upload-artifact@v7.0.1"},
+		},
+		{
+			name:     "a release deleted from the command line",
+			src:      step("        run: gh release delete dev --yes\n"),
+			problems: []string{"which creates or deletes a release"},
+		},
+		{
+			name:     "a tag deleted from the command line",
+			src:      step("        run: git push --delete origin dev\n"),
+			problems: []string{"which creates, deletes or pushes a tag"},
+		},
+		{
+			name:     "a tag created from the command line",
+			src:      step("        run: git tag -f dev\n"),
+			problems: []string{"which creates, deletes or pushes a tag"},
+		},
+		{
+			name: "a raised permission on a job that publishes nothing",
+			src: strings.Replace(clean, "    needs: [test, e2e]\n",
+				"    needs: [test, e2e]\n    permissions:\n      id-token: write\n", 1),
+			problems: []string{"job \"build\" raises its permission to `id-token: write`"},
+		},
+		{
+			name:     "a tar listing is not packing",
+			src:      step("        run: tar -tzf rmp.tar.gz\n"),
+			problems: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertProblems(t, ciPublishingProblems(parseWorkflowSource(tc.src, "fixture.yml")), tc.problems)
 		})
 	}
 }
@@ -1059,27 +1313,28 @@ func matrixTargets(t *testing.T, job *wfJob) []buildTarget {
 // published archive of every target omitted the licence file and nothing
 // noticed.
 //
-// The section governs every published archive, the release archives and the
-// rolling `dev` pre-release alike, so both workflows are checked. Everything
-// expected is parsed out of the specification and never restated here: an entry
-// added to its drawing, or a binary name changed in its Target OS table, fails
-// this test until the workflows ship it.
+// The section governs every published archive, and the release workflow is the
+// only workflow that publishes one, so only its build job is checked here; that
+// the CI workflow packs no archive at all is TestCIWorkflowPublishesNothing's
+// concern. Everything expected is parsed out of the specification and never
+// restated here: an entry added to its drawing, or a binary name changed in its
+// Target OS table, fails this test until the release workflow ships it.
 func TestPublishedArchivesPackTheSpecifiedStructure(t *testing.T) {
 	spec := parseArtifactStructure(t)
 
 	for _, p := range pipelines() {
+		if !p.publishes() {
+			continue
+		}
 		t.Run(filepath.Base(p.path), func(t *testing.T) {
 			wf := parseWorkflow(t, p.path)
 			build := mustJob(t, wf, p.buildJob)
 			commands := jobCommands(&build)
 
-			// Which archive forms a workflow must produce follows from the
-			// targets its build matrix covers: the release workflow builds
-			// Windows and so owes a .zip holding rmp.exe, while the CI
-			// fast-feedback subset has no Windows target and owes only the
-			// .tar.gz. SPEC/BUILD.md § Artifact Structure says as much, and
-			// adding a Windows target to the CI subset therefore makes this
-			// test demand the .zip form there too.
+			// Which archive forms the workflow must produce follows from the
+			// targets its build matrix covers: a Windows target owes a .zip
+			// holding rmp.exe, and every other target a .tar.gz holding rmp
+			// (SPEC/BUILD.md § Artifact Structure).
 			packSteps := make([]int, 0, len(spec.forms))
 			for _, form := range requiredForms(t, spec, &build, p.rel()) {
 				pack := packCommand(t, commands, packTool(t, form.format), p.rel())

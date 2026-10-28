@@ -173,8 +173,8 @@ func inFlightFieldTooLongMessage() string {
 // own loop did: at each tick, a fold is due once maxAge has passed since the last
 // fold, and the last fold starts at the zero time, so the first tick is due. The
 // gate decides WHETHER the due fold runs (see [foldGate]): it reads the
-// write-ahead log's durable offset once and folds only when the log has grown
-// since it was last folded. That read is taken at due instants and at no other
+// write-ahead log's durable end once and folds only when the log holds a durable
+// record no fold has covered. That read is taken at due instants and at no other
 // time, and it costs nothing that grows with the graph.
 //
 // A due fold the gate withholds is not a fold, so the last-fold time does not

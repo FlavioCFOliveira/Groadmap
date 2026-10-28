@@ -168,6 +168,7 @@ func TestGraphServe_RefusesAGraphPathThatIsNotADirectory(t *testing.T) {
 		t.Fatalf("writing the stray file at %s: %v", graphPath, err)
 	}
 
+	preserveUmask(t) // runGraphServe narrows the process umask; this test runs it in-process
 	var err error
 	stdout, _ := captureStdStreams(t, func() {
 		err = runGraphServe([]string{"-r", roadmap})

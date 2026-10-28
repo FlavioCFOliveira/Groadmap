@@ -408,7 +408,7 @@ func TestTaskPage_HostileValuesNeverReachThePageAsMarkup(t *testing.T) {
 	_ = database.Close() // test cleanup; a close error on a fixture handle is not under test
 
 	body := servePage(t, buildMux(), "/roadmaps/"+f.name+"/tasks/"+itoa(f.markupTaskID))
-	main := regionBetween(t, body, `<main class="page-body">`, "</main>")
+	main := regionBetween(t, body, `<div class="page-body">`, "</main>")
 
 	if got := strings.Count(body, "<script"); got != 1 {
 		t.Errorf("the page carries %d <script elements, want only the vendored bundle", got)
@@ -543,7 +543,7 @@ func TestTaskPage_HeaderActiveViewAndWayBack(t *testing.T) {
 	}
 
 	// The actions column holds exactly one link, Back to tasks, with no query.
-	header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<main class="page-body">`)
+	header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<div class="page-body">`)
 	actions := regionBetween(t, header, `<div class="col-12 col-sm-auto ms-auto d-print-none">`, "</div>")
 	if got := strings.Count(actions, "<a "); got != 1 {
 		t.Errorf("the actions column holds %d links, want exactly 1", got)
@@ -860,8 +860,8 @@ func TestTaskPage_Layout(t *testing.T) {
 	seedTaskPageFixture(t)
 
 	body := servePage(t, buildMux(), taskPagePath(pageTaskID))
-	main := regionBetween(t, body, `<main class="page-body">`, "</main>")
-	if got := strings.Count(main, `<div class="row row-cards task-page">`); got != 1 {
+	main := regionBetween(t, body, `<div class="page-body">`, "</main>")
+	if got := strings.Count(main, `<div class="row row-cards">`); got != 1 {
 		t.Fatalf("the page body holds %d task rows, want 1", got)
 	}
 	order := []string{
@@ -1056,7 +1056,7 @@ func TestTaskPage_StacksOnANarrowViewport(t *testing.T) {
 	if strings.Contains(body, "style=") {
 		t.Errorf("the task page carries an inline style attribute")
 	}
-	for _, col := range regexp.MustCompile(`<div class="(col-[^"]*)">`).FindAllStringSubmatch(regionBetween(t, body, `<main class="page-body">`, "</main>"), -1) {
+	for _, col := range regexp.MustCompile(`<div class="(col-[^"]*)">`).FindAllStringSubmatch(regionBetween(t, body, `<div class="page-body">`, "</main>"), -1) {
 		if !strings.HasPrefix(col[1], "col-12 ") {
 			t.Errorf("a column is %q; below lg every column must span the row", col[1])
 		}
@@ -1170,16 +1170,18 @@ func TestFocusVisible_BackLinksAndSidebarLinks(t *testing.T) {
 	mux := buildMux()
 	for path, back := range map[string]string{
 		taskPagePath(pageTaskID): `<a class="btn btn-outline-secondary" href="/roadmaps/payments/tasks">`,
-		"/roadmaps/" + pageRoadmap + "/sprints/" + itoa(pageSprintID): `<a class="btn btn-outline-secondary" href="/roadmaps/payments">`,
+		"/roadmaps/" + pageRoadmap + "/sprints/" + itoa(pageSprintID): `<a class="btn btn-outline-secondary" href="/roadmaps/payments/sprints">`,
 	} {
 		body := servePage(t, mux, path)
-		header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<main class="page-body">`)
+		header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<div class="page-body">`)
 		if !strings.Contains(header, back) {
 			t.Errorf("%s: the back link is not the a.btn the focus rule selects", path)
 		}
 		sidebar := regionBetween(t, body, `<aside class="navbar navbar-vertical`, "</aside>")
-		if got := strings.Count(sidebar, `class="nav-link"`); got != 5 {
-			t.Errorf("%s: %d sidebar nav-links, want 5", path, got)
+		// The roadmap index entry and the roadmap's five views (Acceptance
+		// Criterion 266).
+		if got := strings.Count(sidebar, `class="nav-link"`); got != 6 {
+			t.Errorf("%s: %d sidebar nav-links, want 6", path, got)
 		}
 		if strings.Contains(body, "style=") {
 			t.Errorf("%s carries an inline style attribute", path)
@@ -1203,7 +1205,7 @@ func TestRecordPages_ActionsColumnWrapsBelowTheTitle(t *testing.T) {
 		"/roadmaps/" + pageRoadmap + "/sprints/" + itoa(pageSprintID): `<div class="col-12 col-sm-auto ms-auto d-print-none">`,
 		"/roadmaps/" + pageRoadmap + "/graph":                         `<div class="col-auto ms-auto d-print-none">`,
 	} {
-		header := regionBetween(t, servePage(t, mux, path), `<div class="page-header d-print-none">`, `<main class="page-body">`)
+		header := regionBetween(t, servePage(t, mux, path), `<div class="page-header d-print-none">`, `<div class="page-body">`)
 		if got := strings.Count(header, "ms-auto d-print-none"); got != 1 {
 			t.Errorf("%s: %d actions columns, want 1", path, got)
 		}

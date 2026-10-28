@@ -59,6 +59,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphstore"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 )
 
 // Failures a test's own fold reports. They are package-level sentinels because
@@ -778,16 +779,16 @@ func waitForRecord(t *testing.T, buf *syncBuffer, message, which string) {
 // # What it asserts, and why the log's SIZE is the right observable
 //
 // A fold is three things a test outside the process cannot see — a capture, a
-// snapshot write, and a prefix truncation — and exactly one thing it can: the
-// write-ahead log gets SHORTER. Nothing else in the system shortens it. So the
-// test writes until the log has demonstrably grown, then waits for it to shrink
-// below that high-water mark, and a shrink is a fold that reached phase 3.
+// snapshot write, and the discarding of the folded prefix — and one thing it can:
+// the write-ahead log's control file records a covered position that moves. The
+// log's files do not say so, because a fold discards only whole segments and a
+// log this short keeps its one segment (SPEC/GRAPH.md § Synchronous Checkpoint
+// on Write, step 3). So the test writes, reads the log's end, and waits for the
+// control file to record a covered position at or beyond it: a fold that reached
+// its last phase.
 //
-// The high-water mark is tracked DURING the writes rather than read once after
-// them, because a fold landing between the last write and a single reading would
-// leave a mark of zero and the test would then be waiting for the log to fall
-// below nothing. The wait is a poll against a generous deadline rather than a
-// sleep of one cadence: what is asserted is that a fold happens, not when.
+// The wait is a poll against a generous deadline rather than a sleep of one
+// cadence: what is asserted is that a fold happens, not when.
 func TestServedServer_FoldsTheWriteAheadLogWhileItServes(t *testing.T) {
 	const (
 		writes   = 40
@@ -800,49 +801,33 @@ func TestServedServer_FoldsTheWriteAheadLogWhileItServes(t *testing.T) {
 	})
 	defer stop()
 
-	var high int64
 	for i := 0; i < writes; i++ {
 		statement := "CREATE (n:Folded {seq: " + itoa(i) + ", kind: 'in-flight-checkpoint'})"
 		if _, err := graphclient.Send(context.Background(), socket, statement); err != nil {
 			t.Fatalf("write %d of %d failed: %v", i, writes, err)
 		}
-		if size := walBytesAt(graphDir); size > high {
-			high = size
-		}
 	}
 
-	if high == 0 {
-		t.Fatalf("the write-ahead log at %s/wal never held a byte across %d acknowledged writes; "+
+	end := logEnd(t, graphDir)
+	if end == 0 {
+		t.Fatalf("the write-ahead log under %s holds no record across %d acknowledged writes; "+
 			"the commits reached no disk (SPEC/GRAPH.md § Durability and Checkpointing in a "+
 			"Long-Lived Process, rule 1)", graphDir, writes)
 	}
 
 	deadline := time.Now().Add(foldWait)
 	for {
-		if size := walBytesAt(graphDir); size < high {
+		if testenv.InspectWAL(t, graphDir).Covered() >= end {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the write-ahead log at %s/wal is still %d bytes after %v, having peaked at "+
-				"%d, on a cadence owing a fold every 500ms and looking every 100ms. An in-flight "+
-				"checkpoint truncates the log prefix, so a log that never shrinks is a "+
-				"checkpointer that never folded (SPEC/GRAPH.md § Durability and Checkpointing in "+
-				"a Long-Lived Process, rule 6)",
-				graphDir, walBytesAt(graphDir), foldWait, high)
+			t.Fatalf("the write-ahead log under %s records position %d as covered after %v, short of "+
+				"the %d its writes reached, on a cadence owing a fold every 500ms and looking every "+
+				"100ms. A fold records the position its snapshot covers, so a covered position that "+
+				"never moves is a checkpointer that never folded (SPEC/GRAPH.md § Durability and "+
+				"Checkpointing in a Long-Lived Process, rule 6)",
+				graphDir, testenv.InspectWAL(t, graphDir).Covered(), foldWait, end)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-}
-
-// walBytesAt reports the size of the write-ahead log under graphDir, or zero when
-// it cannot be stated.
-//
-// A missing log is zero and not a failure: the file is created on the first
-// append, so a store that has been read and never written has none.
-func walBytesAt(graphDir string) int64 {
-	info, err := os.Stat(filepath.Join(graphDir, "wal"))
-	if err != nil {
-		return 0
-	}
-	return info.Size()
 }

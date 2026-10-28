@@ -422,7 +422,7 @@ func TestTaskPage_TimestampsUseTheDisplayFormOnTheServer(t *testing.T) {
 	// Every <time> of the page is well formed and displays the display form of its
 	// own stored value, which carries no T, no fraction, and no Z (Acceptance
 	// Criterion 207): six timestamps in all.
-	if found := assertTimeElements(t, regionBetween(t, body, `<main class="page-body">`, "</main>")); len(found) != 6 {
+	if found := assertTimeElements(t, regionBetween(t, body, `<div class="page-body">`, "</main>")); len(found) != 6 {
 		t.Errorf("the task page carries %d <time> elements, want 6", len(found))
 	}
 

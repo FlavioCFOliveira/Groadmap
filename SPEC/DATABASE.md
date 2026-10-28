@@ -24,6 +24,7 @@
   - [Sprints](#sprints)
   - [Audit Queries](#audit-queries)
   - [Comments](#comments)
+  - [Dashboard Queries](#dashboard-queries)
 - [Relationships](#relationships)
   - [Transactional Atomicity Guarantees](#transactional-atomicity-guarantees)
 - [Data Constraints](#data-constraints)
@@ -2074,6 +2075,170 @@ ORDER BY task_id ASC;
 **Use case:** the sprint page's member-tasks board of the read-only web interface (see `WEB.md § Sprint Detail Sub-Template`) shows a comment count on each card but no comment text, because a task's comments are shown on that task's own page, which the card links to (see `WEB.md § Roadmap Task Page`). The board therefore never reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
 
 This statement has no `sprint_comments` form: the Roadmap Sprint Page presents one sprint's comment log in full through the single-parent listing, and no surface counts the comments of several sprints at once.
+
+### Dashboard Queries
+
+The read-only web interface's dashboard page (see `WEB.md § Roadmap Dashboard Page`)
+states every figure it shows from the statements of this section and from three
+reads defined elsewhere in this file. Every one of them is a read: none writes a
+row, and none alters the schema.
+
+**One read transaction.** The page issues all of its statements inside one
+read-only transaction on the read-only connection (see
+`WEB.md § Tasks and Sprints from SQLite`), so every statement reads the same
+committed state and no figure reflects a write that another figure does not. The
+transaction ends, and the handle is released, when the last statement has been
+read.
+
+**Bounded and fixed in number.** Every count is computed by the database with
+`COUNT` and, where it is per group, `GROUP BY`; every list carries a `LIMIT` equal
+to its row cap. No statement returns every task row, and the page issues no
+statement per task, per sprint, or per row. The page issues exactly the
+statements below, in any order: the six statements of this section — one per
+subsection — every one of them always issued, plus the three reads defined
+elsewhere —
+
+- the average-velocity read and the sprint-statistics member read of
+  `Join Order of the Sprint Completion Counts` (under Performance Optimization
+  below), the first always and the second only when a sprint is `OPEN`, over that
+  sprint's id; and
+- the audit read of `Query Audit Entries` above, with no predicate, `LIMIT 10`, and
+  no `OFFSET`.
+
+The number of statements is therefore eight with no sprint `OPEN` and nine with
+one, whatever the number of tasks, sprints, or audit entries.
+
+**Parameterised.** Every status value and every row cap is a bound parameter;
+none is concatenated into the SQL.
+
+#### Dashboard Task Counts by Type and Status
+
+Returns the number of tasks of each combination of type and status that the
+roadmap holds, and nothing else.
+
+```sql
+SELECT type, status, COUNT(*) AS task_count
+FROM tasks
+GROUP BY type, status;
+```
+
+**What it answers.** Every task-count figure of the dashboard that does not
+depend on a dependency, a sprint, or a timestamp is a sum over these rows, so the
+figures are readings of one result and cannot disagree: the open tasks (every
+status except `COMPLETED`), the tasks in progress (`DOING` and `TESTING`), the
+completed tasks, the backlog (`BACKLOG`), the roadmap's task total, and the open,
+completed, and backlog counts per type. The per-type counts are the data of the
+type-breakdown donuts of the `Open tasks`, `Completed`, and `Backlog` cards, so no
+further statement is issued for the donuts. A combination no task holds
+produces no row, and the caller reads its count as `0`.
+
+**Index.** The statement reads the whole table in the order of `idx_tasks_type`
+and groups in a temporary B-tree; it counts in the database and returns no task
+row. It returns at most fifty rows, one per combination
+of the ten types and the five statuses. No index is added for it.
+
+#### Dashboard Blocked Task Count
+
+Returns the number of open tasks with at least one dependency whose depended-on
+task is not `COMPLETED`.
+
+```sql
+SELECT COUNT(*)
+FROM tasks t
+WHERE t.status <> ?                          -- 'COMPLETED'
+  AND EXISTS (
+    SELECT 1
+    FROM task_dependencies d CROSS JOIN tasks b ON b.id = d.depends_on_task_id
+    WHERE d.task_id = t.id AND b.status <> ?  -- 'COMPLETED'
+  );
+```
+
+**Counted once.** `EXISTS` makes a task count once however many of its
+dependencies are unfinished. A dependency on a `COMPLETED` task never makes a task
+blocked, and a `COMPLETED` task is never counted (see
+`task_dependencies` Table above for the direction of a row).
+
+**Index.** The outer scan reads `idx_tasks_status_priority` as a covering index.
+The dependency lookup is a search of the `task_dependencies` primary key by its
+leading column, `task_id`, and the depended-on task is read by its primary key;
+`CROSS JOIN` keeps `task_dependencies` as the driving table of that lookup.
+
+#### Dashboard Open Sprint
+
+Returns the roadmap's `OPEN` sprint, or no row when no sprint is `OPEN`.
+
+```sql
+SELECT id, title, started_at, max_tasks
+FROM sprints
+WHERE status = ?;                            -- 'OPEN'
+```
+
+**At most one row.** At most one sprint is `OPEN` at a time, and the partial
+unique index `idx_one_open_sprint` both enforces that and serves this search (see
+`sprints` Table above). When the statement returns a row, the page issues the
+sprint-statistics member read of `Join Order of the Sprint Completion Counts`
+over that sprint's id; the sprint's member count, its count per status, and its
+active count against `max_tasks` are all derived from that one member read,
+exactly as `rmp sprint stats` and `rmp sprint show` derive theirs.
+
+#### Dashboard Tasks in Progress
+
+Returns the tasks in progress, the longest in progress first, at most ten.
+
+```sql
+SELECT id, title, status, started_at
+FROM tasks
+WHERE status IN (?, ?)                       -- 'DOING', 'TESTING'
+ORDER BY started_at IS NULL, started_at ASC, id ASC
+LIMIT ?;                                     -- 10
+```
+
+**Ordering.** `started_at` ascending, a task whose `started_at` is unset after
+every task whose `started_at` is set, and `id` ascending among equals, so the
+order is total.
+
+**Index.** The rows are found through `idx_tasks_status_priority` by status and
+sorted in a temporary B-tree; the sort covers the tasks in progress alone.
+
+#### Dashboard Highest-Severity Open Tasks
+
+Returns the open tasks of highest severity, at most five.
+
+```sql
+SELECT id, title, severity, priority
+FROM tasks
+WHERE status <> ?                            -- 'COMPLETED'
+ORDER BY severity DESC, priority DESC, id ASC
+LIMIT ?;                                     -- 5
+```
+
+**Ordering.** `severity` descending, then `priority` descending, then `id`
+ascending, so the order is total.
+
+**Index.** `idx_tasks_severity_priority` supplies the first two terms of the
+ordering, and a temporary B-tree orders only the last term within equal severity
+and priority, so the scan stops once the `LIMIT` is filled.
+
+#### Dashboard Upcoming Sprints
+
+Returns the `PENDING` sprints, the next to execute first, at most five, each with
+its member count.
+
+```sql
+SELECT s.id, s.title,
+       (SELECT COUNT(*) FROM sprint_tasks st WHERE st.sprint_id = s.id) AS task_count
+FROM sprints s
+WHERE s.status = ?                           -- 'PENDING'
+ORDER BY s.order_index ASC
+LIMIT ?;                                     -- 5
+```
+
+**`task_count` is the membership count.** It counts the sprint's `sprint_tasks`
+rows, every member whatever its status, which is the `task_count` a `Sprint`
+object carries (`MODELS.md § Sprint`).
+
+**Index.** The sprints are found through `idx_sprints_status`, and each count is a
+covering search of `sprint_tasks` by `sprint_id`, at most five of them.
 
 ---
 

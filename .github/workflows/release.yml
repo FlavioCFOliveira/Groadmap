@@ -40,7 +40,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
-          version: v2.14.0
+          version: v2.15.0
           args: --timeout=5m
 
       - name: Run tests
@@ -52,7 +52,7 @@ jobs:
       # in CI and in a local `make check`. A failure to install fails the job:
       # the gate is never skipped.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.30.0
 
       - name: Run gosec
         run: gosec -exclude-dir=.claude/worktrees ./...
@@ -77,9 +77,9 @@ jobs:
           go-version-file: go.mod
 
       - name: Set up Python
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Build rmp
         run: go build -o ./bin/rmp ./cmd/rmp
@@ -186,7 +186,7 @@ jobs:
           fi
           buildinfo=$(go version -m "${binary}")
           if ! grep -Eq '^[[:space:]]+build[[:space:]]+vcs\.revision=' <<< "${buildinfo}"; then
-            echo "${binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the artefact is uploaded." >&2
+            echo "${binary} carries no vcs.revision build setting, so it cannot name the commit it was built from; the job stops before the binary leaves it." >&2
             exit 1
           fi
 
@@ -230,7 +230,7 @@ jobs:
           sha256sum ${{ steps.create_archive.outputs.ARCHIVE }} > ${{ steps.create_archive.outputs.ARCHIVE }}.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
           path: |
@@ -252,7 +252,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           path: dist
           pattern: release-*
@@ -304,6 +304,18 @@ jobs:
           tar -tzf "dist/${archive}"
           (cd dist && sha256sum -c "${archive}.sha256")
 
+      # SPEC/DEPLOY.md § GitHub Release Body: the release body is the version's
+      # section of CHANGELOG.md, read from this job's checkout of the tag. The
+      # script fails the job here, before any release exists, when CHANGELOG.md
+      # holds no section for the version, more than one, or an empty one.
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          scripts/changelog-section.sh "${VERSION}" CHANGELOG.md > "${RUNNER_TEMP}/release-notes.md"
+          cat "${RUNNER_TEMP}/release-notes.md"
+
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -315,6 +327,9 @@ jobs:
           # being passed through literally.
           artifacts=(dist/*.tar.gz dist/*.zip dist/*.sha256)
 
+          # An existing release (a re-run) keeps its body: only the artefacts are
+          # uploaded. A new release takes the extracted section as its body, and
+          # gh places it before the notes GitHub generates for the tag.
           if gh release view "${version}" &>/dev/null; then
             echo "Release ${version} already exists. Uploading new artifacts..."
             for file in "${artifacts[@]}"; do
@@ -323,6 +338,7 @@ jobs:
           else
             gh release create "${version}" \
               --title "Release ${version}" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" \
               --generate-notes \
               --verify-tag \
               "${artifacts[@]}"

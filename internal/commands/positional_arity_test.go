@@ -61,6 +61,10 @@ func dispatchInvocation(t *testing.T, family string, args ...string) (string, er
 		t.Fatalf("family %q missing from the registry", family)
 	}
 
+	// A dispatch can reach `graph serve`, whose handler narrows the process
+	// umask for good; the invocation must leave the test binary's as it was.
+	preserveUmask(t)
+
 	var err error
 	out := captureStdout(t, func() { err = cmd.DispatchFamily(args) })
 	return out, err

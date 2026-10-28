@@ -15,14 +15,19 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Help text structure | `HELP.md` |
 | Knowledge graph feature (design, persistence, what is and is not checked) | `GRAPH.md` |
 | Web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
-| Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
+| Web roadmap dashboard page / landing (`/roadmaps/{name}`, the four key figures and the type-breakdown donuts of three of them, the current sprint card with its status breakdown, the work-in-progress, highest-severity, recent-activity, and upcoming-sprints card-tables, the empty states, and the one consistent read) | `WEB.md § Roadmap Dashboard Page` |
+| Web dashboard chart library (vendored ApexCharts, the Tabler vendors stylesheet, Tabler's chart options, series colours, no toolbar; also the sprint page's progress gauge) | `WEB.md § Dashboard Chart Library` |
+| Web dashboard chart data JSON shape (the `dashboard-data` data block) | `DATA_FORMATS.md § Dashboard Chart Data` |
+| Web sprint progress chart data JSON shape (the `sprint-progress-data` data block of the sprint page) | `DATA_FORMATS.md § Sprint Progress Chart Data` |
+| Web dashboard read statements (the six aggregate and bounded statements, the three reads shared with `rmp stats`, `rmp sprint stats`, and the audit log page, the one read transaction, the fixed statement count) | `DATABASE.md § Dashboard Queries` |
+| Web roadmap sprints page (`/roadmaps/{name}/sprints`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
 | Web roadmap tasks page (`/roadmaps/{name}/tasks`, one paginated task list in a Tabler card, the card-header filter bar — search, sprint, status and type multi-select dropdowns — the query parameters and their validation, the filter-state cookie and the default filter state, server-side pagination and rows-per-page selector) | `WEB.md § Roadmap Tasks Page` |
 | Web tasks-page search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, applied on the server) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
-| Web sprint detail sub-template (metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
+| Web sprint detail sub-template (sprint summary row, metadata datagrid, Sprint progress card and its gauge, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
 | Web task page (`/roadmaps/{name}/tasks/{id}`, every task field, the comments timeline, the sprint context card with position and progress, the way back to the tasks page) | `WEB.md § Roadmap Task Page` |
-| Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting through the generated, lazily built lexer registry, and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the sprint page's 80-character line length, which the task page does not carry) | `WEB.md § Markdown Rendering` |
+| Web Markdown rendering of the long free-text fields (task requirements, acceptance criteria, completion summary, task and sprint comment bodies, sprint description): the one server-side goldmark renderer, extensions, line breaks, demoted headings, chroma highlighting through the generated, lazily built lexer registry, and its dark stylesheet, link and image rules, raw-HTML omission, the sprint card's non-interactive form, the typography of rendered Markdown (body line height and base block spacing, list markers, heading scale, link colours, the real Inter italic face, the full container width with no maximum line length) | `WEB.md § Markdown Rendering` |
 | Date-range filter values (`--created-since`/`--created-until`, `--since`/`--until`): the two accepted forms, the 1970-01-01 through 9999-12-31 range, and the refusal | `DATA_FORMATS.md § Date Filter Values` |
 | Web date and time display (the `YYYY-MM-DD HH:mm:ss` form every page shows, in UTC as stored, truncated to the second; the one Go formatter; the `<time datetime>` value; the surfaces it governs and the JSON it leaves in ISO 8601) | `WEB.md § Date and Time Display` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
@@ -39,10 +44,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web status / priority / severity / task type badge colours (semantic Tabler `bg-*-lt` mapping, including the type badge on the sprint board's cards and in the tasks page's rows, and the count badges of the sprints-page tabs and of the sprint board's columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
-| Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
+| Vendored web assets / embedded Tabler framework (with its vendors stylesheet), D3.js (with d3-sankey), and ApexCharts | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Free-text UTF-8 encoding constraint (only valid UTF-8 is accepted and stored) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
-| What Groadmap does not check about a Cypher statement (eight silent hazards, each reporting success, and the one direction the pinned engine is measured to get right) | `GRAPH.md § What Groadmap Does Not Check` |
+| What Groadmap does not check about a Cypher statement (five silent hazards, each reporting success; the relationship writes and reads the pinned engine is measured to get right; and the list value it refuses) | `GRAPH.md § What Groadmap Does Not Check` |
 | Published field name in a validation error message (one name per field, underscored; how it differs from the flag name) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
 | Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
@@ -107,9 +112,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Business rules are enforced by application code; the schema uses no triggers | `DATABASE.md § Business Rules Are Enforced by Application Code` |
 | System design / modules | `ARCHITECTURE.md` |
 | Data directory layout | `ARCHITECTURE.md § Directory Structure` |
-| File and directory permissions (`0700`, `0600`, enforcement, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
+| File and directory permissions (`0700`, `0600`, enforcement, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement`; for the graph store's entries, `GRAPH.md § Persistence Layout`, rule 4 |
 | Filesystem safety (no symlink following, CWE-59) | `ARCHITECTURE.md § Security Guarantees` |
 | Filesystem layout migration (per-roadmap directories) | `ARCHITECTURE.md § Filesystem Layout Migration` |
+| Knowledge-graph store format migration (detection of the single-file write-ahead-log format, the backup taken before the engine's one-way conversion, its location, name, modes and failure, its removal once the conversion succeeds, and the manual restore available only while a backup is kept) | `GRAPH.md § Graph Store Format Migration` |
 | Error handling / sentinel errors | `ARCHITECTURE.md § Error Handling` |
 | Which SQLite driver failures the CLI classifies, the line each prints instead of the driver's text, and how a write that loses a race is refused | `ARCHITECTURE.md § Classification of Database Driver Failures` |
 | A flag supplied more than once in one invocation (exit code `2`, the published line, no flag is repeatable) | `COMMANDS.md § Repeated Flags` |
@@ -195,14 +201,14 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
 | Help tokens, token positions, and the flag values that never ask for help | `HELP.md § Help tokens` |
 | The exit codes a subcommand help lists, their agreement with the subcommand's contract entry, and the gate that holds it | `HELP.md § Agreement with the contract` |
-| Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
+| Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement`; for the graph store's entries (`0700` directories, `0600` files, the server's umask, the repair before the open), `GRAPH.md § Persistence Layout`, rule 4 |
 | Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
 | Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |
 | Published field names in validation messages (field to published name, and when a message names the flag instead) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Which commands read standard input at all (exactly two flag values, and no other command) | `DATA_FORMATS.md § Input` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
 | Cypher query input source, maximum query length, the bounded standard-input read, and the refusal of a positional argument on `graph client` | `GRAPH.md § Cypher Input Source and Precedence` |
-| What Groadmap does not check about a Cypher statement, the outcome of each unchecked hazard, and the relationship-read direction measured correct at the pinned engine | `GRAPH.md § What Groadmap Does Not Check` |
+| What Groadmap does not check about a Cypher statement, the outcome of each unchecked hazard, and the relationship behaviours measured correct at the pinned engine | `GRAPH.md § What Groadmap Does Not Check` |
 | Knowledge-graph node `key` uniqueness (what the invariant is, which comparison decides that two keys are the same, that the product does not enforce it, and the audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
 | Knowledge-graph schema management (the index and constraint statements the engine accepts, schema object naming, the non-atomic drop-then-create, and the schema failure classes) | `GRAPH.md § Schema Management` |
 | Declared positional arity per command, the refusal of an excess positional argument, and the refusal of an unrecognised flag written between or after the positional arguments (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
@@ -235,16 +241,21 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
 | Knowledge graph feature, persistence layout, multi-layer conventions | `GRAPH.md` |
 | Web interface (server behaviour, routes, pages, security model) | `WEB.md` |
-| Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
+| Graph store directory (`graph/` subdir) and the modes of every entry in it | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
 | Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Query plan JSON (the recursive plan node, and which of its figures an `EXPLAIN` and a `PROFILE` each publish) | `DATA_FORMATS.md § Graph Plan Node` |
 | Write counters JSON (the eleven published keys, the rule that omits a zero, and the rule that omits the whole block for a statement that changed nothing) | `DATA_FORMATS.md § Graph Query Counters` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
+| Web dashboard chart data JSON shape | `DATA_FORMATS.md § Dashboard Chart Data` |
+| Web sprint progress chart data JSON shape | `DATA_FORMATS.md § Sprint Progress Chart Data` |
+| Web dashboard SQL statements | `DATABASE.md § Dashboard Queries` |
+| Web roadmap dashboard page (the landing page, its figures and their definitions) | `WEB.md § Roadmap Dashboard Page` |
+| Web dashboard chart library (ApexCharts, its options and colours, for the dashboard and the sprint page) | `WEB.md § Dashboard Chart Library` |
 | One realisation of the graph value mapping (which surfaces are bound, what each still owns, why the Path rendering is not shared, and what preserves the byte identity) | `DATA_FORMATS.md § One Realisation of the Mapping` |
 | Tasks-page search text preparation (the trim, normalisation, and folding rules; the single server implementation of each) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
 | Markdown rendering of the web interface's long free-text fields (the one renderer, its safety boundary, the only HTML inserted unescaped) | `WEB.md § Markdown Rendering` |
-| Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
+| Vendored web assets / embedded Tabler framework (with its vendors stylesheet), D3.js (with d3-sankey), and ApexCharts | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / store locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
 | Graph server socket (`graph.sock`), its mode, and what a leftover one means | `GRAPH.md § Socket Path and Permissions` (layout in `GRAPH.md § Persistence Layout`) |
@@ -287,7 +298,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Per-roadmap home directory: `~/.roadmaps/<name>/` with permissions `0700`. The directory name is the roadmap name and is the container for all files the application uses for that roadmap.
 - Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600`, created with mode `0600` from the outset (no umask-derived window) and re-applied and re-verified every time `rmp` opens the database. A database that cannot be brought to `0600` fails the command. The SQLite sidecars `project.db-wal` and `project.db-shm` live alongside and use the same `0600` permissions, restricted opportunistically rather than as a hard guarantee. See `ARCHITECTURE.md § Open-Time Permission Enforcement`.
 - Neither the data directory, nor any roadmap home directory, nor `project.db` or any of its `-wal`, `-shm` and `-journal` companions may be a symbolic link; `rmp` refuses to follow a symlink when creating, opening, or migrating a roadmap directory or database (CWE-59). See `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Security Guarantees`.
-- Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created by `rmp graph serve` on first use. See `GRAPH.md § Persistence Layout`.
+- Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created by `rmp graph serve` on first use. Every directory below it is `0700` and every file below it `0600`, from creation, under the umask `0077` the server sets, and repaired before the store is opened. See `GRAPH.md § Persistence Layout`, rule 4.
 - Per-roadmap graph server socket: `~/.roadmaps/<name>/graph.sock` with permissions `0600`, present only while `rmp graph serve` is running for that roadmap. See `GRAPH.md § Socket Path and Permissions`.
 - Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.
 

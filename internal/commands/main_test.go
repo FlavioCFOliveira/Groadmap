@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -38,6 +39,11 @@ func TestMain(m *testing.M) {
 	if code, isChild := graphserver.RunChild(); isChild {
 		os.Exit(code)
 	}
+	// The second child: the whole of `rmp graph serve`, started under a umask
+	// of 0000, for the store-mode criteria (graph_serve_modes_unix_test.go).
+	if code, isChild := serveCLIChild(); isChild {
+		os.Exit(code)
+	}
 	os.Exit(runTests(m))
 }
 
@@ -48,7 +54,22 @@ func runTests(m *testing.M) int {
 	restore := testenv.HermeticHome()
 	defer restore()
 
-	return m.Run()
+	// The umask guard. runGraphServe narrows the process umask to 0077 and
+	// never restores it, which is right for `rmp graph serve` and wrong for a
+	// test binary: every test after an in-process call would create its files
+	// under it. A test that calls runGraphServe in-process — directly or
+	// through the registry — must call preserveUmask first; one that does not
+	// fails the run here instead of narrowing the rest of it silently.
+	before := processUmask()
+	code := m.Run()
+	if after := processUmask(); after != before {
+		fmt.Fprintf(os.Stderr, "FAIL: the test run left the process umask at %#o, want the %#o it started "+
+			"with: a test called runGraphServe in-process without preserveUmask\n", after, before)
+		if code == 0 {
+			code = 1
+		}
+	}
+	return code
 }
 
 // shortHome is a HOME under which a roadmap's DERIVED socket path fits, for a

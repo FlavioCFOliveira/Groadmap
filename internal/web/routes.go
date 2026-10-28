@@ -110,13 +110,20 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /{$}", handleIndex)
 	mux.HandleFunc("HEAD /{$}", handleIndex)
 
-	// Roadmap sprints page (landing): the roadmap's sprints as three tabs.
-	mux.HandleFunc("GET /roadmaps/{name}", handleSprints)
-	mux.HandleFunc("HEAD /roadmaps/{name}", handleSprints)
+	// Roadmap dashboard page (landing): the roadmap's key figures, current
+	// sprint, charts, and lists (SPEC/WEB.md § Roadmap Dashboard Page).
+	mux.HandleFunc("GET /roadmaps/{name}", handleDashboard)
+	mux.HandleFunc("HEAD /roadmaps/{name}", handleDashboard)
+
+	// Roadmap sprints page: the roadmap's sprints as three tabs. The literal
+	// "sprints" segment routes here, and sprints/{id} to the sprint page, without
+	// conflict (SPEC/WEB.md § Roadmap Sprints Page).
+	mux.HandleFunc("GET /roadmaps/{name}/sprints", handleSprints)
+	mux.HandleFunc("HEAD /roadmaps/{name}/sprints", handleSprints)
 
 	// Roadmap tasks page: the full task table. A distinct, more specific
 	// pattern than /roadmaps/{name}; Go 1.22+ ServeMux routes the literal
-	// "tasks" segment here and {name} alone to handleSprints without conflict,
+	// "tasks" segment here and {name} alone to handleDashboard without conflict,
 	// exactly as the sprints/{id} and graph patterns already coexist.
 	mux.HandleFunc("GET /roadmaps/{name}/tasks", handleTasks)
 	mux.HandleFunc("HEAD /roadmaps/{name}/tasks", handleTasks)
@@ -133,7 +140,7 @@ func buildMux() *http.ServeMux {
 
 	// Roadmap audit log page: the full audit log, paginated. A distinct, more
 	// specific pattern than /roadmaps/{name}; Go 1.22+ ServeMux routes the
-	// literal "audit" segment here and {name} alone to handleSprints without
+	// literal "audit" segment here and {name} alone to handleDashboard without
 	// conflict, exactly as the tasks, sprints/{id}, and graph patterns do. The
 	// optional page query parameter is parsed and clamped inside the handler;
 	// an out-of-range or garbage page renders 200 (clamped), never 404

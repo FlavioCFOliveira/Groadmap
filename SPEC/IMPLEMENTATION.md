@@ -624,7 +624,10 @@ the boundary.
    within the request. The graph store shares no connections, locks, or
    transactions with the SQLite layer; the two persistence mechanisms are fully
    independent.
-2. The server takes the store lock exclusively, opens the store, and thereafter
+2. The server takes the store lock exclusively, copies a store still in the
+   single-file write-ahead-log format to a backup before anything opens it, opens
+   the store, removes that backup once the conversion has succeeded
+   (`GRAPH.md § Graph Store Format Migration`), and thereafter
    runs each statement it is sent through the engine's transactional path so that
    a change it makes is committed atomically. It folds the write-ahead log on its
    own cadence and at shutdown, and releases the lock last. Opening the store is

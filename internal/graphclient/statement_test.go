@@ -474,6 +474,62 @@ func TestSend_ClassifiesAStatementFailure(t *testing.T) {
 	}
 }
 
+// TestSend_ClassifiesAFieldTooLongByItsCodesAlone pins SPEC/GRAPH.md § Field
+// Length Limits, rules 3 and 13: the refusal of a field too long for a durable
+// format is recognised by the two failure codes the engine's server gives it, and
+// by nothing else.
+//
+// The negative cases are the half that fails on a wider match. The argument-error
+// code is the one an earlier engine gave this refusal and the one the pinned
+// engine still gives a numeric argument out of range, so it must not select the
+// class even carrying the engine's own field-length wording; and that wording
+// under an ordinary code must not select it either, because recognition is never
+// by text.
+func TestSend_ClassifiesAFieldTooLongByItsCodesAlone(t *testing.T) {
+	const fieldDiagnostic = "cypher: label is 65536 bytes, maximum 65535: token too long"
+
+	cases := []struct {
+		name string
+		code string
+		want Failure
+	}{
+		{name: "an over-long token", code: overLongNameCode, want: FailureFieldTooLong},
+		{name: "any other over-long field", code: overLongFieldCode, want: FailureFieldTooLong},
+		{name: "the argument-error code an earlier engine used", code: "Neo.ClientError.Statement.ArgumentError", want: FailureStatement},
+		{name: "the same words under an ordinary code", code: "Neo.ClientError.Statement.SyntaxError", want: FailureStatement},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			server := startScriptedServer(t, func(request any, runCount int64) exchange {
+				return defaultSession(request, func(request any, _ int64) exchange {
+					if _, isRun := request.(*proto.Run); isRun {
+						return exchange{responses: []any{&proto.Failure{Code: c.code, Message: fieldDiagnostic}}}
+					}
+					return ok()
+				}, runCount)
+			})
+
+			_, err := Send(context.Background(), server.socket, "CREATE (n:`LLLLLLLL`)")
+
+			var sendErr *SendError
+			if !errors.As(err, &sendErr) {
+				t.Fatalf("error = %v (%T), want a *SendError", err, err)
+			}
+			if sendErr.Kind != c.want {
+				t.Errorf("kind = %v under code %s, want %v", sendErr.Kind, c.code, c.want)
+			}
+			if sendErr.Code != c.code || sendErr.Diagnostic != fieldDiagnostic {
+				t.Errorf("code/diagnostic = %q/%q, want the server's own %q/%q",
+					sendErr.Code, sendErr.Diagnostic, c.code, fieldDiagnostic)
+			}
+			if got := server.runs.Load(); got != 1 {
+				t.Errorf("the server saw %d RUN message(s), want 1: a refused field fails the same way "+
+					"every time", got)
+			}
+		})
+	}
+}
+
 // TestSend_ClassifiesAConnectionLostAfterTheStatementWasSent is rule 4.
 //
 // A commit is durable before it is acknowledged, so a connection that dies

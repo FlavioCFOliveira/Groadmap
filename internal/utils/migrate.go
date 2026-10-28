@@ -85,7 +85,7 @@ func migrateLegacyLayout(warn *os.File) error {
 	// layout migration; the per-roadmap loop below only hardens each roadmap
 	// home (~/.roadmaps/<name>/), never the ~/.roadmaps container itself, so a
 	// loosened data directory would survive a migration unnoticed (finding #59).
-	if err := os.Chmod(dataDir, DataDirPerm); err != nil {
+	if err := os.Chmod(dataDir, DataDirPerm); err != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
 		return fmt.Errorf("%w: setting permissions on data directory %s: %v", ErrIO, dataDir, err)
 	}
 	if err := VerifyPermissions(dataDir, DataDirPerm); err != nil {
@@ -202,7 +202,7 @@ func migrateOneRoadmap(dataDir, name string, warn *os.File) error {
 	if err := os.MkdirAll(roadmapDir, DataDirPerm); err != nil {
 		return fmt.Errorf("%w: creating roadmap directory %s: %v", ErrIO, roadmapDir, err)
 	}
-	if err := os.Chmod(roadmapDir, DataDirPerm); err != nil {
+	if err := os.Chmod(roadmapDir, DataDirPerm); err != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
 		return fmt.Errorf("%w: setting permissions on roadmap directory %s: %v", ErrIO, roadmapDir, err)
 	}
 

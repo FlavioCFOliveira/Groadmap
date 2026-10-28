@@ -34,15 +34,30 @@ terms the server model puts it in:
 - The durable state a graph carries from one server to the next is what a server
   LEFT BEHIND when it stopped. Every durability assertion here therefore runs the
   writes through one server, stops it -- whose shutdown checkpoint folds the log
-  into the snapshot and truncates it -- and reads the data back through a FRESH
-  server process.
+  into the snapshot -- and reads the data back through a FRESH server process.
 - The snapshot is self-sufficient: it carries the node-identifier-to-key mapper,
-  the deletion tombstones and the registered schema, so truncating the log after
-  it loses nothing committed.
+  the deletion tombstones and the registered schema, so discarding the folded
+  prefix of the log loses nothing committed.
 - A statement whose transaction appended nothing to the log owes no fold. Neither
-  `snapshot/` nor `wal` is touched on its account, and a shutdown that owes no
-  fold writes nothing at all -- both halves asserted here by fingerprinting those
-  bytes and comparing them.
+  `snapshot/` nor any file of the write-ahead log is touched on its account, and
+  a shutdown that owes no fold writes nothing at all -- both halves asserted here
+  by fingerprinting those bytes and comparing them.
+
+WHAT THIS SUITE DOES NOT READ OFF THE LOG
+-----------------------------------------
+The write-ahead log is a sequence of segments whose records carry positions that
+only grow; a fold records in the log's control file the position its snapshot
+covers and discards only whole segments below it, so a log shorter than one
+segment is not shortened by a fold at all, and the single-file `wal` beside the
+segments is a fixed one-record stub (SPEC/GRAPH.md § Synchronous Checkpoint on
+Write, step 3; § Persistence Layout). No file's size therefore says whether the
+log was folded, and SPEC/GRAPH.md acceptance criterion 14 requires that question
+to be read through the engine's own inspection of the log, which a Go test does
+(internal/graphserve's TestShutdownFold_BoundsTheLogInWholeSegments). What this
+suite asserts instead is what a process outside the engine can observe: that a
+write changed the log's bytes, that a fold rewrote the snapshot, that a statement
+which appended nothing changed neither, and that a fresh server reads back what
+was committed.
 - FR7 failure policy: a checkpoint that fails AFTER the commits it would fold are
   already durable must not fail anything. The server still exits 0, the failure is
   reported on the server's own stderr rather than to the caller whose write
@@ -64,7 +79,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase, assert_graph_write_shape
+from tests.base_test import (
+    GroadmapTestBase, assert_graph_write_shape, write_ahead_log_fingerprint,
+)
 
 
 EXIT_OK = 0
@@ -115,9 +132,16 @@ class TestGraphCheckpoint:
     def snapshot_dir(self) -> Path:
         return self.graph_dir() / "snapshot"
 
-    def wal_size(self):
-        wal = self.graph_dir() / "wal"
-        return wal.stat().st_size if wal.exists() else None
+    def log_fingerprint(self):
+        """Every file of the write-ahead log, each by content hash."""
+        return write_ahead_log_fingerprint(self.graph_dir())
+
+    def manifest_digest(self):
+        """The content hash of the snapshot manifest, or None when there is no
+        snapshot. A fold publishes a new manifest every time it runs, so a
+        changed digest is a fold that ran."""
+        manifest = self.snapshot_dir() / "manifest.json"
+        return hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.is_file() else None
 
     # `write` and `query_json` both send one statement to the running server
     # through `rmp graph client`, which is the only subcommand that runs one.
@@ -149,19 +173,17 @@ class TestGraphCheckpoint:
         return self.server
 
     def durable_fingerprint(self):
-        """The bytes of the durable graph state: the write-ahead log and every
-        file under `snapshot/`, each by content hash.
+        """The bytes of the durable graph state: every file of the write-ahead
+        log and every file under `snapshot/`, each by content hash.
 
-        The two lock files the server keeps beside them are its own runtime
+        The lock files the server and the engine keep beside them are runtime
         state and not the graph's, so they are left out: what SPEC/GRAPH.md
         § Durability and Checkpointing in a Long-Lived Process, rule 4, promises
-        to leave "byte for byte" is `snapshot/` and `wal`, and those are what
-        this reads.
+        to leave "byte for byte" is `snapshot/` and every file of the
+        write-ahead log, and those are what this reads.
         """
-        wal = self.graph_dir() / "wal"
         fingerprint = {
-            "wal": hashlib.sha256(wal.read_bytes()).hexdigest() if wal.is_file() else None,
-            "wal_size": wal.stat().st_size if wal.is_file() else None,
+            "log": self.log_fingerprint(),
             "snapshot": None,
         }
         snapshot = self.snapshot_dir()
@@ -354,11 +376,12 @@ class TestGraphCheckpoint:
     def test_snapshot_is_written_by_the_shutdown_checkpoint(self):
         assert not self.snapshot_dir().exists(), (
             "a graph served for the first time has no snapshot: nothing has folded yet")
+        log_before = self.log_fingerprint()
         self.write("CREATE (s:Spec {key:'authentication'})")
         assert not self.snapshot_dir().exists(), (
             "no invocation checkpoints any more, so an acknowledged write leaves "
             "the snapshot directory alone")
-        assert self.wal_size() > 0, (
+        assert self.log_fingerprint() != log_before, (
             "the acknowledged write is durable in the write-ahead log before the "
             "client is answered, which is what makes the fold deferrable")
 
@@ -371,50 +394,42 @@ class TestGraphCheckpoint:
             "log has grown")
         assert mapper.is_file(), (
             "the snapshot must carry mapper.bin (self-sufficient) so the "
-            "write-ahead log can be truncated safely")
+            "folded prefix of the write-ahead log can be discarded safely")
 
-    def test_wal_truncated_by_the_shutdown_checkpoint(self):
-        self.write("CREATE (s:Spec {key:'authentication'})")
-        assert self.wal_size() > 0, "precondition: the write is in the log"
-        code = self.server.stop()
-        assert code == EXIT_OK, f"the server must exit 0 on SIGINT; exit={code}"
-        assert self.wal_size() == 0, (
-            f"the shutdown checkpoint folds the log into the snapshot and then "
-            f"truncates it; got {self.wal_size()}")
-
-    def test_wal_is_bounded_by_each_servers_shutdown(self):
-        """Without a fold the write-ahead log grows monotonically for the whole
-        life of the graph. What bounds it is the checkpoint, and the checkpoint
-        is the server's: inside one server's life the log GROWS with every
-        write, and each server's shutdown takes it back to zero.
+    def test_each_servers_shutdown_folds_what_it_was_written(self):
+        """Inside one server's life every write appends to the log, and each
+        server's shutdown folds what it was written into a snapshot it
+        publishes afresh. A server opened over a current snapshot appends
+        nothing of its own, and the folds lose nothing committed.
         """
-        previous = self.wal_size()
+        previous = self.log_fingerprint()
         for i in range(1, 8):
             self.write(f"CREATE (t:Task {{key:'task-{i}'}})")
-            size = self.wal_size()
-            assert size > previous, (
-                f"write {i} must have appended to the log: {previous} -> {size}")
-            previous = size
+            current = self.log_fingerprint()
+            assert current != previous, f"write {i} must have appended to the log"
+            previous = current
 
         code = self.server.stop()
         assert code == EXIT_OK, f"the server must exit 0 on SIGINT; exit={code}"
-        assert self.wal_size() == 0, (
-            f"the first server's shutdown must fold and truncate; got {self.wal_size()}")
+        first_fold = self.manifest_digest()
+        assert first_fold is not None, "the first server's shutdown must publish a snapshot"
 
+        log_at_rest = self.log_fingerprint()
         self.server = self.test.start_graph_server(self.roadmap)
-        assert self.wal_size() == 0, (
+        assert self.log_fingerprint() == log_at_rest, (
             "a server opened over a current snapshot replays nothing and appends "
             "nothing of its own")
         for i in range(8, 10):
             self.write(f"CREATE (t:Task {{key:'task-{i}'}})")
-        assert self.wal_size() > 0, "the second server's writes are in its log"
+        assert self.log_fingerprint() != log_at_rest, "the second server's writes are in its log"
         code = self.server.stop()
         assert code == EXIT_OK, f"the server must exit 0 on SIGINT; exit={code}"
-        assert self.wal_size() == 0, (
-            f"the second server's shutdown must fold and truncate too; got {self.wal_size()}")
+        assert self.manifest_digest() not in (None, first_fold), (
+            "the second server's shutdown must fold what it was written and publish "
+            "a new snapshot")
 
-        # The bound costs nothing: everything both servers wrote is in the
-        # snapshot, which a third server serves with an empty log.
+        # The folds cost nothing: everything both servers wrote is read back by a
+        # third server.
         self.server = self.test.start_graph_server(self.roadmap)
         keys = {row[0] for row in self.query_json("MATCH (t:Task) RETURN t.key")["rows"]}
         assert keys == {f"task-{i}" for i in range(1, 10)}, (
@@ -426,9 +441,8 @@ class TestGraphCheckpoint:
 
         code = self.server.stop()
         assert code == EXIT_OK, f"the server must exit 0 on SIGINT; exit={code}"
-        assert self.wal_size() == 0, (
-            "the shutdown checkpoint folded the log into the snapshot and truncated it")
-        assert self.snapshot_dir().is_dir(), "and left the snapshot behind"
+        assert self.manifest_digest() is not None, (
+            "the shutdown checkpoint folded the log into a snapshot and left it behind")
 
         # With the server gone there is no other way in: no invocation opens the
         # store, so the durable state is unreadable until another server serves it.
@@ -437,10 +451,8 @@ class TestGraphCheckpoint:
         assert "no graph server is listening" in err, err
         assert out == "", f"a client that reached nothing must print nothing: {out!r}"
 
-        # A FRESH process, over an empty log: what it serves can only have come
-        # from the snapshot.
+        # A FRESH process: what it serves is what the stopped one left on disk.
         self.server = self.test.start_graph_server(self.roadmap)
-        assert self.wal_size() == 0, "precondition: there is no log tail to replay"
         result = self.query_json(
             "MATCH (n) RETURN n.key, n.status, n.rationale, n.title ORDER BY n.key")
         by_key = self.rows_by(result, "n.key")
@@ -458,9 +470,8 @@ class TestGraphCheckpoint:
         self.write("MATCH (d:Decision {key:'use-jwt'}) DETACH DELETE d")
 
         self.restart_server()
-        assert self.wal_size() == 0, (
-            f"the shutdown checkpoint must have folded the deletion and truncated "
-            f"the log; got {self.wal_size()}")
+        assert self.manifest_digest() is not None, (
+            "the shutdown checkpoint must have folded the deletion into a snapshot")
         keys = {row[0] for row in self.query_json("MATCH (n) RETURN n.key")["rows"]}
         assert keys == {"login-flow"}, (
             f"the snapshot carries the deletion tombstone, so the deleted node "
@@ -492,12 +503,13 @@ class TestGraphCheckpoint:
 
         The first phase runs against a deliberately NON-EMPTY log with no
         snapshot yet written: an implementation that folded on a read would
-        truncate that log and publish a snapshot, and would be caught by either
-        half of the fingerprint.
+        record the fold in the log's control file and publish a snapshot, and
+        would be caught by either half of the fingerprint.
         """
+        empty = self.log_fingerprint()
         self.write("CREATE (s:Spec {key:'authentication'})")
         before = self.durable_fingerprint()
-        assert before["wal_size"] > 0, "precondition: the log carries the write"
+        assert before["log"] != empty, "precondition: the log carries the write"
         assert before["snapshot"] is None, "precondition: nothing has folded yet"
 
         for statement, has_columns in self.STATEMENTS_THAT_CHANGE_NOTHING:
@@ -509,17 +521,18 @@ class TestGraphCheckpoint:
                 assert_graph_write_shape(result, statement, {})
             assert self.durable_fingerprint() == before, (
                 f"{statement!r} appended nothing, so it owes no fold: neither "
-                f"snapshot/ nor wal may change on its account (SPEC/GRAPH.md "
+                f"snapshot/ nor any file of the write-ahead log may change on its "
+                f"account (SPEC/GRAPH.md "
                 f"§ What a Statement That Writes Nothing Changes on Disk, "
                 f"rules 2 and 3)")
 
         # And a shutdown that owes no fold writes nothing at all. Fold what IS
-        # owed first, so the next server opens over a current snapshot and an
-        # empty log; then drive the same statements through it and stop it.
+        # owed first, so the next server opens over a current snapshot; then
+        # drive the same statements through it and stop it.
         self.restart_server()
         folded = self.durable_fingerprint()
-        assert folded["wal_size"] == 0 and folded["snapshot"], (
-            f"precondition: the first server's shutdown folded and truncated; got {folded!r}")
+        assert folded["snapshot"], (
+            f"precondition: the first server's shutdown folded; got {folded!r}")
 
         for statement, _has_columns in self.STATEMENTS_THAT_CHANGE_NOTHING:
             self.query_json(statement)
@@ -527,7 +540,8 @@ class TestGraphCheckpoint:
         assert code == EXIT_OK, f"the server must exit 0 on SIGINT; exit={code}"
         assert self.durable_fingerprint() == folded, (
             "a shutdown that owes no fold writes nothing at all: snapshot/ and "
-            "wal are left byte for byte as the server found them")
+            "every file of the write-ahead log are left byte for byte as the "
+            "server found them")
 
     def test_checkpoint_failure_is_non_fatal(self):
         """FR7. The write is acknowledged before any fold is attempted, so a
@@ -540,15 +554,16 @@ class TestGraphCheckpoint:
         # UPDATE one rather than to write the first.
         self.write("CREATE (s:Spec {key:'authentication'})")
         self.restart_server()
-        assert self.wal_size() == 0, "precondition: the first fold succeeded"
+        assert self.manifest_digest() is not None, "precondition: the first fold succeeded"
+        before_write = self.log_fingerprint()
 
         acknowledged = self.write(
             "CREATE (d:Decision {key:'use-jwt', rationale:'Stateless sessions scale horizontally'})")
         assert_graph_write_shape(
             acknowledged, "the write whose fold is about to fail",
             {"nodesCreated": 1, "propertiesWritten": 2, "labelsAdded": 1})
-        committed = self.wal_size()
-        assert committed > 0, "the commit is durable in the log before it is acknowledged"
+        committed = self.log_fingerprint()
+        assert committed != before_write, "the commit is durable in the log before it is acknowledged"
 
         self.block_snapshot_staging()
         try:
@@ -564,9 +579,9 @@ class TestGraphCheckpoint:
         assert "shutdown checkpoint" in stderr and "durable in the write-ahead log" in stderr, (
             f"the failure must be surfaced on the server's own stderr, saying "
             f"what is still safe; stderr={stderr!r}")
-        assert self.wal_size() == committed, (
-            f"the log must be left intact when the fold fails, since durability "
-            f"now rests on it alone; {committed} -> {self.wal_size()}")
+        assert self.log_fingerprint() == committed, (
+            "the log must be left intact when the fold fails, since durability "
+            "now rests on it alone")
 
         # Degraded but correct: the snapshot is stale, and the next server
         # recovers the committed state from it plus the log tail.
@@ -579,6 +594,7 @@ class TestGraphCheckpoint:
         assert by_key["use-jwt"][rationale_idx] == "Stateless sessions scale horizontally"
 
     def test_checkpoint_reconciles_after_failure(self):
+        empty = self.log_fingerprint()
         self.write("CREATE (s:Spec {key:'authentication'})")
         self.block_snapshot_staging()
         try:
@@ -586,8 +602,7 @@ class TestGraphCheckpoint:
         finally:
             self.unblock_snapshot_staging()
         assert code == EXIT_OK, f"exit={code} stderr={self.server.stderr_text()!r}"
-        orphaned = self.wal_size()
-        assert orphaned > 0, "the failed fold left the committed write in the log"
+        assert self.log_fingerprint() != empty, "the failed fold left the committed write in the log"
         assert not self.snapshot_dir().exists(), "and published no snapshot at all"
 
         # The next server recovers from that log and writes more of its own; its
@@ -597,13 +612,11 @@ class TestGraphCheckpoint:
         self.write("CREATE (d:Decision {key:'use-jwt'})")
         code = self.server.stop()
         assert code == EXIT_OK, f"exit={code} stderr={self.server.stderr_text()!r}"
-        assert self.wal_size() == 0, (
-            f"a successful checkpoint after a failed one must reconcile the "
-            f"snapshot and truncate the log; got {self.wal_size()}")
-        assert (self.snapshot_dir() / "manifest.json").is_file(), "and publish the snapshot"
+        assert (self.snapshot_dir() / "manifest.json").is_file(), (
+            "a successful checkpoint after a failed one must reconcile the snapshot "
+            "and publish it")
 
-        # All three nodes survive with the log empty, so all three are in the
-        # snapshot -- the orphaned one included.
+        # All three nodes survive, the orphaned one included.
         self.server = self.test.start_graph_server(self.roadmap)
         keys = {row[0] for row in self.query_json("MATCH (n) RETURN n.key")["rows"]}
         assert keys == {"authentication", "login-flow", "use-jwt"}, (

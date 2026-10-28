@@ -38,6 +38,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -748,10 +749,49 @@ func TestAuditEntry_BothNullableKeysAreAlwaysPresent(t *testing.T) {
 		}
 	}
 
-	newest := raw[0] // GetAuditEntries orders by performed_at DESC.
-	if got := string(newest["commit_hash"]); got != "null" {
+	// The TASK_STATUS_TESTING entry is found by its operation, never by its
+	// position. The history is ordered by performed_at alone
+	// (SPEC/DATABASE.md § Query Audit Entries: ORDER BY performed_at DESC), which is
+	// millisecond-precise, and the two transitions above routinely land in the
+	// same millisecond: the order of a tie is unspecified, so raw[0] was the
+	// TASK_STATUS_DOING entry, carrying the --commit-open hash, in about one run
+	// in twenty (rmp task #601).
+	testingEntries := entriesWithOperation(raw, models.OpTaskStatusTesting)
+	if len(testingEntries) != 1 {
+		t.Fatalf("`audit history TASK %d` carries %d %s entries, want exactly 1", id, len(testingEntries),
+			models.OpTaskStatusTesting)
+	}
+	if got := string(testingEntries[0]["commit_hash"]); got != "null" {
 		t.Errorf("the TASK_STATUS_TESTING entry renders commit_hash as %s, want null — never 0 or \"\"", got)
 	}
+}
+
+// entriesWithOperation returns the decoded audit entries whose operation is op,
+// in the order they were listed.
+func entriesWithOperation(raw []map[string]json.RawMessage, op models.AuditOperation) []map[string]json.RawMessage {
+	want := strconv.Quote(string(op))
+	var out []map[string]json.RawMessage
+	for _, entry := range raw {
+		if string(entry["operation"]) == want {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// taskIDsInIDOrder returns the ids of tasks in ascending id order, which is the
+// order the tasks were created in. A fixture that reads its seeded tasks back
+// through ListTasks must not take their ids in listing order: the listing is
+// ordered by priority DESC, created_at ASC (SPEC/DATABASE.md § Main SQL Queries,
+// "List All"), tasks seeded in-process share one millisecond and one priority,
+// and the order of such a tie is unspecified (rmp task #608).
+func taskIDsInIDOrder(tasks []models.Task) []int {
+	ids := make([]int, 0, len(tasks))
+	for i := range tasks {
+		ids = append(ids, tasks[i].ID)
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 // ---------------------------------------------------------------------------

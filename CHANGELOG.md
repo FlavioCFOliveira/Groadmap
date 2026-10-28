@@ -5,6 +5,248 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] - 2026-10-28
+
+### Changed - BREAKING
+
+These changes come from the graph engine upgrade, GoGraph `v0.15.0` to `v0.17.2`
+(`5687e48`, `1550047`, `72cc0d1`), and are specified in `47ca57e`. They affect
+`rmp graph client` only. Each was measured on 2026-10-28 by running the same
+statement against a `v1.18.0` binary built from its tag and against the `1.19.0`
+tree, each in an isolated `HOME`.
+
+- **`PROFILE` of a writing statement executes the write.** `1.18.0` refused it
+  with exit `1`, the line
+  `graph query failed: An internal error occurred. See server logs for details (session: <id>)`,
+  and nothing written. `1.19.0` commits the statement once, exits `0`, and
+  publishes the `profile` tree beside the rows. A caller who wants a writing
+  statement's plan without its effect uses `EXPLAIN`, which executes nothing
+  (`SPEC/GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rule 4).
+- **`counters` can appear beside `profile`.** `1.18.0` published, in
+  `SPEC/DATA_FORMATS.md § Graph Query Counters` rule 5, that a consumer may rely
+  on never seeing `counters` beside `plan` or `profile`. That guarantee now holds
+  for `plan` only: a `PROFILE` of a statement that changed the graph publishes
+  `counters` after `profile`, with the values the same statement publishes
+  without the prefix.
+- **A property value that is a list holding `null` is refused.** `1.18.0`
+  accepted it with exit `0` and stored it other than as written: an assignment
+  stored nothing, a map entry was dropped, an inline map stored the list without
+  its `null` elements. `1.19.0` refuses every write form with exit `1` and the
+  parse-or-execution line ending in the engine's diagnostic
+  (`a list containing null is not a valid property value`); the statement writes
+  nothing (`SPEC/GRAPH.md § What Groadmap Does Not Check`, item 9).
+- **A field too long for the store's durable format has its own error line.**
+  `1.18.0` reported it through
+  `Error: graph engine error: graph query failed: <engine diagnostic>`. `1.19.0`
+  writes the line `SPEC/COMMANDS.md § Client Error Cases` already published,
+  `Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>`,
+  selected by the two failure codes the engine's server now assigns
+  (`Neo.ClientError.Schema.TokenLengthError`,
+  `Neo.ClientError.Data.DataUnsupportedByStoreFormat`). The exit code (`1`) and
+  the sentinel are unchanged. The web graph data endpoint answers the condition
+  as an `execution` failure carrying the engine's diagnostic.
+- **Migration guidance.** A script that relied on `PROFILE` to keep a write
+  harmless must use `EXPLAIN`. A consumer that assumed `counters` and `profile`
+  exclusive must accept both. A writer that stored lists holding `null` must
+  drop the `null` elements first. A program that matched `graph query failed: `
+  to detect an over-long field must match `graph field too long; ` instead.
+
+### Added
+
+- **Web: a roadmap dashboard is the landing page** (`5bf0457`, `479b0c9`,
+  `2a491dc`, `7ac0a75`, `ad926a5`). `GET /roadmaps/{name}` shows a KPI row (open,
+  completed and backlog tasks, each with a type-breakdown donut, and the average
+  velocity `rmp stats` reports), the current sprint with its progress row and
+  segmented status bar, work in progress, the highest-severity open tasks,
+  upcoming sprints and recent activity. Every figure is read in one read-only
+  transaction, reusing the CLI's own velocity and audit queries. The chart data
+  travels in an `application/json` element, so the Content-Security-Policy keeps
+  `script-src 'self'`. ApexCharts and the Tabler vendors stylesheet are vendored
+  for the charts.
+- **Web: a Sprint progress card on the sprint page** (`c8c48bd`, `3918718`): a
+  radial gauge of the member tasks in the `WAITING`, `DOING` and `CLOSED` board
+  columns beside Sprint details, with the completed percentage at its centre, a
+  server-rendered legend and the total in the subheader (`<n> Tasks`). Its counts
+  equal the board's column badges by construction.
+- **`graph serve` backs up a store in the earlier on-disk format before the
+  engine converts it** (`5687e48`). See **Changed** below, and the new error
+  line `Error: graph store error: graph store backup failed; the store was not migrated: <detail>`
+  (exit `1`), written when the backup cannot be completed; the store is then
+  neither opened nor converted.
+- **The GitHub Release body is the version's `CHANGELOG.md` section**
+  (`005a8fd`). `scripts/changelog-section.sh` extracts it; the release workflow
+  fails before creating a release when the section is missing, empty or
+  duplicated.
+
+### Changed
+
+- **Web: the sprints page moves to `/roadmaps/{name}/sprints`** (`5bf0457`).
+  Measured: under `1.18.0`, `GET /roadmaps/{name}` answered `200` with the
+  sprints page and `/roadmaps/{name}/sprints` answered `404`; under `1.19.0` the
+  first answers `200` with the dashboard and the second `200` with the sprints
+  page. The sidebar lists Dashboard, Sprints, Tasks, Audit and Graph, and the
+  roadmap index links land on the dashboard. A bookmark of the old landing URL
+  now opens the dashboard.
+- **The graph store converts one way on its first `1.19.0` start**
+  (`5687e48`, `1550047`). `rmp graph serve` copies a store that still keeps its
+  write-ahead log in the single-file format to
+  `~/.roadmaps/<name>/graph-backup-<T>/`, lets the engine convert it during the
+  open, and removes the copy once the conversion has succeeded, reporting both
+  steps on stderr at `INFO`. The copy is kept, and its path reported, when the
+  conversion or the open fails. The converted store holds `wal.control` and
+  `wal.d/`. Measured: a store written by `1.18.0` was converted and served by
+  `1.19.0` with its 4 nodes intact; `1.18.0` then refused it with exit `1` and
+  `Error: graph store error: graph store unavailable: wal: unsupported frame version`.
+  There is no way back except restoring a backup taken before the upgrade
+  (`SPEC/GRAPH.md § Graph Store Format Migration`).
+- **Relationship writes reach the relationship the statement bound**
+  (`5687e48`). Under `1.18.0` each of the following reported success while
+  acting on the wrong relationship or on none
+  (`SPEC/GRAPH.md § What Groadmap Does Not Check`, items 4 and 8):
+  - `REMOVE e.k` through an incoming or undirected pattern removes the property
+    from every relationship the pattern bound, and the counters count each
+    removal. Measured: `MATCH (v:Test {key:'t1'})<-[e]-(s) REMOVE e.last_commit`
+    left the property in place under `1.18.0` and removed it under `1.19.0`,
+    reporting `propertiesWritten: 1`.
+  - A `MERGE` that matches over a node pair joined several times in the
+    pattern's direction matches every such relationship, one row each, so
+    writes, `DELETE` and the counters act on exactly the matched relationships;
+    an inline-map `MERGE` no longer creates a duplicate.
+  - `DELETE` through a relationship bound by `CREATE` deletes the created
+    relationship, not a pre-existing one of the pair.
+  The first was measured; the other two are covered by
+  `internal/commands/graph_mergebinding_test.go` and
+  `graph_relwrite_test.go`. The sound forms the skills and the specification
+  recommended, a re-binding
+  outgoing `MATCH` or an assignment of `null`, remain correct.
+- **A statement cut by the 5-second budget leaves, at most, node-identifier
+  reservations in the write-ahead log** (`5687e48`), which change no node,
+  relationship, property, label, index or constraint. `1.18.0` left the log as
+  the statement found it (`SPEC/GRAPH.md § Statement Time Budget`, rule 3).
+- **Web: rendered Markdown follows CommonMark line breaks** (`d102b44`). A single
+  newline inside a paragraph is a soft break, shown as a space; two trailing
+  spaces or a trailing backslash still produce `<br>`. `1.18.0` rendered every
+  newline as `<br>`. Plain multi-line graph property values keep their breaks.
+- **Web: rendered Markdown fills its container** (`b1ba436`); the `80ch` cap on
+  the sprint page is removed.
+- **Web: the vendored Tabler is upgraded from `v1.6.0` to `v1.7.1`, and Tabler
+  Icons from `v3.46.0` to `v3.50.0`** (`5687e48` to `v1.6.1` and `v3.49.0`, then `e178208`).
+  The icon font is served as 48 `unicode-range` `woff2` chunks instead of one
+  `woff2`, `woff` and `ttf`. Every page renders a `<main>` holding the page
+  header and body, and the six scrollable tables are focusable, labelled
+  regions.
+- **The CI workflow publishes nothing** (`3d97685`, `c7fdf44`). The `dev`
+  pre-release and the CI build artefacts are removed; `release.yml` is the only
+  workflow that publishes. The release process now requires a green CI run on
+  `main` before the tag is pushed (`SPEC/VERSION.md § Release Process`).
+
+### Changed - dependencies
+
+| Module or tool | `1.18.0` | `1.19.0` | Note |
+|---|---|---|---|
+| Go (`go.mod` floor) | `1.27.1` | `1.27.3` | `5687e48` (`1.27.2`), `72cc0d1` (`1.27.3`); see **Security** |
+| `github.com/FlavioCFOliveira/GoGraph` | `v0.15.0` | `v0.17.2` | `5687e48` (`v0.16.0`), `1550047` (`v0.17.0`), `72cc0d1` (`v0.17.2`) |
+| `github.com/dlclark/regexp2/v2` | `v2.2.1` | `v2.11.0` | `5687e48`, `72cc0d1` |
+| `golang.org/x/sys` | `v0.48.0` | `v0.49.0` | `1100822` |
+| `golang.org/x/text` | `v0.42.0` | `v0.43.0` | `5687e48` |
+| `modernc.org/sqlite` | `v1.59.0` | `v1.61.0` | `5687e48`, `72cc0d1` |
+| `modernc.org/libc` (indirect) | `v1.76.0` | `v1.79.1` | `5687e48`, `72cc0d1` |
+| `golangci-lint` (Makefile pin) | `v2.14.0` | `v2.15.0` | `9ec078d` |
+| `gosec` (Makefile pin) | `v2.29.0` | `v2.30.0` | `5687e48`, `9ec078d` |
+| Python for the E2E job (CI and release) | `3.12` | `3.14` | `9ec078d` |
+| Tabler (vendored web asset) | `v1.6.0` | `v1.7.1` | `5687e48`, `e178208` |
+| Tabler Icons (vendored web asset) | `v3.46.0` | `v3.50.0` | `5687e48`, `e178208` |
+| ApexCharts (vendored web asset) | — | `7.0.0` | New, `5bf0457` |
+
+  The indirect modules `roaring/v2`, `bitset`, `go-humanize`, `go-strftime` and
+  `golang.org/x/exp` move with them (`5687e48`, `72cc0d1`).
+
+### Fixed
+
+- **A failed graph statement no longer replaces an existing relationship**
+  (`5687e48`; `SPEC/GRAPH.md § Error Handling and Exit Codes`, rule 9).
+  Measured: after `CREATE (a:Svc {key:'api'})-[:OLD {p:1}]->(b:Svc {key:'db'})`,
+  the failing statement
+  `MATCH (a:Svc {key:'api'}),(b:Svc {key:'db'}) CREATE (a)-[:NEW]->(b) WITH a RETURN 1/0`
+  left the pair joined by `NEW` with no properties under `1.18.0`, and by
+  `OLD {p: 1}` under `1.19.0`.
+- **A property value the engine cannot store is refused with the engine's own
+  diagnostic** (`5687e48`). Measured: `CREATE (n:Probe {key:'map', bad:{a:1}})`
+  exits `1` under both; `1.18.0` wrote generic text naming only the session,
+  `1.19.0` ends the line in
+  `InvalidPropertyType: a nested list or map is not a valid property value`.
+- **Graph server memory is released at the end of a statement that overlapped a
+  release** (`c67db02`). A release made while a statement ran counted that
+  statement's live heap into the baseline, so its end never passed the growth
+  gate and up to 2 GiB stayed resident.
+
+### Security
+
+- **Every entry of the graph store is `0700` or `0600`** (`0be25e0`). GoGraph
+  created `snapshot/`, `snapshot/indexes/` and its fold staging directory at
+  `0750`. `rmp graph serve` now sets its umask to `0077` first, on POSIX, and
+  repairs the modes of the whole store before opening it; an entry it cannot fix
+  fails the start with `utils.ErrGraphStore`.
+- **The Go floor `1.27.3` fixes ten standard-library advisories reachable from
+  Groadmap's code** that the `1.27.1` floor of `1.18.0` did not:
+  GO-2026-6599 and GO-2026-6600 (`html/template`); GO-2026-6603, GO-2026-6609,
+  GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617 (`net/http`);
+  GO-2026-6607 (`crypto/tls`); GO-2026-6809 (`crypto/x509`)
+  (`5687e48`, `72cc0d1`; `SPEC/BUILD.md § Go Toolchain`). `govulncheck ./...`
+  reports no vulnerabilities on the released tree.
+
+### Internal
+
+These change no output of the binary.
+
+- **New E2E suite `test_78`** for the changelog section extraction (`005a8fd`);
+  new Go tests for the store migration, the write-ahead-log state, fold retention,
+  store modes, the shutdown drain, the dashboard and the sprint progress card.
+- **Test determinism fixes** (`61d9dfb`, `d83e05d`, `d2f5c9e`, `eeaac2f`,
+  `acb2c8f`): tests select records by id or operation where the order admits
+  ties, and drive the log sink and the memory releaser deterministically.
+- **The gosec suppression register accounts for every annotation again**
+  (`46cc54d`), and five directory `chmod` calls to `0700` are registered as
+  justified (`5687e48`).
+- **The vendored-asset rules name ApexCharts** (`87bf9f7`); a code comment on
+  sprint position uniqueness is corrected (`1d6e941`).
+- **The shipped `knowledge-authority` skill** states the measured `DROP INDEX`
+  counters (`05bcb22`) and the behaviour of each engine (`5687e48`, `1550047`).
+- **Project instructions** (`fb60f18`, `4d35c14`).
+
+### Known Issues
+
+- **`rmp audit list --help` still says `TASK_STATUS_BACKLOG` carries `null` "from
+  'task stat'"**, which `task stat` cannot produce since `1.18.0`.
+- **`rmp backlog --help` and `rmp backlog list --help` still say no 0-9
+  validation is enforced on `--priority`.** The binary refuses `-p 12` with exit
+  `6`.
+- **`1.19.0` does not re-check sprint membership on open**, as in `1.18.0`.
+- **`modernc.org/libc` is a later release than `modernc.org/sqlite` requires**
+  (`v1.79.1` against the `v1.79.0` that `modernc.org/sqlite v1.61.0` declares).
+  The project accepts the risk deliberately (`SPEC/BUILD.md § SQLite Driver
+  Rules`).
+- **The web query bar's `EXPLAIN`/`PROFILE` prefix check runs outside the
+  5-second budget**, because the engine's parser takes no context. The release
+  notes give the detail.
+
+### Notes
+
+- **Why this is `1.19.0`, and what the number does not tell you.** A strict
+  reading of Semantic Versioning 2.0.0 gives `MAJOR`: the items under **Changed -
+  BREAKING** withdraw a refusal and a guarantee that `1.18.0` published, refuse
+  writes `1.18.0` accepted, and move a condition to another error line.
+- **The number is the owner's decision, against the strict `2.0.0` reading,**
+  taken on 2026-10-28 and recorded here, as for `1.18.0`. Do not read the minor
+  digit as a promise that nothing breaks. Upgrading is safe unless a program of
+  yours runs `PROFILE` on writing statements, assumes `counters` never accompanies
+  `profile`, writes lists holding `null`, or matches the error line of an
+  over-long graph field.
+- **No SQLite schema change.** Databases stay at schema `1.17.0`.
+- **The graph store is converted forward and is not rolled back.** Back up
+  `~/.roadmaps/<name>/graph/` before the first `1.19.0` `graph serve` if you may
+  need to return to `1.18.0`.
+
 ## [1.18.0] - 2026-10-02
 
 ### Changed - BREAKING
@@ -4258,6 +4500,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.19.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.3...v1.18.0
 [1.17.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.2...v1.17.3
 [1.17.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.1...v1.17.2

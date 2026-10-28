@@ -90,17 +90,17 @@ func TestMemoryReleaser_ReleasesWhatAStatementLeftBehind(t *testing.T) {
 	held, releases := uint64(4<<20), 0
 	r := countingReleaser(&held, &mu, &releases)
 
-	r.statementEnded() // the first statement grew nothing past the floor
+	r.statementEnded(r.statementStarted()) // the first statement grew nothing past the floor
 	if releases != 0 {
 		t.Errorf("%d releases for a statement that grew the heap by nothing", releases)
 	}
 	held = 1350 << 20 // a cut statement left 1.35 GB of freed heap
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	if releases != 1 || held != 4<<20 {
 		t.Errorf("after a heavy statement: %d releases, held %d; want one release back to the live heap", releases, held)
 	}
 	held += 2 << 20 // a small statement
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	if releases != 1 {
 		t.Errorf("a small statement triggered a collection")
 	}
@@ -108,6 +108,26 @@ func TestMemoryReleaser_ReleasesWhatAStatementLeftBehind(t *testing.T) {
 
 // TestMemoryReleaser_ConcurrentEndsDoNotStack: statements that end together
 // produce no concurrent collections, and none of them is lost.
+//
+// # Why the settle passes are part of the releaser under test (rmp task #602)
+//
+// The releaser reads the heap right after a release and keeps that reading as
+// its baseline. Ends that arrive concurrently race that reading: a statement
+// whose growth lands between the release and the reading, and whose end is
+// signalled after it, has its memory counted INTO the baseline, so the gate its
+// own end is measured against no longer sees it. Under -count=200 this left
+// 26 runs failing, with baselines of 1028 to 1348 MiB over a live heap of 4 MiB:
+// the fake heap here is independent of the process heap, so nothing from an
+// earlier iteration can reach it, and the residue is the race alone.
+//
+// Production never builds a releaser without its settle passes
+// (newMemoryReleaser), and those passes are what return exactly this memory:
+// every release schedules them, and each one releases unconditionally. The
+// test built the releaser without them, so it asserted a guarantee the
+// configuration production runs gives through a mechanism the test had removed.
+// The passes run here by hand, after every statement has ended, so the run is
+// deterministic, and they are inside the no-stacking assertion as well: a pass
+// that ran beside a statement-end collection would be counted.
 func TestMemoryReleaser_ConcurrentEndsDoNotStack(t *testing.T) {
 	var mu sync.Mutex
 	held, releases := uint64(0), 0
@@ -124,28 +144,54 @@ func TestMemoryReleaser_ConcurrentEndsDoNotStack(t *testing.T) {
 		inFlight--
 		mu.Unlock()
 	}
+	// Scheduling happens under the releaser's own lock, so the slice needs no
+	// lock of its own while the statements run; it is read after they finish.
+	var timers []*fakeTimer
+	r.afterFunc = func(d time.Duration, f func()) stopper {
+		ft := &fakeTimer{delay: d, fn: f}
+		timers = append(timers, ft)
+		return ft
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			start := r.statementStarted()
 			mu.Lock()
 			held += 64 << 20
 			mu.Unlock()
-			r.statementEnded()
+			r.statementEnded(start)
 		}()
 	}
 	wg.Wait()
-	if maxInFlight != 1 {
-		t.Errorf("%d collections ran at once, want 1", maxInFlight)
-	}
 	if releases == 0 {
 		t.Fatal("no release ran")
 	}
+
+	// Every settle pass still scheduled when the last statement ended, and
+	// every pass those schedule in turn, runs now — in the order the timers
+	// would fire them.
+	pending := 0
+	for i := 0; i < len(timers); i++ {
+		if timers[i].stopped {
+			continue
+		}
+		pending++
+		timers[i].fn()
+	}
+	if pending == 0 {
+		t.Fatal("a release ran and scheduled no settle pass")
+	}
+
+	if maxInFlight != 1 {
+		t.Errorf("%d collections ran at once, want 1", maxInFlight)
+	}
 	// Whatever was owed when the last statement ended has been returned.
 	if held > 4<<20 {
-		t.Errorf("%d bytes still held after every statement ended, want the live heap", held)
+		t.Errorf("%d bytes still held after every statement ended and its settle passes ran, "+
+			"want the live heap", held)
 	}
 }
 
@@ -240,7 +286,7 @@ func TestMemoryReleaser_SettlePassesReturnWhatTheEngineFreesAfterTheSummary(t *t
 		},
 	}
 
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	if releases != 1 || held != 1460<<20 {
 		t.Fatalf("at the summary: %d releases, held %d MB", releases, held>>20)
 	}
@@ -264,7 +310,7 @@ func TestMemoryReleaser_SettlePassesReturnWhatTheEngineFreesAfterTheSummary(t *t
 	mu.Lock()
 	held = 3000 << 20
 	mu.Unlock()
-	r.statementEnded()
+	r.statementEnded(r.statementStarted())
 	pending := timers[len(timers)-1]
 	r.stop()
 	if !pending.stopped {
@@ -281,8 +327,9 @@ func TestMemoryReleaser_SettlePassesReturnWhatTheEngineFreesAfterTheSummary(t *t
 // residue of rmp task #589: the server's own in-flight fold serialises the
 // whole graph, and that memory is garbage once the fold returns. An idle
 // server triggers no collection, so without the hook the memory stayed
-// resident for minutes (0.38 GB to 1.1 GB, measured). A fold that ran calls
-// afterFold once; a fold that was not owed does not.
+// resident for minutes (0.38 GB to 1.1 GB, measured). A fold that ran reports
+// its start and its end, handing back its start token; a fold that was not
+// owed reports no end.
 func TestFoldGate_AFoldThatRanReturnsItsMemory(t *testing.T) {
 	graphDir := filepath.Join(t.TempDir(), "graph")
 	if err := os.MkdirAll(graphDir, 0o700); err != nil {
@@ -298,8 +345,8 @@ func TestFoldGate_AFoldThatRanReturnsItsMemory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	folds := 0
-	closer, _, err := build(st, graphDir, checkpointCadence{}, logger, func() { folds++ })
+	ledger := &countingLedger{}
+	closer, _, err := build(st, graphDir, checkpointCadence{}, logger, ledger)
 	t.Cleanup(func() { _ = closer.Close() })
 	if err != nil {
 		t.Fatal(err)
@@ -313,14 +360,26 @@ func TestFoldGate_AFoldThatRanReturnsItsMemory(t *testing.T) {
 	if err != nil || !ran {
 		t.Fatalf("the owed fold: ran %v, err %v", ran, err)
 	}
-	if folds != 1 {
-		t.Errorf("a fold that ran called afterFold %d times, want 1", folds)
+	if ledger.ended != 1 || ledger.started != 1 || ledger.endToken != 1 {
+		t.Errorf("a fold that ran: %d starts, %d ends with token %d; want one start and one end with its token",
+			ledger.started, ledger.ended, ledger.endToken)
 	}
 	ran, err = closer.gate.foldIfOwed()
 	if err != nil || ran {
 		t.Fatalf("a fold with nothing owed: ran %v, err %v", ran, err)
 	}
-	if folds != 1 {
-		t.Errorf("a fold that did not run called afterFold")
+	if ledger.ended != 1 {
+		t.Errorf("a fold that did not run reported an end")
 	}
 }
+
+// countingLedger counts the starts and ends a fold reports; each start's token
+// is the number of starts so far.
+type countingLedger struct {
+	started, ended int
+	endToken       uint64
+}
+
+func (c *countingLedger) statementStarted() uint64 { c.started++; return uint64(c.started) }
+
+func (c *countingLedger) statementEnded(start uint64) { c.ended++; c.endToken = start }

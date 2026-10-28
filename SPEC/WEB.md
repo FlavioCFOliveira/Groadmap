@@ -14,6 +14,7 @@
 - [Cache Policy](#cache-policy)
 - [Routes and Pages](#routes-and-pages)
   - [Roadmap Index Page](#roadmap-index-page)
+  - [Roadmap Dashboard Page](#roadmap-dashboard-page)
   - [Roadmap Sprints Page](#roadmap-sprints-page)
   - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
@@ -42,6 +43,7 @@
   - [Full-Height Page Regions](#full-height-page-regions)
   - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
+  - [Dashboard Chart Library](#dashboard-chart-library)
 - [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
 - [Server Logging](#server-logging)
   - [Logger Configuration](#logger-configuration)
@@ -92,8 +94,9 @@ The interface is built on the Tabler admin-dashboard framework and presents a
 Tabler admin-shell layout in Tabler's dark theme across every page: a
 navigation sidebar, a top navbar, page headers, and Tabler cards, tables, and
 badges. The sidebar lists the roadmaps and, within a roadmap, links to that
-roadmap's Sprints, Tasks, Audit, and Graph views: the Sprints link points to the
-roadmap's landing page at `/roadmaps/{name}`, the Tasks link points to
+roadmap's Dashboard, Sprints, Tasks, Audit, and Graph views, in that order: the
+Dashboard link points to the roadmap's landing page at `/roadmaps/{name}`, the
+Sprints link points to `/roadmaps/{name}/sprints`, the Tasks link points to
 `/roadmaps/{name}/tasks`, the Audit link points to `/roadmaps/{name}/audit`, and
 the Graph link points to `/roadmaps/{name}/graph`;
 the sidebar highlights whichever of these views is active, and a task's own page
@@ -114,8 +117,8 @@ usable without horizontal overflow (see
 The web interface exposes the following kinds of page for each roadmap:
 
 1. A roadmap index that lists every roadmap found under `~/.roadmaps/`.
-2. A roadmap sprints page that is the roadmap's landing page, served at
-   `/roadmaps/{name}` and read from its SQLite `project.db`. It presents the
+2. A roadmap sprints page, served at `/roadmaps/{name}/sprints` and read from its
+   SQLite `project.db`. It presents the
    roadmap's sprints as three tabs (Próximos, Actual, Concluídos), with **Actual**
    active by default. Every sprint in every tab — including the OPEN ("current")
    sprint or sprints under Actual — is rendered through a single shared
@@ -151,10 +154,15 @@ The web interface exposes the following kinds of page for each roadmap:
 7. A roadmap knowledge-graph page that shows that roadmap's knowledge graph,
    read from its GoGraph store under `~/.roadmaps/<name>/graph/`, as an
    interactive node-link visualisation.
+8. A roadmap dashboard page that is the roadmap's landing page, served at
+   `/roadmaps/{name}` and read from its `project.db`. It states the roadmap's
+   current state at a glance: four key figures (open tasks, completed tasks,
+   backlog, and average velocity), the first three each with a donut of its tasks
+   by type, the current sprint's progress, the tasks in progress, the most severe
+   open tasks, the most recent audit entries, and the upcoming sprints, all from one consistent read of the database.
 
 When a user selects a roadmap on the index page, the user lands on that
-roadmap's sprints page (`/roadmaps/{name}`), with the **Actual** tab — the
-current OPEN sprint or sprints — active by default.
+roadmap's dashboard page (`/roadmaps/{name}`).
 
 Where a task is shown on these pages — as a card on the sprint page's board, or
 as a row of the tasks page's list — it links to that task's own page, which
@@ -194,10 +202,10 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
 5. The roadmap index page lists every roadmap discovered under `~/.roadmaps/`,
    using the same roadmap-discovery rule the CLI uses (see
    [Roadmap Index Page](#roadmap-index-page)).
-6. The roadmap sprints page is the roadmap's landing page. It shows the selected
+6. The roadmap sprints page shows the selected
    roadmap's sprints, with the fields and relationships already defined in
    `MODELS.md` and `DATABASE.md`, read from that roadmap's `project.db`, and is
-   served at `/roadmaps/{name}`. The page presents the roadmap's sprints as three
+   served at `/roadmaps/{name}/sprints`. The page presents the roadmap's sprints as three
    tabs, labelled **Próximos**, **Actual**, and **Concluídos** from left to right,
    with **Actual** active by default. The interface classifies each sprint into a
    tab by its status: a `PENDING` sprint appears under Próximos, an `OPEN` sprint
@@ -239,10 +247,9 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    form only narrows what is shown (see [Roadmap Tasks Page](#roadmap-tasks-page)
    and [Roadmap Task Page](#roadmap-task-page)).
 8. When a user selects a roadmap on the index page, the user lands on that
-   roadmap's sprints page (`/roadmaps/{name}`), with the **Actual** tab — the
-   current OPEN sprint or sprints — active by default (see
+   roadmap's dashboard page, `/roadmaps/{name}` (see
    [Roadmap Index Page](#roadmap-index-page) and
-   [Roadmap Sprints Page](#roadmap-sprints-page)).
+   [Roadmap Dashboard Page](#roadmap-dashboard-page)).
 9. The roadmap sprint page shows the details of a single sprint, the sprint's
    member tasks as a Kanban board of three fixed columns — `WAITING` holding the
    sprint's `SPRINT` tasks, `DOING` its `DOING` and `TESTING` tasks,
@@ -250,7 +257,9 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
    is about, the `WAITING` column by the planned in-sprint execution order and the
    `DOING` and `CLOSED` columns by recency (`started_at` and `closed_at`
    descending), and whose three column counts sum to the sprint's total number of
-   member tasks, and the sprint's own
+   member tasks, a Sprint progress card beside the sprint's details that states
+   that total and draws a gauge of the three column groups with the percentage of
+   tasks completed, and the sprint's own
    comments in a Comments card, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
@@ -344,8 +353,8 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
     first and progressively enhance for larger tablet and desktop viewports
     through `min-width` media queries, and every page adapts fluidly across
     viewport sizes. This requirement applies to every page — the roadmap index,
-    the roadmap sprints page, the roadmap tasks page, the roadmap sprint page, the
-    roadmap task page, the roadmap audit log page, and the knowledge-graph page —
+    the roadmap dashboard page, the roadmap sprints page, the roadmap tasks page,
+    the roadmap sprint page, the roadmap task page, the roadmap audit log page, and the knowledge-graph page —
     and to the interactive components, including the
     sprint tabs, the tasks page's filter bar and task list, the sprint page's
     member-tasks board, and the interactive knowledge-graph
@@ -354,8 +363,9 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
 17. **Tabler admin-shell layout in the dark theme.** The interface presents a
     Tabler admin-shell layout in Tabler's dark theme across every page: a
     navigation sidebar (listing the roadmaps and, within a roadmap, that
-    roadmap's Sprints, Tasks, Audit, and Graph views, resolving to
-    `/roadmaps/{name}`, `/roadmaps/{name}/tasks`, `/roadmaps/{name}/audit`, and
+    roadmap's Dashboard, Sprints, Tasks, Audit, and Graph views, in that order,
+    resolving to `/roadmaps/{name}`, `/roadmaps/{name}/sprints`,
+    `/roadmaps/{name}/tasks`, `/roadmaps/{name}/audit`, and
     `/roadmaps/{name}/graph` respectively and
     highlighting the active view), a top navbar naming the selected roadmap, page
     headers, and Tabler cards, tables, and badges. The interface is built on the vendored Tabler framework;
@@ -391,6 +401,20 @@ displays all of the task's fields (see [Roadmap Task Page](#roadmap-task-page)).
     emits raw HTML from the source nor an active link to a dangerous URL. Task and
     sprint titles, and the values of the knowledge-graph detail panel, stay plain
     text (see [Markdown Rendering](#markdown-rendering)).
+21. **The roadmap dashboard page is the landing page.** It is served at
+    `/roadmaps/{name}`, is read-only, and states the roadmap's current state from
+    one consistent read of that roadmap's `project.db`: a row of four key figures —
+    open tasks, completed tasks, backlog, and average velocity, the first three
+    each with a donut of its tasks by type — the current
+    sprint's progress and status breakdown, the tasks in progress, the most severe
+    open tasks, the most recent audit entries, and the upcoming sprints. Every
+    figure follows one closed definition, every block whose data is empty shows an
+    empty state, and an empty roadmap renders with HTTP 200. The charts are drawn
+    in the browser by the vendored ApexCharts library from one JSON data block the
+    page carries, under the unchanged Content-Security-Policy, and each chart
+    states its key numbers in words to assistive technology (see
+    [Roadmap Dashboard Page](#roadmap-dashboard-page) and
+    [Dashboard Chart Library](#dashboard-chart-library)).
 
 ## Command Surface
 
@@ -838,7 +862,8 @@ showing a state that no longer matches the data.
    roadmap database or the knowledge-graph store — MUST carry the HTTP response
    header `Cache-Control: no-store`. This covers:
    - the roadmap index page (`/`);
-   - the roadmap sprints page (`/roadmaps/{name}`);
+   - the roadmap dashboard page (`/roadmaps/{name}`);
+   - the roadmap sprints page (`/roadmaps/{name}/sprints`);
    - the roadmap tasks page (`/roadmaps/{name}/tasks`);
    - the roadmap sprint page (`/roadmaps/{name}/sprints/{id}`);
    - the roadmap task page (`/roadmaps/{name}/tasks/{id}`);
@@ -864,8 +889,9 @@ showing a state that no longer matches the data.
    [Read-Only Data Flow](#read-only-data-flow)) — is observable to the user and is
    not masked by a client-side cache.
 3. **Static assets are excluded and remain cacheable.** Embedded static assets
-   under `/static/...` (the vendored Tabler CSS and JavaScript, the D3.js bundle
-   and the d3-sankey plugin, the fonts, the icons and images, the favicon, and the
+   under `/static/...` (the vendored Tabler CSS and JavaScript, the vendored Tabler
+   vendors stylesheet, the D3.js bundle and the d3-sankey plugin, the ApexCharts
+   bundle, the fonts, the icons and images, the favicon, and the
    local scripts and stylesheet) are not data: they are immutable assets embedded
    in the binary (see [Embedded Asset Categories](#embedded-asset-categories)).
    They are explicitly EXCLUDED from the `no-store` rule and remain cacheable by
@@ -913,14 +939,15 @@ produced from embedded `html/template` templates. Page routes return HTML
 | Route | Method | Purpose | Response |
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
-| `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
+| `/roadmaps/{name}` | GET, HEAD | Roadmap dashboard page (landing; key figures, current sprint, charts, and lists; see [Roadmap Dashboard Page](#roadmap-dashboard-page)) | HTML |
+| `/roadmaps/{name}/sprints` | GET, HEAD | Roadmap sprints page (sprint tabs; see [Roadmap Sprints Page](#roadmap-sprints-page)) | HTML |
 | `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (one paginated task list; optional `q` and `sprint` filter parameters, optional repeatable `status` and `type` filter parameters, and optional `page` and `size` pagination parameters; a request carrying none of the six takes its filter state from the `rmp_tasks_filters` cookie or the defaults, and a request carrying any of them sets that cookie; see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
 | `/roadmaps/{name}/tasks/{id}` | GET, HEAD | Roadmap task page (one task's fields, its comments, and its sprint context; see [Roadmap Task Page](#roadmap-task-page)) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (the sprint's details and its member-tasks board) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
 | `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation (optional `q` Cypher query and `limit` node-limit parameters; see [Graph Data Endpoint](#graph-data-endpoint)) | JSON |
-| `/static/...` | GET, HEAD | Embedded static assets (CSS, JS, vendored D3.js graph library) | static file |
+| `/static/...` | GET, HEAD | Embedded static assets (CSS, JS, vendored D3.js graph library, vendored ApexCharts chart library) | static file |
 
 Path-parameter rules:
 
@@ -999,21 +1026,384 @@ how the `rmp web` process itself terminates.
   subdirectory of `~/.roadmaps/` that contains a `project.db` and whose name
   satisfies every rule of `COMMANDS.md § Roadmap Name Validation` is one roadmap,
   and every other entry is skipped silently (see `COMMANDS.md § List Roadmaps`
-  and `ARCHITECTURE.md § Directory Structure`, location rule 9). For each roadmap the page links to its sprints page (the
+  and `ARCHITECTURE.md § Directory Structure`, location rule 9). For each roadmap the page links to its dashboard page (the
   landing page, `/roadmaps/{name}`) and its knowledge-graph page
   (`/roadmaps/{name}/graph`). Selecting a roadmap lands the user on that
-  roadmap's sprints page.
+  roadmap's dashboard page.
 - **Empty state.** When no roadmaps exist under `~/.roadmaps/`, the index page
   renders successfully (HTTP 200) and shows a clear empty-state message telling
   the user that no roadmaps were found and that roadmaps are created with the CLI
   (`rmp roadmap create <name>`). The absence of roadmaps is not an error for the
   web interface; the server still starts and serves the empty index.
 
-### Roadmap Sprints Page
+### Roadmap Dashboard Page
 
 - **Route:** `GET /roadmaps/{name}`
 - **Landing page.** This is the roadmap's landing page: selecting a roadmap on the
   index page lands the user here (see [Roadmap Index Page](#roadmap-index-page)).
+  It is the entry door of the roadmap, and its job is to state the roadmap's
+  current state honestly and at a glance: how much work is open, how much is done,
+  what the current sprint has achieved, what is in progress, what is most severe,
+  and what happened last. Every number it shows is one of the closed definitions
+  below; the page shows no estimate, no forecast, and no figure the roadmap's data
+  does not determine.
+- **Content:** A read-only presentation of aggregates of the named roadmap's tasks,
+  sprints, and audit entries, read from that roadmap's `project.db`. The page
+  shows no task's or sprint's full field set: each task and sprint it names links
+  to that record's own page (see [Roadmap Task Page](#roadmap-task-page) and
+  [Roadmap Sprint Page](#roadmap-sprint-page)).
+- **Page header.** The header is rendered by the shared page-header partial with
+  the title `Dashboard`, no pretitle, no badge, and no lead line (see
+  [Shared Page-Header Partial](#shared-page-header-partial)). Its actions column
+  carries nothing.
+- **Interface language.** Every label the page shows — the page title, the card
+  titles, the column headings, the sublines, and the empty-state texts — is in
+  English, the language of the page headers, the card titles, the column headings,
+  and the sidebar of every other page. The Portuguese tab labels of the
+  [Roadmap Sprints Page](#roadmap-sprints-page) belong to that page's tab control
+  alone. Enum values are written exactly as their enums spell them.
+- **Layout.** The page body holds a single
+  `<div class="row row-deck row-cards">`, the grid of Tabler's own dashboard
+  homepage, whose `row-deck` makes the cards of one row equal in height and whose
+  `row-cards` sets the gutter between them. The grid holds exactly these six
+  blocks, in this order, each a Tabler `card` inside a column carrying the classes
+  given:
+
+  | Block | Column classes |
+  |---|---|
+  | 1. Open tasks (KPI) | `col-sm-6 col-lg-3` |
+  | 1. Completed (KPI) | `col-sm-6 col-lg-3` |
+  | 1. Backlog (KPI) | `col-sm-6 col-lg-3` |
+  | 1. Average velocity (KPI) | `col-sm-6 col-lg-3` |
+  | 2. Current sprint | `col-12` |
+  | 3. Work in progress | `col-lg-6` |
+  | 4. Highest-severity open tasks | `col-lg-6` |
+  | 5. Upcoming sprints | `col-12` |
+  | 6. Recent activity | `col-12` |
+
+  Below Bootstrap's `sm` breakpoint every block takes the full width, so a phone
+  reads the blocks one under the other in the order of the table; the four KPI
+  cards share a row two by two from `sm` and four abreast from `lg`. From `lg`,
+  Work in progress and Highest-severity open tasks share one row side by side.
+  Current sprint, Upcoming sprints, and Recent activity each take the full width
+  at every viewport width, so the seven columns of Recent activity fit a desktop-width card without
+  scrolling. Every block
+  other than a KPI card carries a `card-header` holding a
+  `<h3 class="card-title">` with the block's title as the table names it, with
+  one exception: while a sprint is `OPEN`, the Current sprint card's title also
+  names that sprint, as **Block 2: Current sprint** below states.
+- **Definitions shared by every block.** These terms have exactly one meaning on
+  the page:
+  1. An **open task** is a task whose status is `BACKLOG`, `SPRINT`, `DOING`, or
+     `TESTING`, that is, any status except `COMPLETED` (see `MODELS.md § Task Status`).
+  2. A task **in progress** is a task whose status is `DOING` or `TESTING`.
+  3. A **blocked task** is an open task with at least one dependency, a row of
+     `task_dependencies` naming it as the dependent task, whose depended-on task
+     is not `COMPLETED` (see `DATABASE.md § task_dependencies Table`).
+  4. The **request instant** is the current UTC time, read once per request. Every
+     figure that depends on the current time — the days elapsed of the current
+     sprint and the age of a task in progress — uses that one value.
+  5. The **whole days elapsed** since a timestamp is the number of complete
+     24-hour periods between that timestamp and the request instant, and `0` when
+     the timestamp lies after the request instant. It is the measure
+     `rmp sprint stats` reports as `days_elapsed` (see
+     `COMMANDS.md § Sprint Statistics`). It is written `<N> days`, and `1 day`
+     when `<N>` is `1`.
+  6. A **percentage** the page writes as text is a whole number, rounded down:
+     `floor(100 * part / whole)`, and `0` when `whole` is `0`. Rounding down keeps
+     `100%` for a whole that is entirely done and never shows it for one that is
+     not.
+  7. A **count** is written in decimal with no grouping separator.
+- **Block 1: the KPI row.** Four Tabler stat cards. Each is a `card` that shows,
+  in this order, the card's label in a `subheader` element, its value in an
+  element carrying the Tabler class `h1`, and its subline. No KPI card carries a
+  `card-header`. In the `Average velocity` card the label, the value, and the
+  subline are the direct content of the `card-body`. In the `Open tasks`,
+  `Completed`, and `Backlog` cards the `card-body` holds one
+  `<div class="row align-items-center">`, the row-and-column layout of Tabler's
+  stat cards: its first column, `<div class="col">`, holds the label, the value,
+  and the subline, in that order; its second column, `<div class="col-auto">`,
+  holds the card's type-breakdown donut, so the donut stands at the card's
+  trailing edge, to the right of the value. The second column is rendered only
+  when the card's value is greater than `0` (see **Type-breakdown donuts**
+  below). The four cards are:
+
+  | Label | Value | Subline |
+  |---|---|---|
+  | `Open tasks` | The number of open tasks. | `<a> in progress, <b> blocked`, where `<a>` is the number of tasks in progress and `<b>` the number of blocked tasks. |
+  | `Completed` | The number of tasks whose status is `COMPLETED`. | A completion row reading `<c> of <m> tasks`, with the percentage `<p>%` at its trailing edge, followed by a progress bar, both as stated below the table; `<c>` is the value, `<m>` the number of tasks of the roadmap, and `<p>` the percentage of `<c>` in `<m>`. |
+  | `Backlog` | The number of tasks whose status is `BACKLOG`, the unscheduled work. | `tasks in no sprint` |
+  | `Average velocity` | Exactly the `average_velocity` value `rmp stats` reports for the roadmap, written with one decimal place, rounded to the nearest tenth. | `tasks per day, last 5 closed sprints` |
+
+  The completion row of the `Completed` card is one `<div class="d-flex mb-2">`,
+  the same label-and-value row as the Current sprint progress row (Block 2,
+  item 1), holding exactly two `<div>` children, in this order: a `<div>` with no
+  class, holding the text `<c> of <m> tasks`, at the row's leading edge; and a
+  `<div class="ms-auto">`, holding the text `<p>%`, which the `ms-auto` class
+  places at the row's trailing edge. The row's layout comes from these utility
+  classes alone; neither the row nor its children carry a `style` attribute
+  ([UI Framework](#ui-framework), rule 10). The progress bar is the element
+  immediately after the completion row.
+
+  The progress bar of the `Completed` card is the native `<progress>` element
+  carrying Tabler's `progress` and `progress-sm` classes, with the `value`
+  attribute `<c>` and the `max` attribute `<m>`, and with the accessible name
+  `Completed tasks`, carried by its `aria-label`; for a roadmap with no task it
+  carries the `value` `0` and the `max` `1`, because a `max` of `0` is not a valid
+  value of the attribute. The native element is used for the reason the
+  [Roadmap Task Page](#roadmap-task-page) Sprint card uses it: Tabler's
+  `<div class="progress-bar">` form states its fill as an inline `style` width,
+  which [UI Framework](#ui-framework), rule 10, forbids.
+
+  `average_velocity` is reused, never recomputed differently: the page shows the
+  value the `rmp stats` computation produces for the same database state, whose
+  definition — the qualifying closed sprints, the per-sprint daily rate, and the
+  value `0.0` when no sprint qualifies — is canonical in
+  `COMMANDS.md § Get Roadmap Statistics` and `MODELS.md § Roadmap Stats`.
+
+  **Type-breakdown donuts.** The `Open tasks`, `Completed`, and `Backlog` cards
+  each carry a donut chart of the task types within the set of tasks the card's
+  value counts: the open tasks for `Open tasks`, the tasks whose status is
+  `COMPLETED` for `Completed`, and the tasks whose status is `BACKLOG` for
+  `Backlog`. The `Average velocity` card carries no donut.
+  1. A donut has one slice per task type with at least one task in the card's
+     set, in the order the `TaskType` enum declares them in
+     `MODELS.md § Task Type`. A type with no task in the set has no slice. A
+     slice's value is the number of tasks of its type in the set, so the slices
+     of a donut sum to the card's value.
+  2. Each slice takes the colour of its type, the same colour in all three donuts
+     (see [Dashboard Chart Library](#dashboard-chart-library), rule 5).
+  3. A donut draws no legend and no label on its slices. Its tooltip reads
+     `<TYPE>: <n> (<p>%)`, where `<TYPE>` is the type as the enum spells it, `<n>`
+     the number of tasks of that type in the card's set, and `<p>` the percentage
+     of `<n>` in the card's value, rounded down as **Definitions shared by every
+     block**, item 6, states.
+  4. A donut's container, its size, and its accessible name are given under
+     **Chart containers** below.
+  5. When the card's value is `0`, the card's set is empty and the card renders
+     no donut: no `col-auto` column, no container, and no empty-state markup. The
+     card then reads exactly as a KPI card on a roadmap with no task, its value
+     `0` stating that the set is empty (see **Empty states** below).
+- **Block 2: Current sprint.** The card presents the roadmap's `OPEN` sprint; at
+  most one sprint is `OPEN` at a time (see `DATABASE.md § sprints Table`).
+
+  **Card title.** While a sprint is `OPEN`, the card's `<h3 class="card-title">`
+  reads `Current sprint: <title>`, where `<title>` is the sprint's `title`. Only
+  `<title>` is a link, to that sprint's own page, `/roadmaps/{name}/sprints/{id}`;
+  the text `Current sprint: ` is plain text outside the link. The sprint's
+  `title` is the roadmap's data, not a label of the interface (see
+  **Interface language** above). When no sprint is `OPEN`, the
+  card title reads `Current sprint`, holds no link, and names no sprint.
+
+  While a sprint is `OPEN`, the card's `card-body` holds, in this order:
+  1. the **progress row**: one `<div class="d-flex mb-2">`, the label-and-value
+     row Tabler sets directly above a progress bar in its own dashboard cards,
+     holding exactly two `<div>` children, in this order:
+     - a `<div>` with no class, holding the **completion text** `<p>% complete`,
+       where `<p>` is the percentage of the sprint's member tasks whose status is
+       `COMPLETED` in the sprint's member tasks. It stands at the row's leading
+       edge;
+     - a `<div class="ms-auto">`, holding the **start text**
+       `Started <date>, <N> days elapsed`, where `<date>` is the sprint's
+       `started_at` in the display form of
+       [Date and Time Display](#date-and-time-display), in a `<time>` element, and
+       `<N> days` the whole days elapsed since it (`1 day` when `<N>` is `1`).
+       When `started_at` is unset, the start text reads `Started —`, with the em
+       dash that rule of [Date and Time Display](#date-and-time-display)
+       prescribes, and states no elapsed days. The `ms-auto` class, Bootstrap's
+       `margin-inline-start: auto` utility, places this `<div>` at the row's
+       trailing edge.
+
+     The row's layout comes from these utility classes alone; neither the row
+     nor its children carry a `style` attribute ([UI Framework](#ui-framework),
+     rule 10). The progress row is the element immediately before the status
+     breakdown;
+  2. the **status breakdown**: a Tabler `progress-stacked` bar with one segment
+     per member-task status, in the order `SPRINT`, `DOING`, `TESTING`,
+     `COMPLETED`, each segment a `<div class="progress">` carrying
+     `role="progressbar"`, an `aria-label` reading the status and its count
+     (`DOING 3`), `aria-valuemin="0"`, `aria-valuemax="100"`, and
+     `aria-valuenow` equal to its share, and holding a
+     `<div class="progress-bar">` carrying the background utility of its status:
+     `bg-cyan` for `SPRINT`, `bg-blue` for `DOING`, `bg-yellow` for `TESTING`, and
+     `bg-green` for `COMPLETED`, the solid counterparts of the status badge
+     colours of
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+     A segment's share is its count times `100` divided by the number of member
+     tasks, written with at most two decimal places. A status no member task holds
+     renders no segment, and a sprint with no member task renders the bar with no
+     segment;
+  3. the **legend**: Tabler's legend list,
+     `<div class="legend-list">`, with one entry per status of the breakdown, in
+     the same order, each entry
+     `<span class="legend legend-<colour>"><span class="legend-dot"></span><STATUS><span class="legend-value"><n></span></span>`,
+     where `<colour>` is the colour of its segment (`cyan`, `blue`, `yellow`, or
+     `green`), `<STATUS>` the status name, and `<n>` the number of member tasks in
+     that status, `0` included. The empty `<span class="legend">` dot of earlier
+     Tabler releases is deprecated in the vendored distribution and is not used. A sprint member is never in
+     `BACKLOG` (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`),
+     so the breakdown and the legend name the four other statuses only;
+  4. the line `Capacity <active>/<max>`, only when the sprint's `max_tasks` is
+     set, where `<active>` is the number of member tasks whose status is `SPRINT`,
+     `DOING`, or `TESTING` and `<max>` is `max_tasks`: the `current_load` and
+     `max_tasks` of `rmp sprint show` (see `MODELS.md § Sprint Show Result`).
+     When `max_tasks` is unset no capacity line is rendered.
+
+  The card draws no chart.
+
+  **No deadline is shown.** A sprint carries no end date and no timebox (see
+  `MODELS.md § Sprint Stats`, where `days_remaining` is always null), so the card
+  shows no deadline and no days remaining: each would present a figure the
+  roadmap does not hold.
+
+  The segment widths are not written into the markup as a `style` attribute. Each
+  segment carries its share in the attribute `data-percent`, and the page script
+  sets the segment's width from it through the element's `style.width` property,
+  the CSSOM, which the Content-Security-Policy permits (see
+  [Security Headers](#security-headers)); no template carries a `style`
+  attribute ([UI Framework](#ui-framework), rule 10). Without JavaScript the
+  segments are not sized, and the completion text and the legend still state
+  every number the bar draws.
+
+  When no sprint is `OPEN`, the card keeps its header and its body holds the
+  empty state the **Empty states** table gives, whose action is a link to the
+  roadmap's sprints page, `/roadmaps/{name}/sprints`.
+- **Block 3: Work in progress.** A Tabler card-table of the tasks in progress,
+  ordered by `started_at` ascending, the task in progress longest first, ties
+  broken by `id` ascending, and at most ten rows. A task in progress whose
+  `started_at` is unset is ordered after every task whose `started_at` is set. The
+  columns are, in this order:
+
+  | Column heading | Cell content |
+  |---|---|
+  | `ID` | The id badge, exactly as in a row of the [Roadmap Tasks Page](#roadmap-tasks-page). |
+  | `Title` | The task `title`, as a link to the task's own page, exactly as in a row of the tasks page. |
+  | `Status` | The status badge, exactly as in a row of the tasks page. |
+  | `Age` | The whole days elapsed since the task's `started_at`; an em dash when `started_at` is unset. |
+- **Block 4: Highest-severity open tasks.** A Tabler card-table of the open tasks
+  ordered by `severity` descending, then `priority` descending, then `id`
+  ascending, and at most five rows. The columns are, in this order, `ID`, `Title`,
+  `Severity`, and `Priority`, each cell exactly as the column of the same heading
+  in a row of the [Roadmap Tasks Page](#roadmap-tasks-page): the id badge, the
+  title link, the `S<n>` severity badge, and the `P<n>` priority badge.
+- **Block 5: Upcoming sprints.** A Tabler card-table of the sprints whose status
+  is `PENDING`, ordered by `order` ascending, the next sprint to execute first, and
+  at most five rows. The columns are `Sprint`, the sprint's `title` as a link to
+  that sprint's own page, and `Tasks`, the sprint's `task_count` (see
+  `MODELS.md § Sprint`).
+- **Block 6: Recent activity.** A Tabler card-table of the ten most recently
+  performed audit entries: exactly the first ten entries of page 1 of the
+  [Roadmap Audit Log Page](#roadmap-audit-log-page), in the same order. Each entry
+  is rendered as that page renders it, with the same seven columns in the same
+  order and every cell rule of that page — the em dash of an unset
+  `Related Entity ID` or `Commit`, the `Commit` written verbatim, the `Operation`
+  rendered whatever value it carries, and `Performed At` in the display form. The
+  card's header carries, at its trailing edge, a link labelled `View audit log`
+  to the roadmap's audit log page, `/roadmaps/{name}/audit`.
+- **Card-tables.** Each card-table is a `<table class="table card-table table-vcenter">`
+  inside Tabler's `table-responsive` container, directly in the card after its
+  header, so a table wider than its card scrolls inside that container and never
+  the page (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+  rule 12). A row is not a link; the links are the ones the cells carry.
+- **Empty states.** A block whose data is empty shows Tabler's empty-state markup —
+  a `<div class="empty">` with an `empty-title` and an `empty-subtitle` — in place
+  of its content, inside the card body, and keeps its card and its header. No
+  block renders a table with no row. The conditions and texts are exactly:
+
+  | Block | Shown when | Title | Subtitle |
+  |---|---|---|---|
+  | Current sprint | No sprint is `OPEN`. | `No open sprint` | `Sprints are started with the CLI, rmp sprint start.` followed by the action link `View sprints` to `/roadmaps/{name}/sprints`, in an `empty-action` element |
+  | Work in progress | No task is in progress. | `No task in progress` | `Tasks in DOING or TESTING appear here.` |
+  | Highest-severity open tasks | The roadmap has no open task. | `No open task` | `Every task of this roadmap is completed.` when the roadmap has at least one task, and `Tasks are created with the CLI, rmp task create.` when it has none |
+  | Recent activity | The audit log is empty. | `No activity yet` | `Changes made with the CLI are recorded here.` |
+  | Upcoming sprints | No sprint is `PENDING`. | `No upcoming sprint` | `Sprints are planned with the CLI, rmp sprint create.` |
+
+  The KPI cards have no empty state: on a roadmap with no task they show `0`
+  values and `0.0` average velocity, and none of them renders a type-breakdown
+  donut. A KPI card whose value is `0` renders no donut and no empty state in its
+  place (see **Type-breakdown donuts**, item 5). A roadmap with no task, no sprint, and no
+  audit entry is not an error: the page renders with HTTP 200, the four KPI cards
+  at zero, and every other block in its empty state.
+- **Chart containers.** The page's only charts are the three type-breakdown
+  donuts of the KPI row. Each is drawn into one `<div>` placed in its card's
+  `col-auto` column, which carries no `class` attribute and no `style` attribute,
+  at a fixed size of `64` by `64` pixels, the `4rem` square, given to ApexCharts
+  as the numbers `64` and never as percentages (see
+  [Dashboard Chart Library](#dashboard-chart-library), rule 4). Tabler ships no
+  chart container class of that size, so the drawn chart gives the container its
+  size.
+
+  Each container carries `role="img"` and an `aria-label` stating the chart's key numbers, so a reader
+  of assistive technology, who cannot read the drawing, reads them in words. The
+  labels are exactly:
+
+  | Chart | `aria-label` |
+  |---|---|
+  | Open tasks donut | `Open tasks by type: ` followed by, for each slice in donut order, `<TYPE> <n> (<p>%)`, the slices separated by `, ` |
+  | Completed donut | `Completed tasks by type: ` followed by, for each slice in donut order, `<TYPE> <n> (<p>%)`, the slices separated by `, ` |
+  | Backlog donut | `Backlog tasks by type: ` followed by, for each slice in donut order, `<TYPE> <n> (<p>%)`, the slices separated by `, ` |
+
+  In a donut's label, `<TYPE>`, `<n>`, and `<p>` are those of the slice's tooltip
+  (see **Type-breakdown donuts**, item 3).
+
+  A container is rendered only when its card's value is greater than `0`; a KPI
+  card whose value is `0` renders neither a donut container nor an empty state.
+- **Chart data block.** The page emits the data of every chart in exactly one
+  `<script type="application/json" id="dashboard-data">` element, whose content
+  is the JSON object canonical in `DATA_FORMATS.md § Dashboard Chart Data`. The
+  element is a data block, not a script: a browser does not execute a `script`
+  element whose type is not a JavaScript MIME type, so the
+  Content-Security-Policy of [Security Headers](#security-headers) stays unchanged
+  and still forbids every inline script. The page carries no inline script and no
+  event-handler attribute. The block is written through `html/template`, which
+  escapes the characters `<`, `>`, and `&` in it, so its content can never close
+  the element. The object carries enum values and counts only, and no title, description, or other free text a user authored.
+- **Page script.** The page loads `/static/vendor/apexcharts/apexcharts.min.js`
+  and then `/static/dashboard.js`, both as `<script defer>` elements in that
+  order, so the library is defined before the page script runs. No other page
+  loads `dashboard.js`, and the only other page that loads the library is the
+  Roadmap Sprint Page (see [Dashboard Chart Library](#dashboard-chart-library),
+  rule 2). `dashboard.js` parses the chart data block, renders each chart
+  into its container when the container is present, and sets the width of each
+  segment of the status breakdown from its `data-percent` attribute. It fetches
+  nothing: the data block is its only data source. The chart options it applies
+  are those of [Dashboard Chart Library](#dashboard-chart-library).
+- **Without JavaScript.** Every number the page states is rendered on the server:
+  the KPI values and sublines, the current sprint's lines and legend, the
+  card-tables, the empty states, and the charts' `aria-label` texts. Only the
+  drawing of the charts and the sizing of the status breakdown need the script.
+- **Read cost and consistency.** Every figure on the page comes from one
+  consistent state of the roadmap database: the page issues all of its reads
+  inside one read-only transaction, so no block reflects a write that another
+  block does not. The reads are a fixed number of aggregate queries, each
+  bounded: every count is computed by the database with `COUNT` and `GROUP BY`,
+  and every list is bounded by a `LIMIT` equal to its row cap. The page never
+  loads every task row into memory to count it, and issues no query per task, per
+  sprint, or per row. The statements, their parameters, and their indexes are
+  canonical in `DATABASE.md § Dashboard Queries`, which also names the three reads
+  the page shares with `rmp stats`, `rmp sprint stats`, and the audit log page;
+  their number does not grow with the number of tasks, sprints, or audit entries
+  (see [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)).
+  `average_velocity` and the current sprint's member counts therefore come from
+  the same reads, and the same computation over them, as the CLI's.
+- **Dates.** Every timestamp the page displays is written as
+  [Date and Time Display](#date-and-time-display) specifies. The chart data block
+  carries no date (see `DATA_FORMATS.md § Dashboard Chart Data`).
+- **Path parameters.** `{name}` is validated against the roadmap-name rules exactly
+  as on the other roadmap routes; an invalid or nonexistent `{name}` returns HTTP
+  `404 Not Found` (see [Routes and Pages](#routes-and-pages)).
+- **Read-only.** The page renders data only. It contains no form, button, or link
+  that submits a change; its links navigate to read-only pages. Reading the
+  dashboard writes no row and produces no audit entry.
+
+### Roadmap Sprints Page
+
+- **Route:** `GET /roadmaps/{name}/sprints`
+- **Reached from the sidebar.** The page is the roadmap's Sprints view: the
+  sidebar's Sprints link points here, and the empty state of the
+  [Roadmap Dashboard Page](#roadmap-dashboard-page) Current sprint card links here
+  when no sprint is `OPEN`. The roadmap's landing page is the dashboard.
 - **Content:** A read-only presentation of the named roadmap's sprints, read from
   that roadmap's `project.db`. This page does **not** render the roadmap's tasks;
   the roadmap's full set of tasks has its own page, the task list at
@@ -1022,7 +1412,7 @@ how the `rmp web` process itself terminates.
   to right the tab labels are exactly **Próximos**, **Actual**, and
   **Concluídos**, and the **Actual** tab is the active tab by default when the
   page loads. "Current sprint selected by default" means the Actual tab — the OPEN
-  sprint or sprints — is the active tab on landing. The interface classifies each
+  sprint or sprints — is the active tab when the page loads. The interface classifies each
   sprint into exactly one tab by its `Sprint` status (`MODELS.md § Sprint`, status
   enum in `MODELS.md § Enums`): a `PENDING` sprint goes to Próximos, an `OPEN`
   sprint to Actual, and a `CLOSED` sprint to Concluídos. Every sprint in every tab
@@ -1155,7 +1545,9 @@ how the `rmp web` process itself terminates.
      **Pagination** below).
 - **The card header.** The list card's header is
   `<div class="card-header flex-wrap gap-2">` and holds, in this order:
-  1. the **title block**, `<div><h2 class="card-title">Task list</h2></div>`. The
+  1. the **title block**, `<div><h2 class="card-title">Task list</h2></div>`, the
+     `<h2>` also carrying the `id` that names the list's `table-responsive`
+     container (see [UI Framework](#ui-framework), rule 22). The
      block carries **no** `card-subtitle`: the number of tasks the filters admit is
      already stated by the footer's range text (see **Pagination** below), and a
      second statement of it in the header would be a copy that can disagree with
@@ -1963,10 +2355,25 @@ how the `rmp web` process itself terminates.
   its card, so no forced horizontal scrolling of the page is introduced (see
   [Markdown Rendering](#markdown-rendering)). The page does not redefine these
   fields; `MODELS.md` and `DATABASE.md` remain canonical.
+- **Sprint progress card.** The Sprint details card and a Sprint progress card
+  share one row, `<div class="row row-deck row-cards mb-3">`, directly below the
+  page header: the Sprint details card in a `<div class="col-12 col-lg">` column,
+  at the row's leading edge, taking the width the other column leaves, and the
+  Sprint progress card in a `<div class="col-12 col-sm-6 col-lg-3">` column to its
+  right. Below the `lg` breakpoint the two stack, the Sprint details card first.
+  The Sprint progress card states the sprint's total number of member tasks in its
+  subheader and draws a horseshoe gauge of three concentric arcs, one per board column, with the
+  percentage of tasks completed at its centre and a legend of the three column
+  counts below it (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+  rule 7). The gauge is drawn in the browser by the vendored ApexCharts library
+  from one JSON data block the page carries, so the page also links the Tabler
+  vendors stylesheet and loads the ApexCharts library and the page script
+  `static/sprint-progress.js` (see
+  [Dashboard Chart Library](#dashboard-chart-library)).
 - **Member-tasks board.** The page presents the sprint's tasks as a Kanban board
   of three fixed columns — `WAITING`, `DOING`, and `CLOSED` — holding one card per
-  task, placed between the sprint details above it and the sprint's comments below
-  it. The columns group the tasks by one fixed categorisation of the task status —
+  task, placed between the row of the Sprint details and Sprint progress cards
+  above it and the sprint's comments below it. The columns group the tasks by one fixed categorisation of the task status —
   `WAITING` holds `SPRINT`, `DOING` holds `DOING` and `TESTING`, and
   `CLOSED` holds `COMPLETED` — so the three column counts sum to the sprint's total
   number of member tasks, and each column orders its own cards: the `WAITING`
@@ -2006,7 +2413,9 @@ how the `rmp web` process itself terminates.
   link that submits a change; there is no edit affordance of any kind. The task
   cards are links to read-only task pages, and the only buttons the board
   carries are the column collapse toggles, which change only the board's
-  presentation; neither submits anything or changes any data.
+  presentation; neither submits anything or changes any data. The Sprint
+  progress card's gauge offers no control: hovering one of its arcs changes only
+  the text at the gauge's centre.
 
 ### Roadmap Task Page
 
@@ -2205,7 +2614,7 @@ how the `rmp web` process itself terminates.
   [Markdown Rendering](#markdown-rendering)). A field whose value is empty or null
   keeps its card, which shows the em dash in place of the container. The Markdown
   container of each field card, and of every comment `body` in the Comments card,
-  spans the full width of its card's body: it carries no line-length limit (see
+  spans the full width of its card's body, as every Markdown container does (see
   [Markdown Rendering](#markdown-rendering), rule 13). The rendered
   content wraps within its card, and a wide table or code block scrolls inside its
   own box, so no forced horizontal scrolling of the page is introduced.
@@ -2466,6 +2875,7 @@ which this section leaves unchanged.
    | Page | Document title |
    |---|---|
    | Roadmap Index | `Roadmaps - <hostname>` |
+   | Roadmap Dashboard | `<roadmap> - Dashboard - <hostname>` |
    | Roadmap Sprints | `<roadmap> - Sprints - <hostname>` |
    | Roadmap Tasks | `<roadmap> - Tasks - <hostname>` |
    | Roadmap Audit Log | `<roadmap> - Audit - <hostname>` |
@@ -2525,8 +2935,8 @@ which this section leaves unchanged.
 
 ### Shared Page-Header Partial
 
-Every page's header title column is rendered by **one** partial, so the seven pages
-cannot drift into seven conventions for saying the same kind of thing. The partial
+Every page's header title column is rendered by **one** partial, so the eight pages
+cannot drift into eight conventions for saying the same kind of thing. The partial
 renders the `<div class="col">` of the Tabler page-header row: an optional
 pretitle, an optional status badge inside the pretitle, placed after the pretitle
 text, the title, and an optional lead line. A page MUST NOT hand-write a
@@ -2544,6 +2954,7 @@ The document `<title>` is a separate element, specified in
    | Page | Pretitle | Title |
    |---|---|---|
    | Roadmap Index | — | `Roadmaps` |
+   | Roadmap Dashboard | — | `Dashboard` |
    | Roadmap Sprints | — | `Sprints` |
    | Roadmap Tasks | — | `Tasks` |
    | Roadmap Audit Log | — | `Audit` |
@@ -2584,6 +2995,7 @@ The document `<title>` is a separate element, specified in
    | Page | Actions column |
    |---|---|
    | Roadmap Index | none |
+   | Roadmap Dashboard | none |
    | Roadmap Sprints | none |
    | Roadmap Tasks | none; the page's filter bar sits in the header of its task-list card (see [Roadmap Tasks Page](#roadmap-tasks-page), **The card header** and **Filter bar**) |
    | Roadmap Audit Log | none |
@@ -2660,6 +3072,15 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 
 2. **What the sub-template renders.** For one sprint, the sub-template renders, in
    order:
+   - the **sprint summary row**, one `<div class="row row-deck row-cards mb-3">`
+     holding exactly two columns, in this order: a `<div class="col-12 col-lg">`
+     column holding the Sprint details card, and a
+     `<div class="col-12 col-sm-6 col-lg-3">` column holding the **Sprint progress
+     card** (rule 7). From the `lg` breakpoint the two cards stand side by side,
+     the Sprint details card at the leading edge taking the width the Sprint
+     progress card leaves, and `row-deck` makes them equal in height; below `lg`
+     each column takes its own line, the Sprint details card first. The next two
+     items define the two cards the row holds, in the row's order;
    - the **Sprint details card**, which carries the sprint's `description`
      (rule 6) and the **sprint metadata datagrid**. The datagrid holds exactly
      three fields, in this order: `Created` (`created_at`), `Started`
@@ -2672,17 +3093,19 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      The datagrid carries no `ID`, `Title`, `Status`, `Order`, `Capacity`, or
      `Tasks` field. The page header already presents the sprint `title`,
      `Sprint #<ID>`, and the sprint's status badge (see
-     [Roadmap Sprint Page](#roadmap-sprint-page)), and the member-tasks board's
-     three column counts together give the sprint's total task count, so a
-     datagrid field for any of them would repeat what the page already shows. The
+     [Roadmap Sprint Page](#roadmap-sprint-page)), and the Sprint progress card
+     beside it states, in its subheader, the sprint's total task count, the sum of the member-tasks
+     board's three column counts, so a datagrid field for any of them would repeat
+     what the page already shows. The
      sprint's execution `order` and its capacity (`max_tasks`) are not shown on
      the page. The datagrid is rendered only by this sub-template, and so only on
      the Roadmap Sprint Page;
+   - the **Sprint progress card**, which states the sprint's total number of
+     member tasks and draws the gauge of its three column groups (rule 7);
    - the **member-tasks board**, a Kanban board of three fixed columns holding the
      sprint's tasks, one card per task (defined below). The board is the sprint's
-     member-task presentation and sits between the two cards that surround it:
-     directly below the Sprint details card and directly above the Comments
-     card;
+     member-task presentation and sits between what surrounds it: directly below
+     the sprint summary row and directly above the Comments card;
    - the **Comments card**, a separate card placed after the member-tasks board and
      rendered last in the sub-template (defined below).
 
@@ -3321,15 +3744,118 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      [Markdown Rendering](#markdown-rendering), rule 3).
 
 5. **Read-only.** The sub-template renders data only. It contains no form, button,
-   or link that submits a change. Its interactions are two, and neither changes
-   any data: following a board card to that task's read-only page, and
+   or link that submits a change. Its interactions are three, and none changes
+   any data: following a board card to that task's read-only page,
    collapsing or expanding a board column with that column's toggle, which
-   changes only the board's presentation.
+   changes only the board's presentation, and hovering an arc of the Sprint
+   progress card's gauge, which changes only the text at the gauge's centre
+   (rule 7).
 
 6. **Markdown fields.** Wherever the sub-template renders the sprint's
    `description` or a sprint comment's `body`, it renders the HTML the Markdown
    renderer produces from it, as specified in
    [Markdown Rendering](#markdown-rendering).
+
+7. **Sprint progress card.** The card stands to the right of the Sprint details
+   card in the sprint summary row (rule 2) and states how the sprint's member
+   tasks divide among the three columns of the member-tasks board. Its model is
+   the "Active Users" card of Tabler's preview dashboard, in the vendored Tabler
+   release: the card `shared/components/cards/charts/ActiveUsers2.astro`, whose
+   gauge is drawn by `shared/ui/ChartRadial.astro` of the Tabler repository.
+   - **Markup.** The card is a `<div class="card">` with no `card-header`, whose
+     `<div class="card-body">` holds exactly these three children, in this order:
+     1. `<div class="subheader"><t> Tasks</div>`, where `<t>` is the sprint's
+        total number of member tasks (`Summary.TotalTasks`, the sum of the
+        board's three column counts), written as a count (see
+        [Roadmap Dashboard Page](#roadmap-dashboard-page), **Definitions shared by
+        every block**, item 7); `<t> Tasks` is written `1 Task` when `<t>` is `1`.
+        The subheader is the card's only statement of the total: the card holds
+        no separate value element, so the value row the model places below its
+        subheader, and the trend indicator in it, are not reproduced;
+     2. the gauge container,
+        `<div id="chart-sprint-progress" class="position-relative" role="img" aria-label="<label>"></div>`,
+        empty in the served HTML, where `<label>` is the label given under
+        **Accessible label** below;
+     3. the legend (see **Legend** below).
+
+     No element of the card carries a `style` attribute
+     ([UI Framework](#ui-framework), rule 10).
+   - **The three groups.** The card counts exactly the three groups the board's
+     columns hold, with the categorisation of rule 3: `WAITING` (`SPRINT`,
+     `Summary.Pending`), `DOING` (`DOING` and `TESTING`, `Summary.InProgress`),
+     and `CLOSED` (`COMPLETED`, `Summary.Completed`), the counters
+     `models.CalculateSprintShowResult` produces. It introduces no other
+     categorisation, so its counts always equal the board's column count badges.
+     Its figures come from the read that fills the board; the card adds no query.
+   - **The gauge.** The gauge is an ApexCharts `radialBar` chart, a horseshoe of
+     three concentric arcs, one series per group, in the order `WAITING`,
+     `DOING`, `CLOSED`. Each series' label is its column heading,
+     and its value is the percentage of that group's count in the total
+     `floor(100 * count / total)`, and `0` when the total is `0` (see
+     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Definitions shared by
+     every block**, item 6). Each series' colour is the solid Tabler colour of the
+     badge colour of its column's canonical status, the status whose colour the
+     column's count badge takes (rule 3, **Column header**, and
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)):
+     `WAITING` takes `var(--tblr-cyan)`, the solid counterpart of `SPRINT`'s
+     `bg-cyan-lt`; `DOING` takes `var(--tblr-blue)`, that of `DOING`'s
+     `bg-blue-lt`; and `CLOSED` takes `var(--tblr-green)`, that of `COMPLETED`'s
+     `bg-green-lt`. No colour is written as a literal value. The gauge's options
+     are those of [Dashboard Chart Library](#dashboard-chart-library), rules 4
+     and 5.
+   - **Centre.** While no arc is hovered, the gauge's centre shows the label
+     `COMPLETED` and the value `<p>%`, where `<p>` is the percentage of the
+     sprint's member tasks in the `CLOSED` group, rounded down — the value of the
+     `CLOSED` series — and `0%` when the total is `0`. While an arc is hovered,
+     the centre shows that series' label and that group's task count, not its
+     percentage: hovering the `DOING` arc of a sprint with three tasks in `DOING`
+     or `TESTING` shows `DOING` and `3`.
+   - **Legend.** Below the gauge, Tabler's legend list, `<div class="legend-list">`,
+     holds exactly three entries, one per group, in the order of the series, each
+     `<span class="legend legend-<colour>"><span class="legend-dot"></span><HEADING><span class="legend-value"><n></span></span>`,
+     where `<colour>` is the series' colour name (`cyan`, `blue`, or `green`),
+     `<HEADING>` the column heading, and `<n>` the group's count, `0` included.
+     It is the legend idiom of the dashboard's Current sprint card (see
+     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Block 2: Current
+     sprint**). The legend is rendered on the server.
+   - **Accessible label.** The gauge container's `aria-label` reads exactly
+     `<t> tasks: <w> waiting, <d> doing, <c> closed; <p>% completed`, where `<t>`
+     is the total, `<w>`, `<d>`, and `<c>` the counts of `WAITING`, `DOING`, and
+     `CLOSED`, and `<p>` the completed percentage of **Centre**; `<t> tasks` is
+     written `1 task` when `<t>` is `1`. For a sprint of 12 member tasks, 5 in
+     `SPRINT`, 3 in `DOING` or `TESTING`, and 4 in `COMPLETED`, it reads
+     `12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed`.
+   - **Always rendered.** The card is rendered for every sprint, including a
+     sprint with no member task: its subheader reads `0 Tasks`, its gauge container is
+     present, its three arcs are empty, its centre reads `COMPLETED` and `0%`,
+     each legend entry reads `0`, and its `aria-label` reads
+     `0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed`. The card has no empty
+     state.
+   - **Chart data block.** The page emits the gauge's data in exactly one
+     `<script type="application/json" id="sprint-progress-data">` element, whose
+     content is the JSON object canonical in
+     `DATA_FORMATS.md § Sprint Progress Chart Data`. It is a data block, not a
+     script, exactly as the dashboard's chart data block is (see
+     [Roadmap Dashboard Page](#roadmap-dashboard-page), **Chart data block**): a
+     browser does not execute it, the Content-Security-Policy of
+     [Security Headers](#security-headers) stays unchanged and still forbids every
+     inline script, and `html/template` escapes `<`, `>`, and `&` in it. The
+     object carries enum values and counts only, and no title, description, or
+     other free text a user authored. Every number the gauge draws is computed on
+     the server.
+   - **Page script.** The sprint page links
+     `/static/vendor/tabler/tabler-vendors.min.css` after the Tabler stylesheet,
+     and loads `/static/vendor/apexcharts/apexcharts.min.js` and then
+     `/static/sprint-progress.js`, both as `<script defer>` elements in that
+     order, so the library is defined before the page script runs.
+     `static/sprint-progress.js` parses the chart data block and renders the gauge
+     into its container. It fetches nothing: the data block is its only data
+     source. It does not touch the member-tasks board, whose behaviour belongs to
+     `static/sprint-board.js` alone (rule 3, **Column collapse**).
+   - **Without JavaScript.** The subheader with the total, the legend with its three
+     counts, and the gauge's `aria-label` are rendered on the server, so every
+     number the card states is readable without JavaScript. Only the drawing of
+     the gauge needs the script.
 
 ### Roadmap Knowledge-Graph Page
 
@@ -3736,7 +4262,14 @@ of an internal read error, and what the body carries.
    read alike is kept rather than broken: a lost or silent server connection
    (rule 10) and an exhausted serialisation retry (rule 11) carry `rmp`'s own
    line, because no engine produced either failure and there is no engine
-   diagnostic to carry. The `500` of an internal read error does not carry
+   diagnostic to carry. A field the engine refuses as too long for its durable
+   format is the one execution failure where the CLI prints a line of its own and
+   the endpoint does not: the endpoint's `error` is `query failed to execute: `
+   followed by the engine's diagnostic, as for any other engine failure, while
+   `rmp graph client` writes its field-length line, which ends in that same
+   diagnostic (`GRAPH.md § Field Length Limits`, rule 13); the diagnostic the two
+   surfaces carry is the same, and only the CLI names the class in text of its
+   own. The `500` of an internal read error does not carry
    this shape: it is answered as every other route's internal read error is.
 
 8. **A request the caller abandoned is not a query-bar failure, and it carries no
@@ -3871,7 +4404,8 @@ of an internal read error, and what the body carries.
     still refuses nothing on the ground of what a statement does. Every write the
     query bar could make before this rule existed it can make after it, written
     without the prefix: an `EXPLAIN` of a write executes nothing wherever it runs,
-    and the engine refuses a `PROFILE` of a write wherever it runs
+    and a `PROFILE` of a write performs exactly the write the same statement
+    performs without the prefix
     (`GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes`, rules 1 and 4).
     The refusal is therefore no security control, and it does not narrow the
     property [Security and Constraints](#security-and-constraints), rule 3,
@@ -4290,8 +4824,9 @@ write.
 ### Static Assets
 
 - **Route:** `GET /static/...`
-- **Content:** The embedded stylesheet, the embedded client scripts, and the
-  vendored D3.js graph library (with the d3-sankey plugin). These are served only
+- **Content:** The embedded stylesheet, the embedded client scripts, the
+  vendored D3.js graph library (with the d3-sankey plugin), and the vendored
+  ApexCharts chart library. These are served only
   from the embedded asset set. The static handler MUST serve only embedded assets
   and MUST NOT map a
   request path to an arbitrary path on the host filesystem. A request for an asset
@@ -4316,13 +4851,21 @@ re-presents an earlier, now-stale response in its place.
 
 ### Tasks and Sprints from SQLite
 
-1. For a roadmap sprints request, a roadmap tasks request, a roadmap sprint
-   request, a roadmap task request, or a roadmap audit log request, the server resolves the roadmap's
+1. For a roadmap dashboard request, a roadmap sprints request, a roadmap tasks
+   request, a roadmap sprint request, a roadmap task request, or a roadmap audit
+   log request, the server resolves the roadmap's
    database at
    `~/.roadmaps/{name}/project.db` (see `ARCHITECTURE.md § Directory Structure`)
    and reads its sprints, tasks, and audit entries using the existing read queries
    defined in
-   `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
+   `DATABASE.md § Main SQL Queries`. The dashboard page reads only aggregates and
+   bounded lists, inside one read-only transaction: a fixed number of queries
+   whose counts the database computes with `COUNT` and `GROUP BY` and whose lists
+   carry a `LIMIT` equal to their row caps, with none per task, per sprint, or per
+   row, and no read of every task row (see
+   [Roadmap Dashboard Page](#roadmap-dashboard-page), **Read cost and
+   consistency**). Those statements are specified in
+   `DATABASE.md § Dashboard Queries`. The sprints page reads the roadmap's sprints
    and each sprint's total task count for its card footer, but no member tasks,
    because the page renders every sprint as a card with no member tasks on it; the
    tasks page reads the roadmap's sprints for its sprint filter and the id of each
@@ -4645,13 +5188,17 @@ read from the host filesystem at runtime.
 2. **Stylesheet** — all CSS, including the vendored Tabler CSS framework (the UI
    framework, see [UI Framework](#ui-framework)), the syntax-highlighting
    stylesheet of rendered Markdown code blocks (see
-   [Markdown Rendering](#markdown-rendering), rule 7), and any further vendored CSS
-   the interface uses (see
+   [Markdown Rendering](#markdown-rendering), rule 7), the vendored Tabler vendors
+   stylesheet that styles the charts of the dashboard page and the sprint page
+   (see [Dashboard Chart Library](#dashboard-chart-library)), and any further vendored
+   CSS the interface uses (see
    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 3. **JavaScript** — all client scripts, including the Tabler JavaScript (the UI
-   framework's scripts) and the D3.js knowledge-graph visualisation library (and
-   the d3-sankey plugin) and any of their dependencies, all in already-built
-   (vendored) form.
+   framework's scripts), the D3.js knowledge-graph visualisation library (and
+   the d3-sankey plugin), and the ApexCharts chart library of the dashboard page
+   and the sprint page (see [Dashboard Chart Library](#dashboard-chart-library)),
+   and any of their
+   dependencies, all in already-built (vendored) form.
 4. **Web fonts** — every font the interface uses, including the Inter font in
    its upright and its italic face (see [UI Framework](#ui-framework), rule 4)
    and the Tabler Icons webfont; no font is loaded from a remote font host.
@@ -4779,11 +5326,22 @@ the way out, on every request, and the CLI's output of these fields is unchanged
    The renderer does **not** enable raw HTML output, the attribute syntax that
    lets an author attach an `id`, a `class`, or any other attribute to an element,
    or automatic heading identifiers.
-4. **Plain text remains valid Markdown, and a single newline is a line break.**
+4. **Plain text remains valid Markdown, and line breaks follow CommonMark.**
    Text written without any Markdown syntax renders as paragraphs: a blank line
-   separates two paragraphs. A single newline inside a paragraph renders as a line
-   break (`<br>`), not as the space CommonMark's soft line break would produce,
-   so every line break the author entered stays visible.
+   separates two paragraphs. Line breaks inside a paragraph follow CommonMark
+   0.31.2 (https://spec.commonmark.org/0.31.2/), sections 6.7, Hard line breaks,
+   and 6.8, Soft line breaks, which GitHub Flavored Markdown inherits:
+   - A single newline inside a paragraph is a **soft line break**. It renders as
+     a newline in the HTML source and no `<br>` element, so the browser displays
+     it as a space and the two lines join into one wrapped line.
+   - A newline preceded by two or more spaces, or by a backslash (`\`), at the end
+     of the line is a **hard line break**. It renders as a `<br>` element, so the
+     author forces a visible line break with either form.
+
+   The renderer does not enable goldmark's hard-wraps option, which would turn
+   every soft line break into `<br>`. This rule governs the Markdown fields only:
+   plain multi-line free-text, which is not Markdown, keeps every authored line
+   break visible (see [Frontend Rules](#frontend-rules), rule 6).
 5. **Headings are demoted.** A heading in a Markdown field never outranks the
    structure of the page it appears in. A level-1 heading (`#`, or a
    Setext heading underlined with `=`) renders as `<h4>`, a level-2 heading (`##`,
@@ -5052,20 +5610,18 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       italic `em` or `i` element in the Inter font is drawn from Inter's real
       italic face (see [UI Framework](#ui-framework), rule 4), never from a slant
       the browser synthesises from the upright face.
-    - **Line length.** On the [Roadmap Sprint Page](#roadmap-sprint-page), the
-      container of the sprint `description` and the container of every sprint
-      comment `body` have a `max-width` of `80ch`, so a line of rendered Markdown
-      holds at most about 80 characters: the width WCAG 2.2 Success Criterion
-      1.4.8 (Visual Presentation) names, and inside the 45 to 90 characters
-      Matthew Butterick's *Practical Typography* recommends. The sprint card is
-      already narrow and carries no such limit. On the
-      [Roadmap Task Page](#roadmap-task-page), the container of each of the four
-      task Markdown fields and of every task comment `body` carries no such limit
-      either: it spans the full width of its card's body.
+    - **Line length.** No maximum line length is applied to rendered Markdown.
+      On every surface that shows it — the sprint card, the
+      [Roadmap Sprint Page](#roadmap-sprint-page), and the
+      [Roadmap Task Page](#roadmap-task-page) alike — the container takes the
+      full content width of its parent, and no rule sets a `max-width` on it
+      other than `none`. The content still wraps within the container, and the
+      **Overflow** rule above continues to govern wide tables, code blocks, and
+      long words.
 
     This styling adds to the HTML the renderer emits only the fixed task-list
     classes of rules 3 and 14, which carry no text of the author's and change no
-    visible text, and it changes nothing else in rules 1 to 12, 14, and 15: the line breaks of rule 4, the heading demotion of
+    visible text, and it changes nothing else in rules 1 to 12, 14, and 15: the soft and hard line breaks of rule 4, the heading demotion of
     rule 5, the Content-Security-Policy, and every safety property stay as they
     are.
 14. **The non-interactive form, for content placed inside a link.** The sprint
@@ -5085,7 +5641,7 @@ the way out, on every request, and the CLI's output of these fields is unchanged
       the `task-list-item` class of rule 3, which the ordinary form gives it too,
       so one rule of rule 13 styles the task-list item in both forms.
 
-    Everything else — the accepted Markdown, the line breaks, the demoted
+    Everything else — the accepted Markdown, the soft and hard line breaks of rule 4, the demoted
     headings, the highlighting, the filtering, the footnote identifier prefix, and
     the container — is identical to the ordinary form. The sprint card is the only
     surface that uses the non-interactive form.
@@ -5174,9 +5730,13 @@ timestamp references this section and does not restate it.
      `Tested`, and `Closed` fields of the Details card, and the `created_at` and
      `updated_at` timestamps of each entry of the Comments card;
    - on the [Roadmap Tasks Page](#roadmap-tasks-page), the `Created` column of the
-     task list.
+     task list;
+   - on the [Roadmap Dashboard Page](#roadmap-dashboard-page), the start date of
+     the Current sprint card and the `Performed At` column of the Recent activity
+     card.
 
-   The Roadmap Index Page, the sprint card of the Roadmap Sprints Page, and the
+   The dashboard's chart data block, which is JSON and not displayed text, is
+   outside this rule (rule 9). The Roadmap Index Page, the sprint card of the Roadmap Sprints Page, and the
    cards of the sprint page's member-tasks board display no timestamp, and this rule
    adds none to them. A surface that comes to display a timestamp is governed by this rule.
 9. **What this rule does not govern.**
@@ -5202,11 +5762,12 @@ timestamp references this section and does not restate it.
    JavaScript framework (built on Bootstrap). Tabler provides the admin-shell
    layout — the navigation sidebar, the top navbar, page headers, and the cards,
    tables, badges, and buttons used across every page. The sidebar's per-roadmap
-   links resolve to the roadmap's four views — Sprints at `/roadmaps/{name}` (the
-   landing page), Tasks at `/roadmaps/{name}/tasks`, Audit at
-   `/roadmaps/{name}/audit`, and Graph at
-   `/roadmaps/{name}/graph` — and the sidebar highlights whichever of these is the
-   active view; a task's own page highlights Tasks (see
+   links resolve to the roadmap's five views, in this order — Dashboard at
+   `/roadmaps/{name}` (the landing page), Sprints at `/roadmaps/{name}/sprints`,
+   Tasks at `/roadmaps/{name}/tasks`, Audit at `/roadmaps/{name}/audit`, and Graph
+   at `/roadmaps/{name}/graph` — and the sidebar highlights whichever of these is
+   the active view: the dashboard page highlights Dashboard, the sprints page
+   highlights Sprints, and a task's own page highlights Tasks (see
    [Roadmap Task Page](#roadmap-task-page)). Tabler also provides the tabs used for
    the sprint presentation on the roadmap sprints page.
 2. The interface uses Tabler's **dark theme**. Every page declares it with
@@ -5251,7 +5812,7 @@ timestamp references this section and does not restate it.
    under git.
 8. **Faithful Tabler fidelity.** Every web template faithfully follows the
    official Tabler examples, adapted only to the project domain (the read-only
-   roadmap, sprint, task, audit, and graph pages). When a template needs a
+   roadmap, dashboard, sprint, task, audit, and graph pages). When a template needs a
    component that Tabler already provides — cards, card tabs, page headers,
    tables, pagination, badges, empty states, the navigation sidebar, the timeline,
    the progress bar —
@@ -5268,9 +5829,9 @@ timestamp references this section and does not restate it.
    element order (rule 12), the single sidebar collapse, toggler, and brand
    (rule 13), `aria-current` on the active navigation link (rule 14), the labelled
    pagination wrapper (rule 15), the page-header actions column (rule 16), the
-   fluid-layout container idiom (rule 17), the `main` page-body landmark
-   (rule 18), and the top navbar's content (rule 19) — are concrete applications
-   of it.
+   fluid-layout container idiom (rule 17), the `main` content landmark
+   (rule 18), the top navbar's content (rule 19), and the focusable scroll
+   container of a card-table (rule 22) — are concrete applications of it.
 9. **Card tabs follow Tabler's "card with tabs" example.** The Roadmap Sprints
    Page tab control (the three tabs Próximos, Actual, Concluídos; see
    [Roadmap Sprints Page](#roadmap-sprints-page)) follows Tabler's "card with
@@ -5399,8 +5960,8 @@ timestamp references this section and does not restate it.
     on the `<a class="nav-link">`. The templates MUST do both wherever they
     highlight the active view: the `<li>` carries `active` and the `<a>` inside it
     carries `aria-current="page"`. This applies to the sidebar's roadmap-index entry
-    and to the active view among a roadmap's Sprints, Tasks, Audit, and Graph links
-    (see rule 1), so the active view reaches assistive technology and is not
+    and to the active view among a roadmap's Dashboard, Sprints, Tasks, Audit, and
+    Graph links (see rule 1), so the active view reaches assistive technology and is not
     conveyed by colour alone.
 15. **Pagination is wrapped in a labelled `nav`.** Tabler emits its pagination
     component inside a `<nav>` element carrying a descriptive `aria-label`, which is
@@ -5444,24 +6005,28 @@ timestamp references this section and does not restate it.
     top navbar, the page header, and the page body. The
     `container-fluid` inside the sidebar `<aside>` is Tabler's own vertical-navbar
     markup and stays exactly as Tabler ships it.
-18. **The page body is a `main` landmark.** Tabler's built admin shell renders the
-    page body as `<main class="page-body">`, so the region that holds each page's
-    own content is the document's `main` landmark and assistive technology can jump
-    straight to it past the sidebar, the top navbar, and the page header. The
-    templates MUST use that element for the page body, keeping the `page-body`
-    class, which is what the vendored stylesheet styles; the element carries no
-    identifier, because the one Tabler puts there exists only to anchor a skip link
-    whose styling lives in Tabler's demonstration stylesheet rather than in the
-    distributed one this project vendors, and this interface offers no skip link.
-    The change is behaviour-neutral: `.page-body` is a class selector, so the
-    element it sits on affects no layout rule. Tabler's older hand-written
-    page-layout snippet still shows a `<div>` here; where a documented snippet and
-    the framework's own built shell disagree, the built shell of the vendored
-    distribution governs, and the templates MUST NOT be reverted to the `<div>`.
+18. **The page's own content is a `main` landmark.** Tabler's built admin shell
+    renders `<main class="d-flex flex-column flex-fill">` as the child of
+    `<div class="page-wrapper">`, wrapping the page header and
+    `<div class="page-body">`, so the page's own content, header included, is the
+    document's single `main` landmark and assistive technology can jump straight to
+    it past the sidebar and the top navbar. The templates MUST use that element and
+    structure: exactly one `<main class="d-flex flex-column flex-fill">` as the
+    child of `<div class="page-wrapper">`, holding the page header followed by the
+    page body, and the page body a `<div>` keeping the `page-body` class, which is
+    what the vendored stylesheet styles. The three classes on `<main>` are flex
+    utilities the vendored distribution ships (rule 10); they make the landmark a
+    column flex container that fills the page wrapper. The `<main>` element carries
+    no identifier: the one Tabler puts there exists only as the target of a skip
+    link, and this interface offers no skip link. Where a documented Tabler snippet
+    and the framework's own built shell disagree, the built shell of the vendored
+    distribution governs: the templates MUST NOT render the page body as
+    `<main class="page-body">`, and MUST NOT place the page header outside the
+    `<main>`.
 19. **The top navbar names the selected roadmap.** The shell's top navbar carries
     one thing: the name of the roadmap whose data the current page shows. Every
-    page but the roadmap index is scoped to a single roadmap — its sprints, one of
-    those sprints, its tasks, one of those tasks, its audit log, or its knowledge
+    page but the roadmap index is scoped to a single roadmap — its dashboard, its
+    sprints, one of those sprints, its tasks, one of those tasks, its audit log, or its knowledge
     graph — and the name
     is what tells one roadmap's pages from another's at a glance. The sidebar's own
     per-roadmap section label collapses out of sight behind the off-canvas menu on
@@ -5519,7 +6084,7 @@ timestamp references this section and does not restate it.
     variation. Below the `lg` breakpoint the sidebar collapses to the off-canvas
     menu (rule 5) and this rule does not apply.
 21. **Keyboard focus is clearly visible on the header actions, the sidebar
-    links, the tasks list, and the sprint board.** The back link of a record page's header actions column — `Back to
+    links, the tasks list, the sprint board, and the scrollable tables.** The back link of a record page's header actions column — `Back to
     tasks` on the Roadmap Task Page and the link back to the roadmap's sprints page
     on the Roadmap Sprint Page, both rendered in the page-header idiom of rule 16 —
     and every `nav-link` of the sidebar show a clearly visible focus indicator
@@ -5551,14 +6116,43 @@ timestamp references this section and does not restate it.
     that fill as well. The rule is judged in the dark theme the interface serves
     (rule 2).
 
+    The same indicator, with the same thickness and the same 3:1 contrast, is
+    required of every `table-responsive` container that rule 22 makes focusable:
+    the one of the Roadmap Audit Log Page, the one of each of the Roadmap Dashboard
+    Page's four card-tables, and the one of the Roadmap Tasks Page's list. The
+    vendored distribution styles `.table-responsive:focus-visible` with a focus
+    ring of its own; wherever that ring falls short of this rule, the project
+    override stylesheet sets the indicator on `.table-responsive:focus-visible`
+    (rule 10).
+22. **A scrollable table is a named, focusable region.** Tabler's Tasks card
+    component gives its `table-responsive` container `tabindex="0"`, so a keyboard
+    user can move focus onto the container and scroll a table wider than its card
+    with the arrow keys; a container that holds no focusable element is otherwise
+    out of reach of the keyboard (WCAG 2.2 Success Criterion 2.1.1, Keyboard). Every
+    `table-responsive` container the templates render MUST carry `tabindex="0"`:
+    the one of the Roadmap Audit Log Page, the one of each of the Roadmap Dashboard
+    Page's four card-tables, and the one of the Roadmap Tasks Page's list. A card
+    that renders its empty state in place of its table renders no container and
+    therefore no focusable region.
+
+    Each such container MUST have an accessible name (WCAG 2.2 Success Criterion
+    4.1.2, Name, Role, Value). WAI-ARIA 1.2 prohibits naming an element of the
+    `generic` role, which a `<div>` without a `role` has, so the container also
+    carries `role="region"`. The name comes from the card title: the container
+    carries `aria-labelledby` whose value is the `id` of its card's `card-title`
+    element, and that element carries an `id` unique within the page. A container
+    whose card renders no visible title carries `aria-label` naming the table
+    instead; no container of the set above is in that case. The container shows the
+    focus indicator of rule 21.
+
 ### Full-Height Page Regions
 
 One page presents a region sized to the **viewport** rather than to its own
 content, so that the region's children scroll **inside** it and the page itself
 does not scroll to reach them: the graph card of the knowledge-graph page (see
 [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page), **Graph card
-layout**). It sits inside the `main.page-body` landmark of the admin shell (see
-[UI Framework](#ui-framework), rule 18). It is the whole set: this subsection
+layout**). It sits inside the `div.page-body` element that the admin shell's
+`main` landmark holds (see [UI Framework](#ui-framework), rule 18). It is the whole set: this subsection
 introduces no region and no page, and states only how a region of this kind is
 sized. The roadmap tasks page is not one of them: its task list is paginated, so
 the list card is sized to the rows of one page and the page scrolls vertically
@@ -5749,8 +6343,11 @@ Rules:
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
    Page header (see [Roadmap Sprint Page](#roadmap-sprint-page)), the sprint
    tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)),
-   and the per-column count badge of the sprint detail member-tasks board (see
-   [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+   the per-column count badge of the sprint detail member-tasks board (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)), and, on the
+   Roadmap Dashboard Page, the status badges of the Work in progress card and the
+   severity and priority badges of the Highest-severity open tasks card (see
+   [Roadmap Dashboard Page](#roadmap-dashboard-page)).
    A badge that carries one of those values uses the variant the relevant table above
    assigns to it, and no such badge uses a single fixed colour across differing
    values.
@@ -5761,7 +6358,9 @@ Rules:
    - **The badge's own text is the value.** Every site listed above except the sprint
      tabs and the sprint board's per-column count badges is this case: the badge reads
      `COMPLETED`, `OPEN`, `IMPROVEMENT`, `7`, or `2`, and it takes the colour the
-     relevant table assigns to the value it carries. The type badge on the sprint
+     relevant table assigns to the value it carries. The dashboard's status,
+     severity, and priority badges are the tasks page's row badges reused cell for
+     cell, labels included. The type badge on the sprint
      board's card and in a row of the tasks page's list writes the `TaskType` value
      exactly as the enum spells it, with no badge label, and takes the variant the
      task type table assigns to it. On the sprint board's card and in a row of the
@@ -5848,13 +6447,17 @@ Rules:
    `bg-black` is the id badge, and a value badge that carried it would be outside
    every table above.
 
-   **The task type is coloured on the sprint board's card and in the tasks page's
-   list, and nowhere else.** The task page shows the task's `type` as plain text
+   **The task type is coloured as a badge on the sprint board's card and in the
+   tasks page's list, and nowhere else.** The task page shows the task's `type` as plain text
    among its fields, not as a badge, and the filter bar of the Roadmap Tasks Page
    offers the ten values, like every other filter value, as plain options of a
    select control; neither carries a colour, and this mapping does not reach either
    (see [Roadmap Task Page](#roadmap-task-page) and
-   [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**).
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Filter bar**). The type-breakdown
+   donuts of the [Roadmap Dashboard Page](#roadmap-dashboard-page) KPI row are
+   charts, not badges, and this mapping does not govern them; their slice colours
+   are the solid counterparts of the type variants above, fixed in
+   [Dashboard Chart Library](#dashboard-chart-library), rule 5.
 3. **No new enum value.** The mapping introduces no status, task type, priority, or
    severity value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
    new enum value or a revised band be introduced there, this table is updated in the
@@ -5955,6 +6558,120 @@ Rules:
    pinned here; the vendored D3.js and d3-sankey versions live in the committed
    distribution under git.
 
+### Dashboard Chart Library
+
+1. The charts of the [Roadmap Dashboard Page](#roadmap-dashboard-page), the three
+   KPI type-breakdown donuts, and the chart of the
+   [Roadmap Sprint Page](#roadmap-sprint-page), the Sprint progress card's gauge
+   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), rule 7), are
+   drawn with **ApexCharts** (<https://apexcharts.com/>), the chart library Tabler's own
+   dashboard examples use, inside the Tabler admin-shell (see
+   [UI Framework](#ui-framework)).
+2. ApexCharts is **vendored**: its already-built single-file distribution is
+   committed as `static/vendor/apexcharts/apexcharts.min.js`, embedded into the
+   binary with `go:embed`, and served locally from `/static/...`. It is never
+   loaded from a content delivery network or any remote origin. The dashboard page
+   and the Roadmap Sprint Page are the only pages that load it. Its source, the rule that fixes its release,
+   and its licence —
+   the ApexCharts dual licence, not a permissive open-source licence — are
+   recorded in `BUILD.md § Vendored Web Assets` and in
+   `static/vendor/LICENSES.md`.
+3. **Tabler's chart styling is vendored with it.** Tabler styles ApexCharts in a
+   separate stylesheet of its distribution, the Tabler vendors stylesheet, which
+   is committed as `static/vendor/tabler/tabler-vendors.min.css`, taken from the
+   same Tabler release as the vendored Tabler CSS and JavaScript, embedded, and
+   served from `/static/...`. It carries Tabler's ApexCharts rules, among them the
+   `--apx-*` custom properties through which the chart text, the grid, and the
+   tooltip follow the dark theme the interface serves, and the rule that strokes
+   the track of a `radialBar` chart, `.apexcharts-radialbar-track
+   .apexcharts-radialbar-area`, in `var(--tblr-border-color)`, from which the
+   gauge takes its track colour. The dashboard page and the Roadmap Sprint Page
+   are the only pages that link it, each after the Tabler stylesheet.
+4. **Tabler's chart options.** `static/dashboard.js` and
+   `static/sprint-progress.js` configure every chart with
+   the options Tabler's own chart components apply, so the charts read as the
+   Tabler examples do:
+   - for every chart, `chart.fontFamily` is `'inherit'`, so a chart uses the
+     page's Inter face; `chart.parentHeightOffset` is `0`; `chart.toolbar.show` is `false`; and
+     `chart.animations.enabled` is `false`;
+   - each KPI type-breakdown donut sets `chart.type` to `'donut'`, both
+     `chart.height` and `chart.width` to the number `64`, never a percentage,
+     `chart.sparkline.enabled` to `true`, so the chart reserves no space for
+     elements it does not draw, `legend.show` to `false`, and
+     `dataLabels.enabled` to `false`, so a `4rem` donut draws its slices alone,
+     and `tooltip.fillSeriesColor` to `false`.
+     Its series are the slice values and its `labels` the slice types, in slice
+     order (see [Roadmap Dashboard Page](#roadmap-dashboard-page),
+     **Type-breakdown donuts**), and `tooltip.y.formatter` writes a slice's value
+     as `<n> (<p>%)`, so the tooltip reads `<TYPE>: <n> (<p>%)`, with `<p>`
+     rounded down as that page's **Definitions shared by every block**, item 6,
+     states;
+   - the Sprint progress card's gauge sets the options of the radial chart of
+     Tabler's "Active Users" card (`shared/ui/ChartRadial.astro`): `chart.type`
+     `'radialBar'`; `chart.height` the number `200`;
+     `plotOptions.radialBar.startAngle` `-120` and `endAngle` `120`;
+     `plotOptions.radialBar.hollow.margin` `15` and `hollow.size` `'70%'`;
+     `plotOptions.radialBar.dataLabels.name` with `show` `true`, `offsetY` `-20`,
+     `fontSize` `'14px'`, `fontFamily` `'inherit'`, `fontWeight` `400`, and
+     `color` `'var(--tblr-secondary)'`;
+     `plotOptions.radialBar.dataLabels.value` with `show` `true`, `fontSize`
+     `'30px'`, `fontWeight` `700`, `fontFamily` `'inherit'`, `offsetY` `0`, and
+     `color` `'var(--tblr-body-color)'`; and `stroke.lineCap` `'round'`. Beyond
+     the model, which draws one series, it sets
+     `plotOptions.radialBar.dataLabels.total` with `show` `true` and `label`
+     `'COMPLETED'`. Its series are the three series values and its `labels` the
+     three column headings, in series order (see
+     [Sprint Detail Sub-Template](#sprint-detail-sub-template), rule 7,
+     **The gauge**). `dataLabels.total.formatter` writes the completed
+     percentage as `<p>%`, and `dataLabels.value.formatter` writes the hovered
+     series' task count rather than its percentage, as that rule's **Centre**
+     states. ApexCharts calls the value formatter with the hovered arc's
+     percentage and the chart context alone, `(val, w)`, and no series index, so
+     the gauge also sets `chart.events.dataPointMouseEnter`, which ApexCharts
+     fires on an arc before it prints the centre labels and which receives the
+     arc's series index as `opts.dataPointIndex`, to record the hovered series,
+     and `chart.events.dataPointMouseLeave` to clear it; the value formatter
+     returns that series' entry of the chart data block's
+     `tasks_by_column.counts`.
+
+   No option sets an ApexCharts `theme`, exactly as Tabler's own chart component
+   sets none: the dark-theme styling comes from the vendored Tabler vendors
+   stylesheet of rule 3, and ApexCharts' own theme would paint over it.
+5. **Colours come from the Tabler palette.** Every series colour is written as a
+   Tabler colour custom property, `var(--tblr-<colour>)`, never as a literal
+   colour value, so the charts take the colours of the vendored distribution. The
+   series colours are exactly:
+
+   | Chart | Series and colour |
+   |---|---|
+   | Open tasks, Completed, and Backlog donuts | One colour per task type: `USER_STORY`: `var(--tblr-green)`; `TASK`: `var(--tblr-blue)`; `BUG`: `var(--tblr-red)`; `SUB_TASK`: `var(--tblr-azure)`; `EPIC`: `var(--tblr-purple)`; `REFACTOR`: `var(--tblr-indigo)`; `CHORE`: `var(--tblr-secondary)`; `SPIKE`: `var(--tblr-yellow)`; `DESIGN_UX`: `var(--tblr-pink)`; `IMPROVEMENT`: `var(--tblr-teal)` |
+   | Sprint progress gauge | One colour per board column: `WAITING`: `var(--tblr-cyan)`; `DOING`: `var(--tblr-blue)`; `CLOSED`: `var(--tblr-green)` |
+
+   The type colours are the solid counterparts of the task type badges of
+   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+   `var(--tblr-<colour>)` for the badge variant `bg-<colour>-lt`, so a type reads
+   in the colour of its badge across the interface. A slice's colour is keyed on
+   its type, never on its position in the donut, so a type keeps its colour in all
+   three donuts whatever types the others hold.
+
+   The gauge's colours are the solid counterparts of the badge colours of each
+   column's canonical status — `SPRINT`'s `bg-cyan-lt`, `DOING`'s `bg-blue-lt`,
+   and `COMPLETED`'s `bg-green-lt` — the colours the board's column count badges
+   take (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), rules 3
+   and 7), so a column reads in one colour on its badge, its arc, and its legend
+   dot.
+6. **No toolbar, no export.** The ApexCharts toolbar stays disabled (rule 4): no
+   chart offers a download, an export, a zoom, a pan, or a selection control, and
+   no chart makes a network request. A chart is a picture of numbers the page
+   already holds.
+7. The choice of ApexCharts is recorded here so the SPEC is unambiguous about
+   which chart library is vendored; substituting a different vendored,
+   locally-served, build-step-free chart library is a SPEC change to this
+   subsection and to `BUILD.md § Vendored Web Assets`, not a silent code change.
+   No version number is pinned here: the vendored ApexCharts release is the one
+   the vendored Tabler release pins (`BUILD.md § Vendored Web Assets`), and it
+   lives in the committed distribution under git.
+
 ## Responsive and Mobile-First Design
 
 The web interface MUST be designed responsive and mobile-first. The layout adapts
@@ -5975,7 +6692,8 @@ experience is the baseline that larger viewports enhance.
    horizontal overflow and is permitted; the prohibition is on the page itself
    scrolling horizontally.
 3. **Applies to every page.** The mobile-first, responsive requirement applies to
-   every page: the roadmap index page, the roadmap sprints page (the sprint tabs),
+   every page: the roadmap index page, the roadmap dashboard page (its grid of
+   cards, its charts, and its card-tables), the roadmap sprints page (the sprint tabs),
    the roadmap tasks page (the filter bar and the task list), the roadmap sprint page, the
    roadmap task page, the roadmap audit log page (the audit table), and the
    knowledge-graph page.
@@ -6073,6 +6791,20 @@ experience is the baseline that larger viewports enhance.
     horizontally inside its own box (see [Markdown Rendering](#markdown-rendering),
     rule 13). The back link and the Sprint card's sprint link present
     touch-friendly hit targets.
+12. **Usable dashboard on narrow screens.** The roadmap dashboard page lays its
+    blocks out in Tabler's `row row-deck row-cards` grid with the column classes
+    [Roadmap Dashboard Page](#roadmap-dashboard-page), **Layout**, fixes: below
+    `576px` every block takes the full width and the blocks stack in their
+    defined order, from `576px` the KPI cards share a row two by two, and from
+    `992px` the grid places the cards side by side, Current sprint, Upcoming
+    sprints, and Recent activity keeping the full width. Each KPI type-breakdown donut keeps its fixed size of `64` by
+    `64` pixels in its card's `col-auto` column, beside the card's value, at every
+    viewport width. Each card-table sits in Tabler's `table-responsive`
+    container and scrolls horizontally inside it when its columns do not fit, as
+    the seven columns of the Recent activity card do on a narrow viewport, while
+    the page itself does not scroll horizontally (rule 2). The task and sprint links of the
+    card-tables, the Current sprint card's sprint link, and the Recent activity
+    card's link to the audit log present touch-friendly hit targets.
 
 ## Server Logging
 
@@ -6196,7 +6928,8 @@ original meaning and its original scope: a fault the server cannot recover from.
 | any route, and the helpers | the request was abandoned by its client before the server answered it ([Requests Abandoned by the Client](#requests-abandoned-by-the-client)) | `INFO` | 499 |
 | any roadmap-scoped route | the roadmap's existence check fails with an I/O error | `ERROR` | 500 |
 | `GET /` | the roadmap list cannot be read | `ERROR` | 500 |
-| `GET /roadmaps/{name}` | the sprints view cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}` | the dashboard cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/sprints` | the sprints view cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/tasks` | the task list cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/audit` | the audit page cannot be loaded | `ERROR` | 500 |
 | `GET /roadmaps/{name}/sprints/{id}` | the sprint cannot be loaded for a reason other than not-found | `ERROR` | 500 |
@@ -6586,7 +7319,8 @@ Rules:
    single `GET` could hold the server for as long as the caller's query took to
    run, because the injected node limit bounds the result and not the work.
 11. **No stale data; `no-store` on data-derived responses.** Every data-derived
-   response (the roadmap index page, the roadmap sprints page, the roadmap tasks
+   response (the roadmap index page, the roadmap dashboard page, the roadmap
+   sprints page, the roadmap tasks
    page, the roadmap sprint page, the roadmap task page, the roadmap audit log
    page, the knowledge-graph page shell, the graph data
    endpoint, and the data-state-dependent error responses) carries
@@ -6749,12 +7483,11 @@ Rules:
    `rmp web --port notanumber` fails with exit code 6 (non-integer port).
 6. With at least one roadmap present, `GET /` returns HTTP 200 and an HTML page
    listing every roadmap discovered under `~/.roadmaps/`, with links to each
-   roadmap's sprints page (the landing page, `/roadmaps/{name}`) and graph page.
-   Selecting a roadmap lands the user on its sprints page with the **Actual** tab
-   (the current OPEN sprint or sprints) active by default.
+   roadmap's dashboard page (the landing page, `/roadmaps/{name}`) and graph page.
+   Selecting a roadmap lands the user on its dashboard page.
 7. With no roadmaps present, `rmp web` still starts and `GET /` returns HTTP 200
    with an empty-state message; the absence of roadmaps is not an error.
-8. `GET /roadmaps/{name}` for an existing roadmap returns HTTP 200 and an HTML
+8. `GET /roadmaps/{name}/sprints` for an existing roadmap returns HTTP 200 and an HTML
    page that renders the roadmap's sprints page: the roadmap's sprints as three
    tabs with the **Actual** tab active by default, and every sprint in every tab —
    including each OPEN sprint under Actual — rendered through the single shared
@@ -6784,7 +7517,8 @@ Rules:
    the route's caching;
    Acceptance Criteria 82, 83, 89, 239 to 242, and 245 define the pagination;
    Acceptance Criteria 246 and 247 fix the contrast of the badges, of the search
-   placeholder, and of the focus indicator; and Acceptance Criteria 94 to 99 and 221 to 231 fix the task page the
+   placeholder, and of the focus indicator; Acceptance Criterion 295 makes the
+   list's `table-responsive` container a named, focusable region; and Acceptance Criteria 94 to 99 and 221 to 231 fix the task page the
    rows link to.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
@@ -6839,11 +7573,12 @@ Rules:
     keyboard on both pages, and the task page and the sprint tabs are usable on touch
     input and on a small phone-sized viewport (see
     [Roadmap Task Page](#roadmap-task-page)).
-16. The admin-shell sidebar's per-roadmap links target the four distinct endpoints:
-    the Sprints link points to `/roadmaps/{name}` (the landing page), the Tasks
+16. The admin-shell sidebar's per-roadmap links target the five distinct endpoints,
+    in this order: the Dashboard link points to `/roadmaps/{name}` (the landing
+    page), the Sprints link points to `/roadmaps/{name}/sprints`, the Tasks
     link points to `/roadmaps/{name}/tasks`, the Audit link points to
     `/roadmaps/{name}/audit`, and the Graph link points to
-    `/roadmaps/{name}/graph`; the sidebar highlights whichever of the four is the
+    `/roadmaps/{name}/graph`; the sidebar highlights whichever of the five is the
     active view.
 17. `GET /roadmaps/{name}/graph` for an existing roadmap returns HTTP 200 and an
     HTML page that loads the vendored D3.js library (and the d3-sankey plugin) from
@@ -6866,13 +7601,14 @@ Rules:
 19. After serving any number of graph page and graph data requests that carry no
     `q`, or a `q` that writes nothing, for a roadmap that has never been written,
     no `snapshot/` subdirectory exists and no checkpoint has run. For a roadmap
-    that **has** been written, serving any number of those requests leaves the
-    `wal` file byte for byte unchanged and every file under `snapshot/` unchanged,
+    that **has** been written, serving any number of those requests leaves every
+    file of the write-ahead log byte for byte unchanged and every file under
+    `snapshot/` unchanged,
     proving that a statement which wrote nothing neither checkpointed nor truncated
     the log (see `GRAPH.md § Synchronous Checkpoint on Write` and
     `GRAPH.md § What a Statement That Writes Nothing Changes on Disk`).
-20. Serving roadmap sprints pages, roadmap tasks pages, roadmap sprint pages,
-    roadmap task pages, and roadmap audit log pages
+20. Serving roadmap dashboard pages, roadmap sprints pages, roadmap tasks pages,
+    roadmap sprint pages, roadmap task pages, and roadmap audit log pages
     produces **no** new audit-log entry in the roadmap's `project.db` (a read is
     not a change).
 21. A `POST`, `PUT`, `PATCH`, or `DELETE` request to any route returns HTTP 405.
@@ -6926,9 +7662,9 @@ Rules:
     tag, and no page loads a CSS framework or reset from a remote origin; the
     Tabler CSS framework in use is vendored and served from `/static/...`.
 30. Every page renders in the Tabler admin-shell layout — a navigation sidebar
-    (listing the roadmaps and, within a roadmap, that roadmap's Sprints, Tasks,
-    Audit, and Graph views), a top navbar naming the selected roadmap, and a page
-    header — using Tabler cards, tables, and badges, and the interface renders in
+    (listing the roadmaps and, within a roadmap, that roadmap's Dashboard,
+    Sprints, Tasks, Audit, and Graph views), a top navbar naming the selected
+    roadmap, and a page header — using Tabler cards, tables, and badges, and the interface renders in
     Tabler's dark theme.
 31. On a small phone-sized viewport, the admin-shell navigation sidebar is not
     shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
@@ -6943,8 +7679,10 @@ Rules:
     every comment `body` shown in the task page's Comments card and in the sprint
     Comments card, and a sprint's `description` on the roadmap sprints page (across
     all three tabs) and on the roadmap sprint page — are not plain text: each renders
-    as Markdown, and its authored single newlines render as line breaks (Acceptance
-    Criterion 180).
+    as Markdown, under CommonMark's line-break semantics: an authored single newline
+    is a soft line break displayed as a space, and only a hard line break (two or
+    more trailing spaces, or a trailing backslash) renders as `<br>` (see
+    [Markdown Rendering](#markdown-rendering), rule 4, and Acceptance Criterion 180).
 33. Every HTML response carries the security headers: `Content-Security-Policy`
     with the value `default-src 'self'; script-src 'self'; style-src 'self'
     'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';
@@ -6962,8 +7700,9 @@ Rules:
     network-exposure warning to stderr, while binding a loopback host (the default,
     or `rmp web --host 127.0.0.1`) prints no such warning.
 37. Every data-derived response carries the `Cache-Control: no-store` header: the
-    roadmap index page (`/`), the roadmap sprints page (`/roadmaps/{name}`), the
-    roadmap tasks page (`/roadmaps/{name}/tasks`), the roadmap sprint page
+    roadmap index page (`/`), the roadmap dashboard page (`/roadmaps/{name}`), the
+    roadmap sprints page (`/roadmaps/{name}/sprints`), the roadmap tasks page
+    (`/roadmaps/{name}/tasks`), the roadmap sprint page
     (`/roadmaps/{name}/sprints/{id}`), the roadmap task page
     (`/roadmaps/{name}/tasks/{id}`), the roadmap audit log page
     (`/roadmaps/{name}/audit`), the knowledge-graph page shell
@@ -7063,7 +7802,9 @@ Rules:
     `MATCH (n:WebProbe) DETACH DELETE n` is answered HTTP `200`, and the same
     read-back afterwards reports it gone. The store's durable state is asserted
     after the server has been stopped, because the fold is the server's and not the
-    request's: `snapshot/manifest.json` exists and the `wal` file is short.
+    request's: `snapshot/manifest.json` exists, and the position the write-ahead
+    log's control file records as covered lies at or beyond the last record of
+    the second statement (`GRAPH.md § Synchronous Checkpoint on Write`, step 3).
     Neither statement carries a top-level `RETURN`, so neither is injected into,
     which is what makes this criterion reachable at all: an endpoint that appended
     the node `LIMIT` to either would hand the engine a statement that fails in the
@@ -7351,7 +8092,8 @@ Rules:
 76. The active navigation entry is marked twice: its `<li class="nav-item">` carries
     the `active` class and the `<a class="nav-link">` inside it carries
     `aria-current="page"`. This holds for the sidebar's roadmap-index entry and for
-    the active view among a roadmap's Sprints, Tasks, Audit, and Graph links (see
+    the active view among a roadmap's Dashboard, Sprints, Tasks, Audit, and Graph
+    links (see
     [UI Framework](#ui-framework), rule 14).
 77. The audit log page's `<ul class="pagination">` list sits inside a `<nav>` element
     carrying a descriptive `aria-label`. The pagination structure and behaviour
@@ -7368,10 +8110,13 @@ Rules:
     page container uses `container-fluid`; the only `container-fluid` in
     the shell is the one inside the sidebar `<aside>`, which is Tabler's own
     vertical-navbar markup (see [UI Framework](#ui-framework), rule 17).
-80. Every page renders its page body as `<main class="page-body">`, the element
-    Tabler's built admin shell uses, so each page exposes exactly one `main`
-    landmark holding that page's own content. No page renders the page body as a
-    `<div>` (see [UI Framework](#ui-framework), rule 18).
+80. Every page renders exactly one `<main class="d-flex flex-column flex-fill">`,
+    carrying no `id`, as the child of `<div class="page-wrapper">`; it holds the
+    page header followed by the `<div class="page-body">`, the structure Tabler's
+    built admin shell uses, so each page exposes exactly one `main` landmark holding
+    that page's own content, header included. No page renders
+    `<main class="page-body">`, and no page header lies outside the `<main>` (see
+    [UI Framework](#ui-framework), rule 18).
 81. The roadmap tasks page presents its tasks as **one list and nothing else**: the
     served HTML carries exactly one list card — a `card` holding one
     `table-responsive` container whose one table carries the classes `table`,
@@ -7664,7 +8409,8 @@ Rules:
     filter bar, the table, and the footer emit resolves in the embedded stylesheets and
     no template carries a `style` attribute (Acceptance Criterion 62 continues to
     hold).
-108. The top navbar of every roadmap-scoped page — the roadmap's sprints page, a
+108. The top navbar of every roadmap-scoped page — the roadmap's dashboard page,
+    the roadmap's sprints page, a
     sprint's own page, the tasks page, a task's own page, the audit log page, and
     the knowledge-graph page — shows the name of the roadmap in the request path, rendered prominently
     with the vendored Tabler `h3` type utility and with no glyph or other element
@@ -7678,7 +8424,7 @@ Rules:
     [UI Framework](#ui-framework), rule 19).
 109. Every page's header title column is rendered by the shared page-header
     partial: no page hand-writes a `page-pretitle` or a `page-title` element, and
-    the titles read exactly `Roadmaps`, `Sprints`, `Tasks`, `Audit`,
+    the titles read exactly `Roadmaps`, `Dashboard`, `Sprints`, `Tasks`, `Audit`,
     `Knowledge graph`, and — on a sprint's own page — that sprint's `title` alone,
     under the pretitle `Sprint #<ID>` followed by the sprint's status badge, and —
     on a task's own page — that task's `title` alone, under the pretitle
@@ -7689,8 +8435,8 @@ Rules:
     [Shared Page-Header Partial](#shared-page-header-partial) fixes: the
     knowledge-graph page's layout dropdown, the sprint page's link back to the
     roadmap's sprints page, and the task page's link back to the roadmap's tasks
-    page. The sprints, tasks, audit, and index page headers carry no actions column
-    content — the tasks page's filter bar sits in its list card's header — and no
+    page. The dashboard, sprints, tasks, audit, and index page headers carry no
+    actions column content — the tasks page's filter bar sits in its list card's header — and no
     page header links to the knowledge-graph page (Acceptance Criterion 100).
 110. `GET /roadmaps/{name}/graph/data` executes the caller's query under the
     5-second budget of [Graph Query Time Budget](#graph-query-time-budget), which
@@ -7956,7 +8702,7 @@ Rules:
     satisfies **both** edges of
     [Full-Height Page Regions](#full-height-page-regions), rule 1, when the page is
     rendered in a browser: the region's bottom edge coincides with the bottom edge
-    of that page's `main.page-body` element, and that edge lies within the viewport,
+    of that page's `div.page-body` element, and that edge lies within the viewport,
     with the document scrolling vertically no further than the viewport height. The
     check asserts both edges, because either edge alone
     passes on a defective layout. A region that stops short of the page body's end
@@ -8621,11 +9367,13 @@ Rules:
     same two prefixed statements are each answered HTTP `400` with `kind`
     `plan_prefix`, while `MATCH (n) RETURN n` is answered HTTP `500`.
 
-    **The no-write half alone asserts little.** An `EXPLAIN` executes nothing and
-    the engine refuses a `PROFILE` of a write wherever either runs, so an endpoint
-    that sent both statements would leave the graph unchanged too. The `kind`, and
-    the two pairs that set a `400` against a `503` and against a `500`, are what
-    establish that the refusal is decided before any graph server is resolved.
+    **The no-write half asserts only part of the refusal.** A `PROFILE` of a write
+    performs the write, so an endpoint that sent `PROFILE CREATE (n:Probe ...)`
+    would leave a `Probe` node behind and fail the read-back; but an `EXPLAIN`
+    executes nothing wherever it runs, so an endpoint that sent the `EXPLAIN`
+    would leave the graph unchanged too. The `kind`, and the two pairs that set a
+    `400` against a `503` and against a `500`, are what establish that the refusal
+    is decided before any graph server is resolved.
 168. **A statement carrying no prefix is answered byte for byte as before.**
     Against a served roadmap, each of the following requests is answered with the
     status and the exact response bytes that the same request produces when the
@@ -8763,8 +9511,8 @@ Rules:
 180. **Every Markdown field renders as Markdown, on every surface that shows it.**
     A field value holding a `**bold**` span, a bulleted list, and two lines
     separated by a single newline renders `<strong>`, `<ul>` with `<li>` items, and
-    a `<br>` between the two lines, inside a `<div class="markdown">`, and the
-    literal asterisks are not displayed. The check MUST cover each of the seven
+    the two lines in one paragraph separated by a newline and no `<br>`, inside a
+    `<div class="markdown">`, and the literal asterisks are not displayed. The check MUST cover each of the seven
     fields on each of its surfaces: the task `functional_requirements`,
     `technical_requirements`, `acceptance_criteria`, and `completion_summary` on
     the task page; a task comment `body` in the task page's Comments card;
@@ -8773,7 +9521,11 @@ Rules:
     Concluídos, and on the roadmap sprint page. A surface that still shows escaped
     text passes on every other surface, so no surface is left unchecked. A value
     written with no Markdown syntax renders as paragraphs, a blank line separating
-    two of them and a single newline rendering as `<br>`. A task `title` and a
+    two of them. Line breaks follow CommonMark: the value `a`, newline, `b` renders
+    exactly `<p>a\nb</p>` (a soft line break: a newline character in the HTML and
+    no `<br>`); the value `a`, two spaces, newline, `b` and the value `a`,
+    backslash, newline, `b` (hard line breaks) each render exactly
+    `<p>a<br>\nb</p>`, the trailing spaces and the backslash not displayed. A task `title` and a
     sprint `title` containing `**bold**` still display the asterisks as text (see
     [Markdown Rendering](#markdown-rendering), rules 1 to 4).
 181. **The GitHub Flavored Markdown extensions, footnotes, and definition lists
@@ -8997,24 +9749,21 @@ Rules:
     Markdown is drawn from the italic face, which the browser reports as a loaded
     `font-style: italic` face of `Inter` (see [UI Framework](#ui-framework),
     rule 4, and [Markdown Rendering](#markdown-rendering), rule 13).
-202. **The roadmap sprint page limits a Markdown line to 80 characters, and the
-    roadmap task page does not.** `static/style.css` carries a rule setting
-    `max-width: 80ch` whose selector matches the `.markdown` container of the
-    sprint `description` and of every sprint comment `body` on the roadmap sprint
-    page, and matches no `.markdown` container in a sprint card of the roadmap
-    sprints page and none on the roadmap task page. On a desktop-width viewport,
-    the sprint description's container on the roadmap sprint page has a computed
-    `max-width` equal to 80 times the width of its `0` glyph, while a sprint card's
-    container and the containers of the four Markdown fields and of every comment
-    `body` on the roadmap task page have a computed `max-width` of `none`, and each
-    task-page container's width equals the content width of its card's body (see
+202. **Rendered Markdown fills the width of its container on every surface.**
+    No rule in a stylesheet served under `/static/...` whose selector matches a
+    `.markdown` element sets `max-width` to a value other than `none`. On a
+    desktop-width viewport, every `.markdown` element — in a sprint card of the
+    roadmap sprints page, the sprint `description` and every sprint comment `body`
+    on the roadmap sprint page, and the four Markdown fields and every comment
+    `body` on the roadmap task page — has a computed `max-width` of `none`, and its
+    width equals the content width of its parent element (see
     [Markdown Rendering](#markdown-rendering), rule 13).
 203. **The typography adds only the task-list classes to the rendered HTML, and
     leaves the safety rules unchanged.** Every rule `static/style.css` adds for
     rendered Markdown has a selector scoped to `.markdown`, no template or
     renderer output carries a `style` attribute for it, and the only markup the
     typography adds to the renderer's output is the `task-list-item` class and
-    the `task-list-marker` span of Acceptance Criterion 200. Acceptance Criteria 180 to 194 continue to hold: the line breaks, the
+    the `task-list-marker` span of Acceptance Criterion 200. Acceptance Criteria 180 to 194 continue to hold: the soft and hard line breaks, the
     heading demotion, the Content-Security-Policy, and every safety property of
     rendered Markdown are unchanged (see
     [Markdown Rendering](#markdown-rendering), rule 13).
@@ -9580,13 +10329,16 @@ Rules:
     the mapping tables assign (Acceptance Criterion 61 continues to hold; see
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 5).
-247. **The focus indicator reaches 3:1 on the tasks list and the sprint board.** In
+247. **The focus indicator reaches 3:1 on the tasks list, the sprint board, and the
+    scrollable tables.** In
     a browser, in the dark theme the interface serves, moving keyboard focus with
     Tab onto each kind of focusable element that UI Framework rule 21 names for the
-    tasks page and for the sprint board — the search input, the sprint select, each
+    tasks page, for the sprint board, and for the scrollable tables — the search input, the sprint select, each
     dropdown toggle, a checkbox of an open dropdown menu, Apply, the
     no-match empty state's Reset link, a row's title link, a pagination link, the active and
-    an inactive rows-per-page link, a board card, and a column toggle — gives the
+    an inactive rows-per-page link, a board card, a column toggle, and the
+    `table-responsive` container of the audit log page, of each of the dashboard's
+    four card-tables, and of the tasks page's list — gives the
     element a computed `outline` whose style is `solid`, whose width is at least
     `2px`, and whose colour has a contrast ratio of at least 3:1 against the computed
     background of the element and against that of its container, computed as
@@ -9793,6 +10545,318 @@ Rules:
     holds a `project.db`), the same requests return HTTP `500` and each writes one
     `ERROR` record for the failed existence check (see Path-parameter rules, rule 2,
     and [What Is Not Logged](#what-is-not-logged), item 1).
+265. **The dashboard is the landing page.** `GET /roadmaps/{name}` for an existing
+    roadmap returns HTTP 200 and the roadmap dashboard page: its header title reads
+    `Dashboard` with no pretitle, no badge, and no actions column content, its
+    document title is `<roadmap> - Dashboard - <hostname>`, and its page body holds
+    one `row row-deck row-cards` grid whose six blocks appear in the order and with
+    the column classes [Roadmap Dashboard Page](#roadmap-dashboard-page),
+    **Layout**, fixes. Every roadmap link of the roadmap index page points to
+    `/roadmaps/{name}`. `GET /roadmaps/{name}` for a non-existent roadmap, or with
+    a `{name}` that violates the roadmap-name rules, returns HTTP 404, and every
+    response of the route carries `Cache-Control: no-store`.
+266. **The sidebar lists five views, the dashboard first.** On every
+    roadmap-scoped page the sidebar's per-roadmap section holds exactly five
+    links, in this order and with these targets: `Dashboard` →
+    `/roadmaps/{name}`, `Sprints` → `/roadmaps/{name}/sprints`, `Tasks` →
+    `/roadmaps/{name}/tasks`, `Audit` → `/roadmaps/{name}/audit`, and `Graph` →
+    `/roadmaps/{name}/graph`. On the dashboard page the `Dashboard` entry's
+    `<li class="nav-item">` carries `active` and its `<a class="nav-link">` carries
+    `aria-current="page"`, and no other per-roadmap entry carries either; on the
+    sprints page the `Sprints` entry alone carries both.
+267. **The sprints page is reached at `/sprints`.** `GET /roadmaps/{name}/sprints`
+    for an existing roadmap returns HTTP 200 and the roadmap sprints page exactly as
+    Acceptance Criteria 8 and 11 to 13 describe it, with the document title
+    `<roadmap> - Sprints - <hostname>` and `Cache-Control: no-store`; for a
+    non-existent or invalid `{name}` it returns HTTP 404. The sprint page's back
+    link, the sidebar's `Sprints` link, and the action link of the dashboard's
+    `No open sprint` empty state each point to `/roadmaps/{name}/sprints`, and no
+    link anywhere in the interface presents `/roadmaps/{name}` as the sprints page.
+268. **The KPI row states the four figures.** For a seeded roadmap of 12 tasks —
+    3 `BACKLOG`, 2 `SPRINT`, 2 `DOING`, 1 `TESTING`, and 4 `COMPLETED` — in which
+    one `SPRINT` task depends on a `DOING` task and one `BACKLOG` task depends on a
+    `COMPLETED` task, the four KPI cards read, in order: `Open tasks` with the
+    value `8` and the subline `3 in progress, 1 blocked`; `Completed` with the
+    value `4`, a completion row `<div class="d-flex mb-2">` whose first child, a
+    `<div>` with no class, reads `4 of 12 tasks` and whose second and last child,
+    a `<div class="ms-auto">`, reads `33%`, with no `style` attribute on the row or
+    either child, and, immediately after that row, a `<progress>` element carrying
+    the classes `progress` and `progress-sm`, `value="4"`, `max="12"`, and
+    `aria-label="Completed tasks"`; `Backlog` with the value `3`
+    and the subline `tasks in no sprint`; and `Average velocity` with the value
+    `rmp stats -r <name>` reports as `average_velocity` for the same database,
+    written with one decimal place, and the subline
+    `tasks per day, last 5 closed sprints`. A dependency on a `COMPLETED` task
+    makes no task blocked, and a `COMPLETED` task is never counted as blocked.
+269. **The Current sprint card states the sprint's progress.** For the seeded
+    roadmap of Acceptance Criterion 268 whose `OPEN` sprint has `max_tasks` 8,
+    was started 3 days and 5 hours before the request, and holds 6 member tasks —
+    2 `SPRINT`, 2 `DOING`, 1 `TESTING`, and 1 `COMPLETED` — the Current sprint
+    card's `<h3 class="card-title">` reads `Current sprint: <title>`, where the
+    text `Current sprint: ` lies outside any link and the sprint's `title` alone is
+    the content of an `<a>` whose `href` is `/roadmaps/{name}/sprints/{id}`; the
+    card's `card-body` holds no link to the sprint and holds, in this order, a
+    progress row `<div class="d-flex mb-2">` whose first child, a `<div>` with no
+    class, reads `16% complete` and whose second and last child, a
+    `<div class="ms-auto">`, reads `Started <date>, 3 days elapsed` with `<date>`
+    in a `<time>` element whose `datetime` is the stored `started_at`, with no
+    `style` attribute on the row or either child; immediately after that row, a
+    `progress-stacked` bar of four segments in the order `SPRINT`, `DOING`,
+    `TESTING`, `COMPLETED` whose `data-percent` values are `33.33`, `33.33`,
+    `16.67`, and `16.67` and whose bars carry `bg-cyan`, `bg-blue`, `bg-yellow`,
+    and `bg-green`, a `<div class="legend-list">` of four
+    `<span class="legend legend-<colour>">` entries — `legend-cyan`,
+    `legend-blue`, `legend-yellow`, and `legend-green` — each holding a
+    `<span class="legend-dot">`, the status name, and a `<span class="legend-value">`
+    reading `2`, `2`, `1`, and `1`, with no empty `<span class="legend">` anywhere
+    on the page, and the line `Capacity 5/8`; the card holds no chart container.
+    With `max_tasks` unset the card renders no capacity line. The card contains no
+    deadline, no end date, and no days-remaining figure.
+270. **No open sprint shows an empty state.** For a roadmap with no `OPEN`
+    sprint, the Current sprint card keeps its header, whose
+    `<h3 class="card-title">` reads exactly `Current sprint` and holds no link,
+    and its body holds a
+    `<div class="empty">` with the title `No open sprint` and an action link
+    `View sprints` to `/roadmaps/{name}/sprints`, and the page renders no
+    `progress-stacked` bar. For an `OPEN` sprint none of whose member tasks is
+    completed, the card shows the completion text `0% complete`, its status breakdown, and
+    its legend, and holds no `<div class="empty">`.
+271. **The donut data counts open, completed, and backlog tasks per type.** For
+    the seeded roadmap of Acceptance Criterion 268 whose tasks are 6 `TASK`
+    (4 open, 2 completed), 4 `BUG` (3 open, 1 completed), and 2 `CHORE` (1 open,
+    1 completed), and whose 3 `BACKLOG` tasks are 2 `TASK` and 1 `CHORE`, the
+    chart data block's `tasks_by_type` is
+    `{"types": ["TASK", "BUG", "CHORE"], "open": [4, 3, 1], "completed": [2, 1, 1], "backlog": [2, 0, 1]}`
+    — the types in `TaskType` enum order, the seven types with no task omitted.
+272. **Current sprint takes the full width.** On a roadmap with an `OPEN`
+    sprint, in a browser at a viewport width of `1440px`, the Current sprint card
+    stands alone in its row of the grid, in a column carrying `col-12`, and spans
+    the full width of the grid; the next row holds Work in progress and
+    Highest-severity open tasks side by side, each in a column carrying
+    `col-lg-6`, the two cards equal in height.
+273. **A KPI card whose value is `0` draws no donut.** For a roadmap of 5 tasks,
+    3 `TASK` and 2 `BUG`, all of them `COMPLETED`, the `Open tasks` and `Backlog` cards read the value
+    `0`, each keeps its `<div class="row align-items-center">` and its
+    `<div class="col">`, and neither holds a `<div class="col-auto">` column, a
+    donut container, or a `<div class="empty">`; the `Completed` card holds its
+    donut, whose container carries
+    `aria-label="Completed tasks by type: TASK 3 (60%), BUG 2 (40%)"`. For a roadmap
+    with no task, no KPI card holds a donut.
+274. **The dashboard draws no throughput and no burndown.** On any roadmap the
+    dashboard page holds no card titled `Throughput` and no chart other than the
+    three KPI type-breakdown donuts: no element carries the class `chart-lg`, and
+    the Current sprint card holds no chart container. The chart data block holds
+    the member `tasks_by_type` alone, and the page issues eight statements with
+    no sprint `OPEN` and nine with one (see `DATABASE.md § Dashboard Queries`).
+275. **Work in progress lists the tasks in progress, oldest first.** For a roadmap
+    with 12 tasks in `DOING` or `TESTING`, the Work in progress card-table holds
+    exactly 10 rows, in `started_at` ascending order with ties by `id` ascending,
+    and no `BACKLOG`, `SPRINT`, or `COMPLETED` task. Each row holds the `#<id>` id
+    badge, the title as a link to `/roadmaps/{name}/tasks/{id}`, the status badge
+    coloured `bg-blue-lt` for `DOING` and `bg-yellow-lt` for `TESTING`, and the
+    age: `0 days` for a task started 5 hours before the request, `1 day` for one
+    started 30 hours before it, and `7 days` for one started 7 days and 2 hours
+    before it.
+276. **Highest-severity open tasks lists five open tasks by severity.** For a
+    roadmap with open tasks of severity and priority `(9, 2)`, `(9, 7)`, `(5, 5)`,
+    `(5, 5)`, `(3, 9)`, and `(1, 1)`, and a `COMPLETED` task of severity `9`, the
+    card-table holds exactly five rows: severity `9` priority `7`, severity `9`
+    priority `2`, the two severity `5` tasks in ascending `id`, and severity `3`;
+    the `COMPLETED` task and the severity `1` task are absent. Each row holds the
+    id badge, the title link, the `S<n>` severity badge, and the `P<n>` priority
+    badge, coloured by the bands of
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+277. **Recent activity repeats the head of the audit log.** For a roadmap with 25
+    audit entries, the Recent activity card-table holds exactly 10 rows, whose
+    seven cells equal, row for row and cell for cell, the first ten rows of
+    `GET /roadmaps/{name}/audit` — the em dash of an unset `Related Entity ID` or
+    `Commit`, and an `Operation` outside the catalogue, included. The card's
+    header carries a link `View audit log` to `/roadmaps/{name}/audit`.
+278. **Upcoming sprints lists the next five pending sprints.** For a roadmap with
+    7 `PENDING` sprints, the Upcoming sprints card-table holds exactly 5 rows, the
+    five `PENDING` sprints with the lowest `order`, in ascending `order`; each row
+    holds the sprint's `title` as a link to `/roadmaps/{name}/sprints/{id}` and the
+    sprint's `task_count`. No `OPEN` or `CLOSED` sprint appears.
+279. **An empty roadmap renders, with an empty state per block.** For a roadmap
+    with no task, no sprint, and no audit entry, `GET /roadmaps/{name}` returns
+    HTTP 200; the KPI cards read `0`, `0` (with `0 of 0 tasks`, `0%`, and a
+    `<progress>` carrying `value="0"` and `max="1"`), `0`, and `0.0`; and every
+    other block keeps its card and header and shows the empty state whose title
+    [Roadmap Dashboard Page](#roadmap-dashboard-page), **Empty states**, gives for
+    it. The page renders no chart container, no `<table>`, and no KPI
+    type-breakdown donut: no KPI card holds a `<div class="col-auto">` column.
+280. **The chart data travels in one JSON data block.** The dashboard page holds
+    exactly one `<script type="application/json" id="dashboard-data">` element; its
+    content parses as JSON into an object with exactly the members, the order, and
+    the types `DATA_FORMATS.md § Dashboard Chart Data` gives, and its values equal
+    the figures the page states in its text and `aria-label` attributes. For a
+    roadmap with a task titled `</script><script>alert(1)</script>` and a sprint
+    titled `A & B <C>`, the element's content contains neither title, no
+    `</script` sequence, and no unescaped `<`, `>`, or `&`.
+281. **No inline script and no inline style.** Every `<script>` element of the
+    dashboard page other than the chart data block carries a `src` attribute and
+    no content, no element carries an event-handler attribute or a `style`
+    attribute, and the response's `Content-Security-Policy` header is exactly the
+    value of [Security Headers](#security-headers). In a browser with JavaScript
+    enabled, loading the page reports no Content-Security-Policy violation, every
+    chart container holds a drawn ApexCharts chart with no toolbar, and the width
+    of each status-breakdown segment equals its `data-percent` value as a
+    percentage of the bar; with JavaScript disabled, the KPI values, the current
+    sprint's lines and legend, and every card-table and empty state are still
+    shown.
+282. **The chart assets are vendored and served from `/static/`.** The dashboard
+    page links `/static/vendor/tabler/tabler-vendors.min.css` after the Tabler
+    stylesheet and loads `/static/vendor/apexcharts/apexcharts.min.js` and then
+    `/static/dashboard.js`, both as `<script defer>` elements; no other page loads
+    `dashboard.js`, and no page other than the dashboard page and the sprint page
+    loads `apexcharts.min.js` (Acceptance Criterion 294). Each of the three returns HTTP 200 from the embedded asset
+    set and is cacheable; the licence banner at the head of
+    `tabler-vendors.min.css` names the same Tabler release as the banner of
+    `tabler.min.css`; the banner at the head of `apexcharts.min.js` names the
+    release the vendored Tabler release pins, as `BUILD.md § Vendored Web Assets`
+    requires; and
+    `static/vendor/LICENSES.md` lists both files with their projects and licences.
+    No page requests any of them from a remote origin.
+283. **The dashboard reads one consistent state with a bounded number of
+    queries.** Every query the dashboard page issues runs inside one read-only
+    transaction, and the number of statements it issues is the same for a roadmap
+    of 10 tasks and for one of 1,000 tasks, with the same sprints and audit
+    entries. Serving the page produces no audit entry (Acceptance Criterion 20
+    continues to hold).
+284. **The dashboard is usable on a phone.** At a viewport width of `375px` the
+    dashboard page's `<body>` does not overflow horizontally, every block takes
+    the full width of the page body in the order of
+    [Roadmap Dashboard Page](#roadmap-dashboard-page), **Layout**, every chart is
+    no wider than its card, and the Recent activity card-table scrolls
+    horizontally inside its `table-responsive` container (see
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 12).
+285. **The charts follow Tabler's chart options.** In a browser at a
+    desktop-width viewport, on the seeded roadmap of Acceptance Criteria 268 and
+    269:
+    - the configuration `dashboard.js` passes to every chart carries the options
+      [Dashboard Chart Library](#dashboard-chart-library), rule 4, lists — the
+      inherited font family, the zero parent-height offset, the hidden toolbar,
+      the disabled animations, and the donut options — and no `theme` option;
+    - Upcoming sprints and Recent activity each span the full width of the grid,
+      Upcoming sprints first, and the Recent activity card-table shows its seven
+      columns without horizontal scrolling at a viewport width of `1440px`.
+286. **Three KPI cards carry a donut of their tasks by type.** For the seeded
+    roadmap of Acceptance Criteria 268 and 271:
+    - the `Open tasks`, `Completed`, and `Backlog` cards each hold one
+      `<div class="row align-items-center">` whose `<div class="col">` holds the
+      label, the value, and the subline in that order, and whose
+      `<div class="col-auto">` holds one donut container carrying `role="img"`
+      and neither a `class` nor a `style` attribute; the `Average velocity` card
+      holds no donut;
+    - the three containers carry, in card order,
+      `aria-label="Open tasks by type: TASK 4 (50%), BUG 3 (37%), CHORE 1 (12%)"`,
+      `aria-label="Completed tasks by type: TASK 2 (50%), BUG 1 (25%), CHORE 1 (25%)"`,
+      and `aria-label="Backlog tasks by type: TASK 2 (66%), CHORE 1 (33%)"`; `BUG`,
+      with no `BACKLOG` task, has no slice in the Backlog donut;
+    - in a browser, each donut is drawn `64` pixels square to the right of its
+      card's value, with no legend and no slice label, its slices in `TaskType`
+      enum order and coloured `TASK` `var(--tblr-blue)`, `BUG` `var(--tblr-red)`,
+      and `CHORE` `var(--tblr-secondary)` in every donut, and hovering the Backlog
+      donut's `TASK` slice shows the tooltip `TASK: 2 (66%)`.
+287. **The Sprint details and Sprint progress cards share one row.** On the sprint
+    page of any sprint, the sprint presentation opens with exactly one
+    `<div class="row row-deck row-cards mb-3">` holding exactly two child columns,
+    in this order: a `<div class="col-12 col-lg">` holding the Sprint details card,
+    and a `<div class="col-12 col-sm-6 col-lg-3">` holding the Sprint progress
+    card. The member-tasks board follows the row, and the Comments card follows the
+    board. In a browser at a viewport width of `1440px` the two cards stand side by
+    side, the Sprint progress card to the right of the Sprint details card, with
+    equal heights; at `375px` the Sprint progress card stands below the Sprint
+    details card, each spans the width of the page body, and `<body>` does not
+    overflow horizontally (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), rules 2 and 7).
+288. **The Sprint progress card states the sprint's total.** For a sprint of 12
+    member tasks — 5 in `SPRINT`, 2 in `DOING`, 1 in `TESTING`, and 4 in
+    `COMPLETED` — the Sprint progress card has no `card-header`, and its
+    `card-body` holds exactly three children, in this order: a
+    `<div class="subheader">` reading `12 Tasks`; the gauge container
+    `<div id="chart-sprint-progress" class="position-relative" role="img">` with an
+    `aria-label` and no content; and one `<div class="legend-list">`. The card
+    holds no element carrying the class `h1` and no trend indicator, and the total
+    `12` its subheader states equals the sum of the board's three column count
+    badges, `5`, `3`, and `4`. For a sprint of one member task, the subheader reads
+    `1 Task`.
+289. **The gauge draws three series, in column order and column colours.** For the
+    sprint of Acceptance Criterion 288, the sprint page holds exactly one
+    `<script type="application/json" id="sprint-progress-data">` element, whose
+    content parses as JSON into an object with exactly the members, the order, and
+    the types `DATA_FORMATS.md § Sprint Progress Chart Data` gives, carrying the
+    columns `WAITING`, `DOING`, and `CLOSED`, the counts `5`, `3`, and `4`, and the
+    percents `41`, `25`, and `33`. In a browser, the configuration
+    `static/sprint-progress.js` passes to the gauge carries the options every chart
+    carries and the gauge options of
+    [Dashboard Chart Library](#dashboard-chart-library), rule 4, no `theme`
+    option, the series `41`, `25`, and `33` with the labels `WAITING`, `DOING`, and
+    `CLOSED`, and the colours `var(--tblr-cyan)`, `var(--tblr-blue)`, and
+    `var(--tblr-green)`, in that order; no colour is a literal value.
+290. **The centre shows the completed percentage rounded down, and a hovered arc
+    its count.** In a browser, with no arc hovered, the gauge's centre of the
+    sprint of Acceptance Criterion 288 shows `COMPLETED` and `33%`; that of a sprint
+    of 3 member tasks, 2 of them `COMPLETED`, shows `66%`, not `67%`; and that of a
+    sprint whose member tasks are all `COMPLETED` shows `100%`. Hovering the `DOING`
+    arc of the sprint of Acceptance Criterion 288 makes the centre show `DOING` and
+    `3`, the group's count, not its percentage.
+291. **The legend and the accessible label state the counts.** For the sprint of
+    Acceptance Criterion 288, the Sprint progress card's legend list holds exactly
+    three entries, in this order:
+    `<span class="legend legend-cyan"><span class="legend-dot"></span>WAITING<span class="legend-value">5</span></span>`,
+    `<span class="legend legend-blue"><span class="legend-dot"></span>DOING<span class="legend-value">3</span></span>`,
+    and
+    `<span class="legend legend-green"><span class="legend-dot"></span>CLOSED<span class="legend-value">4</span></span>`,
+    and the gauge container carries
+    `aria-label="12 tasks: 5 waiting, 3 doing, 4 closed; 33% completed"`. For a
+    sprint of one member task in `SPRINT`, the container carries
+    `aria-label="1 task: 1 waiting, 0 doing, 0 closed; 0% completed"`.
+292. **A sprint with no member task renders the card.** For a sprint with no member
+    task, the sprint page returns HTTP 200 and renders the Sprint progress card
+    with the subheader `0 Tasks`, the gauge container carrying
+    `aria-label="0 tasks: 0 waiting, 0 doing, 0 closed; 0% completed"`, three legend
+    entries each reading `0`, and a chart data block whose counts and percents are
+    all `0`. In a browser the gauge is drawn with three empty arcs and its centre
+    shows `COMPLETED` and `0%`.
+293. **The card's numbers need no JavaScript, and the page keeps its
+    Content-Security-Policy.** With scripting disabled, the sprint page of the
+    sprint of Acceptance Criterion 288 still shows the subheader `12 Tasks` and the
+    legend counts `5`, `3`, and `4`. Every `<script>` element of the
+    sprint page other than the chart data block carries a `src` attribute and no
+    content, no element of the Sprint progress card carries a `style` attribute,
+    and the response's `Content-Security-Policy` header is exactly the value of
+    [Security Headers](#security-headers); in a browser with JavaScript enabled,
+    loading the page reports no Content-Security-Policy violation and the gauge
+    container holds a drawn ApexCharts chart with no toolbar. For a sprint whose
+    title is `</script><script>alert(1)</script>`, the chart data block's content
+    contains no `</script` sequence and no unescaped `<`, `>`, or `&`.
+294. **The chart assets load only on the dashboard and sprint pages.** The sprint
+    page links `/static/vendor/tabler/tabler-vendors.min.css` after the Tabler
+    stylesheet and loads `/static/vendor/apexcharts/apexcharts.min.js` and then
+    `/static/sprint-progress.js`, both as `<script defer>` elements, and it does not
+    load `/static/dashboard.js`; the dashboard page does not load
+    `/static/sprint-progress.js`. The roadmap index page, the sprints page, the tasks
+    page, the task page, the audit log page, and the knowledge-graph page neither
+    link `tabler-vendors.min.css` nor load `apexcharts.min.js`,
+    `dashboard.js`, or `sprint-progress.js`. `GET /static/sprint-progress.js` returns
+    HTTP 200 from the embedded asset set.
+295. **Every scrollable table is a named, focusable region.** In the served HTML of
+    the audit log page with at least one entry, of the dashboard page with rows in
+    each of its four card-tables, and of the tasks page with at least one task, every
+    element carrying the class `table-responsive` carries `tabindex="0"`,
+    `role="region"`, and an `aria-labelledby` whose value is the `id` of exactly one
+    element in the page: the `card-title` element of the same card, whose text is
+    that card's title. No two elements of the page share an `id`, and no
+    `table-responsive` container carries a `tabindex` other than `0`. The audit log
+    page renders one such container, the dashboard four, and the tasks page one; a
+    card that renders its empty state renders none. In a browser, at a viewport
+    narrow enough that the table is wider than its card, Tab reaches the container,
+    its accessible name is the card title, and pressing the Right Arrow key with the
+    container focused increases its horizontal scroll offset. The focused container
+    shows the indicator Acceptance Criterion 247 fixes (see
+    [UI Framework](#ui-framework), rules 21 and 22).
 
 ## See Also
 
@@ -9834,6 +10898,9 @@ Rules:
   `ARCHITECTURE.md § Command Lifecycle`
 - Task and Sprint fields presented in the sprints page, the tasks page, the sprint
   page, and the task page → `MODELS.md` and `DATABASE.md`
+- The dashboard's chart data JSON shape, and the statistics it reuses →
+  `DATA_FORMATS.md § Dashboard Chart Data`,
+  `COMMANDS.md § Get Roadmap Statistics`, and `COMMANDS.md § Sprint Statistics`
 - `TaskComment` and `SprintComment` fields, the comment type values, the comment
   read queries and their chronological ordering, and the grouped count that gives
   each sprint board card its comment number without reading a body →

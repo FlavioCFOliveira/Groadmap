@@ -31,11 +31,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 )
 
 // testCadence is the cadence the servers below run under: a fold is due 20ms
@@ -45,8 +47,9 @@ func testCadence() checkpointCadence {
 	return checkpointCadence{maxAge: 20 * time.Millisecond, interval: 5 * time.Millisecond}
 }
 
-// storeState is every file under snapshot/ and the write-ahead log, each as its
-// content digest and its modification time — the two things acceptance criterion
+// storeState is every file under snapshot/ and every file of the write-ahead
+// log — `wal`, `wal.control` and every segment under `wal.d/` — each as its
+// content digest and its modification time, the two things acceptance criterion
 // 81 compares. The digest is what proves no byte changed; the modification time
 // is what proves no file was REWRITTEN with the same bytes, which is what a fold
 // that captured an unchanged graph does.
@@ -73,15 +76,20 @@ func storeState(t *testing.T, graphDir string) map[string]string {
 		return nil
 	}
 
-	if err := record(filepath.Join(graphDir, "wal")); err != nil && !os.IsNotExist(err) {
-		t.Fatalf("reading the write-ahead log: %v", err)
-	}
-	err := filepath.WalkDir(filepath.Join(graphDir, "snapshot"), func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(graphDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
 			return err
+		}
+		rel, relErr := filepath.Rel(graphDir, path)
+		if relErr != nil {
+			return relErr
+		}
+		top := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+		if top != "snapshot" && top != "wal" && top != "wal.control" && top != "wal.d" {
+			if d.IsDir() && path != graphDir {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() || !d.Type().IsRegular() {
 			return nil
@@ -102,19 +110,22 @@ func hasSnapshot(graphDir string) bool {
 }
 
 // waitForFold blocks until the in-flight fold has folded at least once and the
-// write-ahead log it truncated is empty, or fails. Both are required: a fold
-// counted before its truncation reached the file would otherwise let the test
-// read a log still holding the frames.
-func waitForFold(t *testing.T, served realServer, graphDir string) {
+// log's control file records as covered a position at or beyond `through`, or
+// fails. Both are required: a fold counted before its control-file write reached
+// the disk would otherwise let the test read a covered position short of the
+// records it is about.
+func waitForFold(t *testing.T, served realServer, graphDir string, through int64) {
 	t.Helper()
 
 	deadline := time.Now().Add(30 * time.Second)
-	for served.closer.inFlight.attempts.Load() < 1 || walBytesAt(graphDir) != 0 || !hasSnapshot(graphDir) {
+	for served.closer.inFlight.attempts.Load() < 1 || testenv.InspectWAL(t, graphDir).Covered() < through ||
+		!hasSnapshot(graphDir) {
 		if time.Now().After(deadline) {
-			t.Fatalf("no in-flight fold emptied the write-ahead log within 30s on a %v cadence: "+
-				"%d fold(s) ran, %d due instant(s) passed, the log holds %d bytes, snapshot "+
-				"present = %v", testCadence().maxAge, served.closer.inFlight.attempts.Load(),
-				served.closer.inFlight.due.Load(), walBytesAt(graphDir), hasSnapshot(graphDir))
+			t.Fatalf("no in-flight fold covered the log through position %d within 30s on a %v "+
+				"cadence: %d fold(s) ran, %d due instant(s) passed, the control file records %d as "+
+				"covered, snapshot present = %v", through, testCadence().maxAge,
+				served.closer.inFlight.attempts.Load(), served.closer.inFlight.due.Load(),
+				testenv.InspectWAL(t, graphDir).Covered(), hasSnapshot(graphDir))
 		}
 		time.Sleep(intervalFloor)
 	}
@@ -132,6 +143,9 @@ func waitForFold(t *testing.T, served realServer, graphDir string) {
 // The engine's own loop, which drove the in-flight fold before rmp task #383,
 // rewrote the whole snapshot at the first due instant and at every one after it,
 // whether or not anything had been written: this is the test that fails on it.
+// So does a gate that took the start of the log, rather than the position the
+// snapshot covers, as its mark at open: the folded records are still in the
+// log's one segment, because positions do not restart at a fold.
 func TestIdleServer_WritesNothingToTheStore(t *testing.T) {
 	root := graphRoot(t)
 
@@ -139,9 +153,13 @@ func TestIdleServer_WritesNothingToTheStore(t *testing.T) {
 	mustSend(t, seeder.socket, "UNWIND range(1,200) AS i CREATE (:Component {key:'svc-'+toString(i)})")
 	seeder.signalAndWait(t, syscall.SIGINT)
 
-	if size := walSize(t, seeder.walPath()); size != 0 {
-		t.Fatalf("the write-ahead log holds %d bytes after the seeding server's shutdown, want 0: "+
-			"the store this test starts from must hold nothing unfolded", size)
+	if !logFolded(t, seeder.graphDir) {
+		t.Fatalf("the log holds records beyond the position the seeding server's shutdown fold " +
+			"covered: the store this test starts from must hold nothing unfolded")
+	}
+	if logEnd(t, seeder.graphDir) == 0 {
+		t.Fatalf("the seeded store's log holds no record, so it cannot tell a gate that reads the " +
+			"snapshot's position from one that takes the start of the log as its mark")
 	}
 	if !hasSnapshot(seeder.graphDir) {
 		t.Fatalf("the seeding server's shutdown published no snapshot under %s", seeder.graphDir)
@@ -191,7 +209,7 @@ func TestServedWrite_IsFoldedWhileTheServerRuns(t *testing.T) {
 		t.Fatalf("the write failed: %v", err)
 	}
 
-	waitForFold(t, served, graphDir)
+	waitForFold(t, served, graphDir, logEnd(t, graphDir))
 }
 
 // TestKilledServersTail_IsFoldedByTheNextServerWhileIdle is acceptance criterion
@@ -213,9 +231,10 @@ func TestKilledServersTail_IsFoldedByTheNextServerWhileIdle(t *testing.T) {
 	mustSend(t, killed.socket, "CREATE (:Decision {key:'acknowledged-before-the-kill'})")
 	killed.killAndWait(t)
 
-	if size := walSize(t, killed.walPath()); size <= 0 {
-		t.Fatalf("the killed server left a write-ahead log of %d bytes; this test needs the tail "+
-			"of an acknowledged write that no fold covered", size)
+	tail := testenv.InspectWAL(t, killed.graphDir)
+	if tail.End <= tail.Covered() {
+		t.Fatalf("the killed server left a log ending at %d with %d covered; this test needs the "+
+			"records of an acknowledged write that no fold covered", tail.End, tail.Covered())
 	}
 	if hasSnapshot(killed.graphDir) {
 		t.Fatalf("the killed server published a snapshot before it was killed, so the tail this " +
@@ -225,7 +244,7 @@ func TestKilledServersTail_IsFoldedByTheNextServerWhileIdle(t *testing.T) {
 	served := startRealServerOver(t, killed.graphDir, filepath.Join(root, "next.sock"), testCadence(), discardLogger())
 	defer served.stop()
 
-	waitForFold(t, served, killed.graphDir)
+	waitForFold(t, served, killed.graphDir, tail.End)
 
 	// And the fold lost nothing: the acknowledged write is still there.
 	result := mustSend(t, served.socket, "MATCH (d:Decision) RETURN d.key AS key")

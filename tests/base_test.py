@@ -4,6 +4,7 @@ Base test class for Groadmap CLI tests.
 Provides common utilities and setup/teardown functionality.
 """
 
+import hashlib
 import re
 import queue
 import signal
@@ -1016,6 +1017,33 @@ class GraphServeProcess:
 # object may carry is `counters`, whose value is asserted when the caller knows
 # what the statement changed.
 # --------------------------------------------------------------------------
+
+
+def write_ahead_log_fingerprint(graph_dir: Union[str, Path]) -> Dict[str, str]:
+    """Every file of a graph store's write-ahead log, each by content hash,
+    keyed by its path under the graph directory: the single-file `wal` or its
+    one-record stub, the control file `wal.control`, and every segment under
+    `wal.d/` (SPEC/GRAPH.md § Persistence Layout).
+
+    It answers whether the log CHANGED, which is all a process outside the engine
+    can lawfully read off it. How far a fold covered the log is a position the
+    log's control file records, and SPEC/GRAPH.md acceptance criterion 14 requires
+    that to be read through the engine's own inspection; no file's size says it,
+    because a fold discards only whole segments and a log shorter than one segment
+    keeps its one segment (§ Synchronous Checkpoint on Write, step 3).
+    """
+    graph = Path(graph_dir)
+    files: Dict[str, str] = {}
+    for name in ("wal", "wal.control"):
+        path = graph / name
+        if path.is_file():
+            files[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    segments = graph / "wal.d"
+    if segments.is_dir():
+        for path in sorted(segments.iterdir()):
+            if path.is_file():
+                files[f"wal.d/{path.name}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return files
 
 
 def assert_graph_write_shape(result: Any, context: str = "",

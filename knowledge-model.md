@@ -108,7 +108,7 @@ direct module is linked by `DEPENDS_ON` from every package of this module whose 
 source imports one of its packages, on any supported platform.
 
 Third-party code is never a `CodeFile`. The files vendored under
-`internal/web/static/vendor/` (Tabler, Tabler Icons, Inter, D3, d3-sankey) are modelled as
+`internal/web/static/vendor/` (Tabler, Tabler Icons, Inter, D3, d3-sankey, ApexCharts) are modelled as
 `external-dependency` components that `internal/web` depends on, which keeps project-authored
 source and third-party source distinguishable. See `SPEC/BUILD.md` section Vendored Web Assets.
 

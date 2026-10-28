@@ -4109,9 +4109,10 @@ of which reports success.
 **`client` runs what it is given, but not for as long as it takes.** The statement
 runs under a time budget of **5 seconds**, enforced by the server that executes it
 and carrying the same value for the web graph data endpoint. A statement that
-exhausts it is cancelled; its transaction rolls back whole (with the one engine
-defect `GRAPH.md § Error Handling and Exit Codes`, rule 9, describes), no snapshot
-is written, the write-ahead log is left as the statement found it, and the caller
+exhausts it is cancelled; its transaction rolls back whole, no snapshot is
+written on its account, the write-ahead log keeps no operation of it — at most the
+engine's reservations of identifiers for nodes it had created
+(`GRAPH.md § Statement Time Budget`, rule 3) — and the caller
 fails with exit code 1 and the budget line `§ Client Error Cases` publishes. This
 is a limit on what a caller may run, and it is published here for that reason: a
 statement whose work takes longer than five seconds fails, however valid its
@@ -4142,7 +4143,8 @@ measurement. A statement written with neither prefix produces exactly the bytes 
 produced before, so no existing caller is affected.
 `GRAPH.md § Query Plans: The EXPLAIN and PROFILE Prefixes` is canonical for what
 each prefix does and which statements each admits — a `PROFILE` of a writing
-statement is refused, and neither prefix is accepted on a schema statement — and
+statement performs the write once and publishes its `counters` beside the
+`profile`, and neither prefix is accepted on a schema statement — and
 `DATA_FORMATS.md § Graph Plan Node` for the published shape.
 
 ### Graph Server Socket Error Lines
@@ -4315,7 +4317,7 @@ client sends fails or succeeds inside a session and never changes them.
 | Exit Code | Cause |
 |-----------|-------|
 | 0 | The server started, served, and was stopped by `SIGINT` or `SIGTERM`. It drained, checkpointed, released the store lock, and removed its socket. |
-| 1 | The graph store could not be opened or recovered, or its exclusive lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap (`utils.ErrGraphStore`); or the socket could not be bound, or a live server already answers on the resolved socket (`utils.ErrGraphServer`). |
+| 1 | The graph store could not be opened or recovered, or, found in the single-file write-ahead-log format, could not be backed up before its conversion, or its exclusive lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap (`utils.ErrGraphStore`); or the socket could not be bound, or a live server already answers on the resolved socket (`utils.ErrGraphServer`). |
 | 2 | Unknown flag, or an unexpected positional argument (`utils.ErrInvalidInput`); or `--socket` supplied with an empty value (`utils.ErrRequired`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
@@ -4348,6 +4350,20 @@ server already owns is refused by the socket probe instead.
 `GRAPH.md § Server Startup` fixes the order in which the two checks run and why
 that order is the one that keeps the incumbent's socket safe.
 
+**A store in the earlier on-disk format is backed up before it is converted.**
+When the roadmap's graph store still keeps its write-ahead log in the single-file
+format, the server copies the store to `~/.roadmaps/<name>/graph-backup-<T>/`,
+`<T>` being the UTC instant of the copy in the form `YYYYMMDDTHHMMSSZ`, before it
+opens the store, and the engine converts the store one way during that open.
+Once the conversion has succeeded and the store is open, the server removes that
+backup and reports the removal on stderr; a failure to remove it is reported and
+does not stop the server. A build pinned to an earlier engine cannot open the
+converted store, and after a successful conversion there is no way back to one.
+When the conversion or the open fails, the backup is kept, its path is reported,
+and restoring it by hand is the way back, losing every write made after the copy.
+`GRAPH.md § Graph Store Format Migration` is canonical for the detection, the
+copy, its failure, its removal and the restore.
+
 **What the server does not do.** It runs no statement of its own, it creates no
 graph directory that does not already exist, and it never reads or writes a
 roadmap's `project.db`. It serves one roadmap; serving several means running
@@ -4368,6 +4384,7 @@ several servers, one per roadmap, each on its own socket.
 | A live server already answers on the resolved socket | 1 | The already-serving line of `§ Graph Server Socket Error Lines` |
 | Socket could not be bound | 1 | The bind line of `§ Graph Server Socket Error Lines` |
 | Graph store open/recovery failure | 1 | "Error: graph store error: graph store unavailable: <detail>" |
+| The store is in the single-file write-ahead-log format and its backup could not be completed; the store was neither opened nor converted (`GRAPH.md § Graph Store Format Migration`, rule 7) | 1 | "Error: graph store error: graph store backup failed; the store was not migrated: <detail>" |
 
 ### Client Options
 
@@ -4515,7 +4532,7 @@ why they differ.
 | Connection lost after the statement was sent | 1 | The lost-connection line of `§ Graph Server Socket Error Lines` |
 | The server did not answer within the backstop deadline | 1 | The unanswered line of `§ Graph Server Socket Error Lines` |
 | Cypher parse/execution error reported by the server | 1 | "Error: graph engine error: graph query failed: <engine diagnostic>" |
-| The engine refuses a field the statement writes as too long for its durable format. **Not reachable at the pinned engine**: see the note below | 1 | "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>" |
+| The engine refuses a field the statement writes as too long for its durable format: see the note below | 1 | "Error: graph engine error: graph field too long; nothing was written. Shorten the field the engine names: <engine diagnostic>" |
 | Statement cancelled for exhausting the 5-second statement time budget | 1 | "Error: graph engine error: graph query exceeded the 5s statement time budget; nothing was written. Narrow the statement — add a label, an indexed property filter, or a LIMIT — or split it into smaller statements." |
 | Every attempt of the retry policy lost a serialisation conflict | 1 | "Error: graph engine error: graph write conflict: another writer committed first on every attempt within the 2.5s retry budget; nothing was written. The statement is valid — run it again, and spread concurrent writes across distinct nodes." |
 
@@ -4531,44 +4548,37 @@ this file's contract and which a caller therefore cannot match. Each now has a
 line of its own, and every character of those two lines is `rmp`'s own text,
 compared in full.
 
-**The field-length row is published and is not reachable at the pinned engine,
-and both halves of that are deliberate.** The line is a hybrid: `rmp` writes the
-class, the fact that nothing was written and the remedy, and then hands over — the
-part `rmp` fixes is everything up to and including
+**The field-length row is a hybrid line, and that is deliberate.** `rmp` writes
+the class, the fact that nothing was written and the remedy, and then hands over
+— the part `rmp` fixes is everything up to and including
 `Shorten the field the engine names: `, and the engine's diagnostic ends the line,
 because only the engine knows which field is at fault and by how much. That is why
 `rmp`'s half and the engine's half both say the field is too long, and why the
 repetition is not a defect to tidy away: trimming it would mean parsing it, and a
 match on the engine's wording fails silently at the next version bump.
 
-**What no caller can do today is read it.** Every statement crosses a server, and
-at the pinned engine the refusal crosses without its class: the server forwards
-the engine's diagnostic — the field kind and both figures — under a code it also
-gives to every other argument the engine refuses, so no sentinel and no
-distinguishing code reaches this side. The condition therefore arrives through
-the parse/execution row above, ending in that diagnostic: the caller learns what
-is wrong, and learns it only from text this file does not specify — the outcome
-this line was published to end. The rest still holds: the sentinel is
-`utils.ErrGraphEngine`, the exit code is 1, and nothing was written, with the one
-exception described below.
+**The line is reached through the failure code the server assigns, and through
+nothing else.** Every statement crosses a server, and the pinned engine's server
+gives this refusal a code of its own — one for an over-long label, relationship
+type or property key, and one for any other field a durable format cannot
+carry — and forwards the engine's diagnostic unchanged. `rmp` selects this line
+by those two codes, as it selects the budget and the conflict lines by theirs,
+and never by the diagnostic's text. An earlier pinned engine gave the refusal the
+code it gave every other refused argument, so against that engine — and against a
+store restored for it — the condition arrives through the parse/execution row
+above instead; the sentinel, `utils.ErrGraphEngine`, and the exit code, 1, are
+the same either way. `GRAPH.md § Field Length Limits`, rules 3 and 13, is
+canonical for the two codes and for why no wider match is allowed.
 
-The row is kept rather than withdrawn because the class is real, the remedy is
-known and small, and a line withdrawn now would have to be re-specified,
-re-agreed and re-tested the moment the engine gains the case for it. What the
-scenario column must never do is imply the line is reachable, which is why it says
-it is not. `GRAPH.md § Field Length Limits`, rule 13, is canonical for the
-limitation, for why Groadmap MUST NOT close it by matching the forwarded text, and
-for the engine-side change that ends it. **Nothing in this repository can drive
-this line**, so no test asserts it and none can; that is a property of the pinned
-engine and not of the specification.
-
-**"Nothing was written" has one exception, and the lines keep the words.** The
-budget line, the conflict line and the field-length line each say that nothing
-was written, which is what the engine's transaction guarantees. An engine defect
-breaks that guarantee for a statement that had created a relationship between two
-nodes already joined in the same direction: the failure leaves one of the pair's
-relationships replaced. `GRAPH.md § Error Handling and Exit Codes`, rule 9, is
-canonical for the defect and for why the lines are kept as published.
+**"Nothing was written" speaks of the graph's content.** The budget line, the
+conflict line and the field-length line each say that nothing was written, which
+is what the engine's transaction guarantees: a failed statement leaves every node,
+relationship, property, label, index and constraint as it found them, including
+one that had created a relationship between two nodes already joined in the same
+direction. What a failed or cut statement that had created nodes can leave behind
+is the engine's reservations of node identifiers in the write-ahead log, which
+change none of those. `GRAPH.md § Error Handling and Exit Codes`, rule 9, is
+canonical for both.
 
 ---
 

@@ -21,6 +21,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -225,6 +226,11 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 		t.Fatalf("after a SET through the endpoint the property change is not visible on a follow-up request: %v", renamed)
 	}
 
+	// The log's end once the writes before the delete are durable; the delete
+	// lies beyond it, and the shutdown fold must cover it too.
+	graphDir := webGraphDir(t, name)
+	beforeDelete := testenv.InspectWAL(t, graphDir).End
+
 	// DETACH DELETE: the node is gone on a later request.
 	rec = doGraphData(t, name, url.Values{"q": {`MATCH (n:WebProbe) DETACH DELETE n`}})
 	if rec.Code != http.StatusOK {
@@ -242,7 +248,7 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 	// cannot distinguish: every one of them was answered by the same server
 	// process, so a graph held only in that process's memory would satisfy all of
 	// them. Stopping the server is what settles it — the shutdown checkpoint
-	// folds the log into the snapshot and truncates it — and a NEW server, which
+	// folds the log into the snapshot — and a NEW server, which
 	// recovers the store from disk and shares nothing with the first, is what
 	// reads it back.
 	//
@@ -254,18 +260,18 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 	// being dropped.
 	stopServer()
 
-	graphDir := webGraphDir(t, name)
 	if _, err := os.Stat(filepath.Join(graphDir, "snapshot", "manifest.json")); err != nil {
 		t.Errorf("no snapshot/manifest.json after the server that ran three writes stopped: %v", err)
 	}
-	walInfo, err := os.Stat(filepath.Join(graphDir, "wal"))
-	if err != nil {
-		t.Fatalf("stat wal: %v", err)
-	}
-	if walInfo.Size() != 0 {
-		t.Errorf("the write-ahead log holds %d bytes after the shutdown checkpoint; it was expected "+
-			"to be folded into the snapshot and truncated, so what the new server recovers below "+
-			"would no longer prove the SNAPSHOT carries the writes", walInfo.Size())
+	// Read in log positions, through the engine's own inspection: a fold
+	// discards only whole segments, so a log this short keeps its one segment
+	// whatever the fold covered (SPEC/GRAPH.md § Synchronous Checkpoint on Write,
+	// step 3).
+	if state := testenv.InspectWAL(t, graphDir); state.Covered() <= beforeDelete || state.Covered() < state.End {
+		t.Errorf("the log's control file records position %d as covered and the log ends at %d; the "+
+			"delete began beyond %d, so the shutdown fold must cover at least that far, or what the new "+
+			"server recovers below would no longer prove the SNAPSHOT carries the writes",
+			state.Covered(), state.End, beforeDelete)
 	}
 
 	serveGraph(t, name)
@@ -279,8 +285,8 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 
 // TestHandleGraphData_StatementThatWritesNothingLeavesTheStoreByteIdentical is
 // SPEC/WEB.md Acceptance Criterion 19: a request that runs a statement changing
-// nothing leaves the store on disk exactly as it found it — no snapshot rewritten
-// and no write-ahead log truncated.
+// nothing leaves the store on disk exactly as it found it — no snapshot rewritten,
+// and every file of the write-ahead log byte for byte unchanged.
 //
 // # What changed under it, and what did not
 //
@@ -302,8 +308,8 @@ func TestHandleGraphData_ExecutesWriteStatements(t *testing.T) {
 //
 // A snapshot has to exist, or "the snapshot is unchanged" is satisfied vacuously.
 // Nothing checkpoints per write any more, so the snapshot is made by STOPPING a
-// server: its shutdown checkpoint folds the log into the snapshot and truncates
-// it (SPEC/GRAPH.md § Server Shutdown and the Drain, step 4). A second server is
+// server: its shutdown checkpoint folds the log into the snapshot (SPEC/GRAPH.md
+// § Server Shutdown and the Drain, step 4). A second server is
 // then started over what the first left, and the reads are driven against that.
 func TestHandleGraphData_StatementThatWritesNothingLeavesTheStoreByteIdentical(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
@@ -348,13 +354,14 @@ func TestHandleGraphData_StatementThatWritesNothingLeavesTheStoreByteIdentical(t
 	}
 }
 
-// storeFingerprint records the size and content hash of the write-ahead log and
+// storeFingerprint records the size and content hash of every file of the
+// write-ahead log — `wal`, `wal.control` and every segment under `wal.d/` — and
 // of every file under snapshot/, which is what "byte for byte unchanged" means
-// for the two artefacts a checkpoint rewrites.
+// for the artefacts a checkpoint rewrites (SPEC/WEB.md Acceptance Criterion 19).
 func storeFingerprint(t *testing.T, graphDir string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, rel := range []string{"wal", "snapshot"} {
+	for _, rel := range []string{"wal", "wal.control", "wal.d", "snapshot"} {
 		root := filepath.Join(graphDir, rel)
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {

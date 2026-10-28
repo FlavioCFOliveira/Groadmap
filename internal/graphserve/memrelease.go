@@ -49,6 +49,29 @@ import (
 // term keeps a stream of small statements beside one heavy statement still in
 // flight from collecting at every summary: only the memory of the statements
 // that ended is owed back, and the in-flight one's is its own (rule 3).
+//
+// # Why the gate does not apply to a statement a release overlapped
+//
+// A release returns only memory that is already free. One made while statement
+// A runs leaves A's live memory in place and takes the heap it leaves, A's
+// memory included, as the next baseline; when A ends, its memory becomes free
+// without the heap growing at all, so a gate measured from that baseline never
+// opens and A's memory stays resident for as long as the server is idle (rmp
+// task #607). Rule 3 therefore decides by the statement's lifetime: a
+// statement that any release overlapped is released at its own end,
+// unconditionally, and the settle passes follow as after any other release.
+//
+// Overlap is read from [memoryReleaser.epoch], a counter every release moves
+// twice — once as it begins and once after it has taken its baseline — so it is
+// odd exactly while a release is in progress. A statement records the counter
+// at its start ([memoryReleaser.statementStarted]) and hands the value back at
+// its end ([memoryReleaser.statementEnded]): a release overlapped the
+// statement exactly when the counter has moved since, or is odd at the end.
+// A start taken earlier than the statement's real one can only report more
+// overlaps, never fewer, so the callers take it at an instant they can prove
+// precedes the statement's first allocation: a connection's at its acceptance
+// and at the end of its previous statement ([drainConn.Write]), a fold's
+// before it takes the fold gate ([foldGate.foldIfOwed]).
 
 // releaseFloor is the least growth of the runtime's heap, since the last
 // release, that a statement's end returns to the operating system. Below it a
@@ -109,9 +132,31 @@ type memoryReleaser struct {
 	// baseline is what held read right after the last release.
 	baseline uint64
 
-	mu      sync.Mutex
+	// epoch counts the releases made: every release adds one as it begins and
+	// one after it has read its baseline, so the value is odd exactly while a
+	// release is in progress. It is written only under mu and read without it.
+	epoch atomic.Uint64
+
+	mu sync.Mutex
+	// pending marks a statement end not yet acted on; forced marks that one
+	// of the ends pending was overlapped by a release and is owed a release
+	// whatever the gate says. An end stores forced before pending, and the
+	// goroutine holding mu swaps pending before forced.
 	pending atomic.Bool
+	forced  atomic.Bool
 	stopped bool
+}
+
+// memoryLedger is what an activity whose memory the server owes back reports
+// to: the instant it starts and the instant it ends (SPEC/GRAPH.md
+// § Statement-Scoped Memory Release, rule 3). *memoryReleaser is the
+// production one.
+type memoryLedger interface {
+	// statementStarted returns the token the activity hands back at its end.
+	statementStarted() uint64
+	// statementEnded returns the activity's memory to the operating system
+	// when it is owed.
+	statementEnded(start uint64)
 }
 
 // stopper is a scheduled call that can be cancelled; *time.Timer is one.
@@ -152,15 +197,18 @@ func newMemoryReleaser() *memoryReleaser {
 }
 
 // stop cancels a pending settle pass and refuses every later one. The
-// listener calls it when it closes, so no pass outlives the server.
+// listener calls it when it closes, so no pass outlives the server. A statement
+// end that found mu taken by stop is acted on before stop returns.
 func (r *memoryReleaser) stop() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.stopped = true
 	if r.settle != nil {
 		r.settle.Stop()
 		r.settle = nil
 	}
+	r.drainLocked()
+	r.mu.Unlock()
+	r.drain()
 }
 
 // scheduleSettle (re)starts the settle passes from the first one. Callers
@@ -177,45 +225,79 @@ func (r *memoryReleaser) scheduleSettle() {
 }
 
 // settlePass returns freed memory to the operating system and schedules the
-// next pass, if any.
+// next pass, if any. A statement end that found mu taken by the pass is acted
+// on before the pass returns.
 func (r *memoryReleaser) settlePass() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.stopped {
-		return
+	if !r.stopped {
+		before := r.held()
+		r.releaseNow()
+		r.settleStep++
+		gained := before > r.baseline && before-r.baseline >= releaseFloor
+		if r.settleStep < maxSettlePasses && (r.settleStep < minSettlePasses || gained) {
+			r.settle = r.afterFunc(settleInterval, r.settlePass)
+		} else {
+			r.settle = nil
+		}
 	}
-	before := r.held()
-	r.release()
-	r.baseline = r.held()
-	r.settleStep++
-	gained := before > r.baseline && before-r.baseline >= releaseFloor
-	if r.settleStep < maxSettlePasses && (r.settleStep < minSettlePasses || gained) {
-		r.settle = r.afterFunc(settleInterval, r.settlePass)
-		return
-	}
-	r.settle = nil
+	r.drainLocked()
+	r.mu.Unlock()
+	r.drain()
 }
 
-// statementEnded records that a statement has ended and, unless another
-// goroutine is already releasing, returns the memory owed now. It runs on the
-// goroutine of the connection that wrote the statement's summary, after the
-// write has completed, so the client already holds its answer.
-func (r *memoryReleaser) statementEnded() {
+// statementStarted returns the release epoch a statement hands back to
+// statementEnded. The caller takes it no later than the statement's first
+// allocation.
+func (r *memoryReleaser) statementStarted() uint64 { return r.epoch.Load() }
+
+// overlapped reports whether a release was made at any instant since the
+// statement whose start token is start began: the epoch has moved, or a
+// release is in progress now.
+func (r *memoryReleaser) overlapped(start uint64) bool {
+	e := r.epoch.Load()
+	return e != start || e&1 == 1
+}
+
+// statementEnded records that a statement whose start token is start has
+// ended and, unless another goroutine is already releasing, returns the memory
+// owed now: unconditionally when a release overlapped the statement, and
+// otherwise when the heap has grown past the gate. It runs on the goroutine
+// that ended the statement — for a connection, after the summary's write has
+// completed, so the client already holds its answer.
+func (r *memoryReleaser) statementEnded(start uint64) {
+	if r.overlapped(start) {
+		r.forced.Store(true)
+	}
 	r.pending.Store(true)
+	r.drain()
+}
+
+// drain acts on the pending statement ends unless another goroutine holds mu;
+// that goroutine sees the pending mark and acts on it before it lets mu go.
+func (r *memoryReleaser) drain() {
 	for {
 		if !r.mu.TryLock() {
-			// The goroutine releasing will see the pending mark.
 			return
 		}
-		for r.pending.Swap(false) {
-			r.releaseIfOwed()
-		}
+		r.drainLocked()
 		r.mu.Unlock()
 		// A statement that ended between the last Swap and the Unlock found
 		// the lock taken and left its mark for this goroutine.
 		if !r.pending.Load() {
 			return
 		}
+	}
+}
+
+// drainLocked acts on the pending statement ends. Callers hold mu.
+func (r *memoryReleaser) drainLocked() {
+	for r.pending.Swap(false) {
+		if r.forced.Swap(false) {
+			r.releaseNow()
+			r.scheduleSettle()
+			continue
+		}
+		r.releaseIfOwed()
 	}
 }
 
@@ -229,9 +311,17 @@ func (r *memoryReleaser) releaseIfOwed() {
 	if r.held() <= r.baseline+gate {
 		return
 	}
+	r.releaseNow()
+	r.scheduleSettle()
+}
+
+// releaseNow returns freed memory to the operating system, takes the new
+// baseline, and moves the epoch across the release. Callers hold mu.
+func (r *memoryReleaser) releaseNow() {
+	r.epoch.Add(1)
 	r.release()
 	r.baseline = r.held()
-	r.scheduleSettle()
+	r.epoch.Add(1)
 }
 
 // Bolt message tags the scanner recognises (Bolt protocol, server messages).
@@ -278,6 +368,18 @@ type summaryScanner struct {
 	// fieldsAt and hasMoreAt are how far each pattern has matched inside the
 	// current SUCCESS.
 	fieldsAt, hasMoreAt int
+	// open counts the statements whose RUN header has been written and whose
+	// end has not: a header adds one, a SUCCESS that ends a statement takes one
+	// away, never below zero. A FAILURE or an IGNORED takes none away: after
+	// one, the session leaves its failed state only through a RESET, whose
+	// SUCCESS is the decrement. The count can therefore stay above the true
+	// number of open statements — after a COMMIT that discards several open
+	// results, say — but never falls below it, and an excess only makes
+	// [drainConn.Write] keep an earlier start, which rule 3 permits.
+	open int
+	// quiesced reports that, inside the bytes the last feed consumed, a
+	// statement ended with no other statement open.
+	quiesced bool
 	// header holds a partially received chunk header.
 	header [2]byte
 	// inMessage reports whether a message is open.
@@ -297,6 +399,7 @@ func newSummaryScanner() *summaryScanner {
 // statement-ending summaries they completed.
 func (s *summaryScanner) feed(b []byte) int {
 	ended := 0
+	s.quiesced = false
 	for len(b) > 0 {
 		switch {
 		case s.handshake > 0:
@@ -332,13 +435,28 @@ func (s *summaryScanner) feed(b []byte) int {
 			// A zero-length chunk ends the open message, or is a NOOP.
 			if s.inMessage {
 				s.inMessage = false
-				if s.endsStatement() {
+				switch {
+				case s.endsStatement():
 					ended++
+					if s.tag == boltTagSuccess && s.open > 0 {
+						s.open--
+					}
+					if s.open == 0 {
+						s.quiesced = true
+					}
+				case s.tag == boltTagSuccess && s.sawFields:
+					s.open++
 				}
 			}
 		}
 	}
 	return ended
+}
+
+// idle reports that the bytes consumed so far end at a message boundary with
+// no statement open.
+func (s *summaryScanner) idle() bool {
+	return s.open == 0 && !s.inMessage && s.headerLen == 0 && s.handshake == 0
 }
 
 // scanPayload reads one span of the current message's payload. Only the tag

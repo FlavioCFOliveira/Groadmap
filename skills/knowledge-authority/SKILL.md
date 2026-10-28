@@ -3,7 +3,7 @@ name: knowledge-authority
 model: inherit
 description: Empirical authority and single source of truth about THIS project's code content, backed by the per-roadmap knowledge graph (`rmp graph`, Cypher over a Label-Property Graph served by a Bolt server) and the project's `./knowledge-model.md`. This is the FIRST place to look for any factual question about the codebase — which file or function implements a feature, which packages/types/functions/tests/dependencies/specs exist, what a component complies with, how the architecture fits together, or the scope and impact of a change — even when the answer looks one `grep` away; consult the graph before reading files. Also use it to sync, refresh, or audit the graph after a commit, on request, or whenever the project files change, and to maintain `./knowledge-model.md` — the label/predicate dictionary, the model's constraints, and its index recommendations, and nothing else — in conformance with the live graph; this file is written exclusively by this skill. Trigger cues: "knowledge authority", "KA", "KG", "knowledge graph", "grafo de conhecimento", "where is X implemented", "what depends on Y", "which tests cover Z", "sync/refresh/audit the graph". Do NOT use for roadmap/sprint/backlog/task-status work (that is the `roadmap-manager` skill); for writing or implementing code; for git operations; or for general programming, Cypher, or graph-algorithm questions unrelated to this repository's content.
 metadata:
-  rmp-version: "1.18.0"
+  rmp-version: "1.19.0"
 ---
 
 # Knowledge Authority
@@ -23,7 +23,7 @@ This skill is **transversal**: it is installed at the user-profile level because
 it serves every project, not one. On each invocation it operates on the *current*
 project's graph and model.
 
-> **Contract baseline: rmp 1.18.0.** The graph command was rebuilt as a
+> **Contract baseline: rmp 1.19.0.** The graph command was rebuilt as a
 > server/client pair in the 1.17 line. If `rmp --version` reports older, or a
 > behaviour here disagrees with the binary, **the binary wins** — run
 > `rmp --ai-help` and correct this skill.
@@ -272,18 +272,34 @@ rmp graph client -r "$R" --query \
    ON MATCH  SET f.file='cmd/worker/process.go', f.$PC='$COMMIT', f.$PD='$GDATE'"
 ```
 
-This form is sound for a **node**. For a **relationship**, `ON MATCH SET` is one
-of the silent hazards below — read them before writing an edge.
+This form is sound for a **node**. For a **relationship**, `ON MATCH SET` writes
+every relationship the `MERGE` matched, and on an older engine it can write the
+wrong one — read the hazards below before writing an edge.
 
 ## Silent write hazards — read this before writing a relationship
 
-The rule above fails loudly enough for `counters` to catch it. These do not: each
-**exits `0`, reports success, and writes nothing, part of what you asked for, or
-the wrong element.** No exit code tells you. Every one was re-measured on the
-installed **rmp 1.18.0** against a throwaway roadmap; the reproductions below are
-that run's statements and results.
+The rule above fails loudly enough for `counters` to catch it. The hazards below
+do not: each **exits `0` and reports success**. Which of them a statement meets
+depends on the **graph engine the `rmp` binary is built against**, not on the
+statement alone:
 
-### 1. `MERGE` over a pattern duplicates a relationship's endpoints
+- **rmp releases up to and including 1.18.0** are built against GoGraph v0.15.0
+  or earlier. Hazards 2, 3 and 4 below are real on them: a write lands on the
+  wrong relationship or nowhere, or a read-back misleads.
+- **rmp 1.19.0**, built against GoGraph v0.17.2, and **any build against GoGraph
+  v0.16.0 or later** direct every relationship write to the relationship the
+  statement bound. Hazard 1 remains; hazards 2, 3 and 4 do not
+  occur.
+- **Telling them apart:** a graph directory last served by a GoGraph v0.16.0
+  or later build holds `wal.control` (`references/cli.md` § Storage & side effects), and an older build
+  refuses such a directory. When the engine is unknown, use the forms marked
+  **safe on both engines** — they are correct either way.
+
+The results below were measured against a throwaway roadmap on GoGraph v0.16.0
+and v0.17.0 builds, which return the same results; the older engine's results
+are stated beside them.
+
+### 1. `MERGE` over a pattern duplicates a relationship's endpoints (both engines)
 
 The relationship half of the rule above. Two existing nodes, then the edge merged
 as a whole pattern:
@@ -292,47 +308,53 @@ as a whole pattern:
 CREATE (:Q {key:'x'}), (:Q {key:'y'})
 MERGE (x:Q {key:'x'})-[:E]->(y:Q {key:'y'})
   -> {"ok":true,"counters":{"nodesCreated":2,"relationshipsCreated":1,...}}
-MATCH (n:Q) RETURN n.key, count(*)   -> [["x",2],["y",2]]
+MATCH (n:Q) RETURN n.key, count(*)   -> [["y",2],["x",2]]
 ```
 
-**Remedy:** `MATCH` both endpoints, then `MERGE` the relationship alone.
+**Remedy (safe on both engines):** `MATCH` both endpoints, then `MERGE` the
+relationship alone.
 
-### 2. A `MERGE` that MATCHED binds the wrong relationship when the pair is joined more than once
+### 2. A `MERGE` that MATCHED, on a pair joined more than once
 
-When two nodes are already joined by **more than one relationship in the
-pattern's direction — of any type** — a `MERGE` that matches one of them binds a
-relationship of the pair that may be a different one, even one of another type.
-`SET e.…` and `ON MATCH SET` then write to that relationship, and `counters`
-overstates the run:
+On a node pair joined by **more than one relationship in the pattern's
+direction**, a `MERGE` that matches binds **every** relationship it matched, one
+row each. `SET e.…`, `ON MATCH SET`, `REMOVE` and `DELETE` through that binding
+therefore act on each of them — on every relationship of that type, unless the
+pattern names one by a property:
 
 ```
 CREATE (a:P {key:'a'}), (b:P {key:'b'}), (a)-[:R1 {s:'r1'}]->(b), (a)-[:R2 {s:'r2'}]->(b)
 MATCH (a:P {key:'a'}) MATCH (b:P {key:'b'}) MERGE (a)-[e:R2]->(b) SET e.s='w'
-  -> {"ok":true,"counters":{"propertiesWritten":2}}
-MATCH (:P {key:'a'})-[e]->(:P {key:'b'}) RETURN type(e), e.s
-  -> [["R1","w"],["R2","r2"]]          # the R1 edge took the write; R2 did not
+  -> {"ok":true,"counters":{"propertiesWritten":1}}      # R2 only; R1 keeps 'r1'
+
+# two relationships of the SAME type T, told apart by n = 1 and n = 2
+MATCH (a:T2 {key:'a'}) MATCH (b:T2 {key:'b'}) MERGE (a)-[e:T]->(b) SET e.x = 1
+  -> {"ok":true,"counters":{"propertiesWritten":2}}      # both T edges written
+MATCH (a:T2 {key:'a'}) MATCH (b:T2 {key:'b'}) MERGE (a)-[e:T {n:2}]->(b)
+  -> {"ok":true}                                         # matched; nothing created
 ```
 
-The same happens on a pair joined by two relationships of the SAME type. In a
-knowledge graph this is the common case, not the corner one: a `Test` joined to
-its `Component` by both `PART_OF` and `TESTS` is exactly such a pair. On a pair
-joined by exactly one relationship in that direction the matched `MERGE` was
-measured sound.
-
-A relationship **created** by `CREATE`, or by a `MERGE` that created it, takes
-its own assignments and removals on 1.18.0, on any pair. Its **`DELETE`** is not
-sound on a pair already joined in that direction — it removes a pre-existing
-relationship and keeps the created one, with `counters` reporting one created and
-one deleted either way:
+In a knowledge graph this is the common case, not the corner one: a `Test`
+joined to its `Component` by both `PART_OF` and `TESTS` is such a pair. A
+relationship **created** by `CREATE`, or by a `MERGE` that created it, takes its
+own assignments, removals and `DELETE` on any pair:
 
 ```
+# the pair c->d already holds a J edge with tag 'old'
 MATCH (a:P {key:'c'}) MATCH (b:P {key:'d'}) CREATE (a)-[e:J {tag:'temp'}]->(b) DELETE e
   -> {"ok":true,"counters":{"relationshipsCreated":1,"relationshipsDeleted":1,...}}
-# afterwards the pair still holds the 'temp' edge; an older J edge is gone
+MATCH (:P {key:'c'})-[e]->(:P {key:'d'}) RETURN type(e), e.tag   -> [["J","old"]]
 ```
 
-**Remedy — re-bind the relationship with `MATCH` before writing or deleting it.**
-`MATCH` binds the right one on any pair:
+**On the older engine** a matched `MERGE` bound one relationship of such a pair to
+every row — possibly one of another type — so its writes landed there and
+`counters` overstated them; a `MERGE` with an inline property map could create a
+duplicate; and a `DELETE` through a relationship bound by `CREATE` removed a
+pre-existing relationship of the pair and kept the created one, with the same
+counters either way.
+
+**Remedy (safe on both engines) — re-bind the relationship with `MATCH` before
+writing or deleting it, and name it by type or property.**
 
 ```
 MATCH (a:L {key:'…'}) MATCH (b:L2 {key:'…'})
@@ -340,50 +362,49 @@ MERGE (a)-[:R]->(b)
 WITH DISTINCT a, b
 MATCH (a)-[e:R]->(b)
 SET e.$PC='$COMMIT', e.$PD='$GDATE'
-  -> measured: writes to the R edge only, propertiesWritten 2 (one per property)
+  -> writes every R edge of the pair and no other; propertiesWritten 2 per R edge
 ```
 
 `WITH DISTINCT` collapses the extra rows a matched `MERGE` can emit, so the `SET`
-runs once. Ensure the relationship without an inline property map, and set its
-properties after the `MATCH`.
+runs once per relationship. Ensure the relationship without an inline property
+map, and set its properties after the `MATCH`.
 
-### 3. A `REMOVE` through an undirected or incoming pattern is dropped
+### 3. A `REMOVE` through an undirected or incoming pattern
 
-A relationship property **removal** persists only when the pattern walks the
-relationship along its stored arrow. Through an undirected or incoming pattern it
-is dropped, `{"ok":true}`, and no `counters` key at all:
+A relationship property **removal** through an undirected or incoming pattern
+reaches every relationship the pattern bound, and `counters` counts it:
 
 ```
 # stored: (a)-[:U {s:'orig', t:'keep'}]->(b)
-MATCH (b:P {key:'b'})-[e:U]-(a:P {key:'a'}) REMOVE e.t    -> {"ok":true}   t still 'keep'
-MATCH (b:P {key:'b'})<-[e:U]-(a:P {key:'a'}) REMOVE e.t   -> {"ok":true}   t still 'keep'
-MATCH (a:P {key:'a'})-[e:U]->(b:P {key:'b'}) REMOVE e.t   -> counters propertiesWritten 1, t gone
+MATCH (b:P {key:'u2'})-[e:U]-(a:P {key:'u1'}) REMOVE e.t    -> counters propertiesWritten 1, t gone
+MATCH (b:P {key:'u2'})<-[e:U]-(a:P {key:'u1'}) REMOVE e.t   -> counters propertiesWritten 1, t gone
 ```
 
-**Remedy:** remove relationship properties only through an **outgoing** pattern
-that names the stored source on the left.
+**On the older engine** both were dropped — `{"ok":true}`, no `counters` key, and
+`t` still `'keep'` — and only a removal through an outgoing pattern naming the
+stored source on the left persisted. Assignments (`SET e.k = …`) through any
+pattern persist on both engines, from rmp 1.17.3 on.
 
-**Fixed as of rmp 1.17.3, and measured so again at 1.18.0:** an **assignment** (`SET e.k = …`)
-through an undirected or incoming pattern now persists on the relationship it
-matched, and so does an assignment to a relationship bound by `CREATE` or by a
-`MERGE` that created it. Earlier engines lost both; do not rely on the fix on an
-older binary.
+**Remedy (safe on both engines):** remove relationship properties through an
+**outgoing** pattern that names the stored source on the left, or assign `null`
+(`SET e.k = null`), which removes the property through any pattern.
 
-### Verifying a relationship write — do NOT use `RETURN e`
+### 4. Verifying a relationship write — do NOT use `RETURN e`
 
-The projection `RETURN e` and the accessors (`e.k`, `properties(e)`, `keys(e)`)
-can disagree, so two lawful read-backs of the same relationship reach opposite
-conclusions. Measured on a pair joined by two relationships, with no write at all:
+On a GoGraph v0.16.0 or later build the projection `RETURN e` and the accessors
+(`e.k`, `properties(e)`, `keys(e)`) agree. **On the older engine they could
+disagree** on a pair joined by more than one relationship, so two lawful
+read-backs of the same relationship reached opposite conclusions:
 
 ```
 MATCH (:P {key:'a'})-[e]->(:P {key:'b'}) RETURN type(e), e.s, properties(e), e
-  -> ["R1","r1",{"s":"r1"},{"type":"R1","properties":{"s":"r2"},...}]
-     ["R2","r2",{"s":"r2"},{"type":"R2","properties":{"s":"r2"},...}]
+  older engine -> ["R1","r1",{"s":"r1"},{"type":"R1","properties":{"s":"r2"},...}]
+                  ["R2","r2",{"s":"r2"},{"type":"R2","properties":{"s":"r2"},...}]
 ```
 
-The projected map of `R1` carries `R2`'s properties. **Verify with the named
-accessor or `properties(e)`**, which agree with what every `WHERE` and every later
-statement reads, and never with the projected `e`.
+**Remedy (safe on both engines):** verify with the named accessor or
+`properties(e)`, which agree with what every `WHERE` and every later statement
+reads, and never with the projected `e`.
 
 ## Provenance — stamp every write
 

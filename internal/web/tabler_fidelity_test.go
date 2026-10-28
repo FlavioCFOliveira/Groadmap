@@ -17,7 +17,11 @@ import (
 // roadmap index, the roadmap sprints landing page, the roadmap tasks page, a
 // roadmap sprint detail page, the roadmap audit log page, and the
 // knowledge-graph page — and asserts the rendered HTML contains the gutter
-// class on the page-header row and no longer contains the gutter-less variant.
+// class on the page-header row and that the page header no longer contains the
+// gutter-less variant. The absence is checked in the page header alone: the
+// dashboard's KPI cards carry `row align-items-center` by specification, the
+// row-and-column layout of Tabler's stat cards (SPEC/WEB.md § Roadmap Dashboard
+// Page, Block 1).
 func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
@@ -29,6 +33,7 @@ func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 	paths := []string{
 		"/",
 		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/sprints",
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
 		"/roadmaps/" + name + "/tasks/1",
@@ -41,7 +46,8 @@ func TestTablerFidelity_PageHeaderGutter(t *testing.T) {
 			t.Errorf("page %s: missing Tabler page-header gutter row "+
 				`<div class="row g-2 align-items-center">`, path)
 		}
-		if strings.Contains(body, `<div class="row align-items-center">`) {
+		header := regionBetween(t, body, `<div class="page-header d-print-none">`, `<div class="page-body">`)
+		if strings.Contains(header, `<div class="row align-items-center">`) {
 			t.Errorf("page %s: page-header row regressed to the gutter-less "+
 				`<div class="row align-items-center">`, path)
 		}
@@ -167,14 +173,14 @@ func TestShell_CarriesNoFooterAnywhere(t *testing.T) {
 // The tests below are the regression guards for the admin-shell fidelity rules
 // in SPEC/WEB.md § UI Framework. Each one is checked against the Tabler sources
 // of the vendored release — the version banner in
-// static/vendor/tabler/tabler.min.css reads 1.6.0, and the sources cited are
-// those of the @tabler/core@1.6.0 tag of the Tabler repository — and each
+// static/vendor/tabler/tabler.min.css reads 1.7.1, and the sources cited are
+// those of the @tabler/core@1.7.1 tag of the Tabler repository — and each
 // asserts both the shape Tabler uses and the absence of the shape it replaced,
 // so a divergence cannot come back unnoticed.
 
 // allPagePaths is every route that renders the admin shell: the four of
-// pagePaths plus the sprint detail page, the task page, and the audit log page.
-// The shell rules hold on all seven, so the fidelity guards below sweep the
+// pagePaths plus the sprints page, the sprint detail page, the task page, and the
+// audit log page. The shell rules hold on all eight, so the fidelity guards below sweep the
 // complete set rather than the subset pagePaths covers. The caller must have
 // seeded the roadmap with both seedRoadmap (which creates task 1 and sprint 1)
 // and seedRoadmapWithAudit.
@@ -182,6 +188,7 @@ func allPagePaths(name string) []string {
 	return []string{
 		"/",
 		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/sprints",
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
 		"/roadmaps/" + name + "/tasks/1",
@@ -420,7 +427,7 @@ func TestTablerFidelity_SingleTogglerAndSingleBrand(t *testing.T) {
 }
 
 // TestTablerFidelity_SidebarCollapseIsNavLandmark asserts the sidebar collapse
-// is the labelled <nav> element Tabler v1.6.0 renders
+// is the labelled <nav> element Tabler v1.7.1 renders
 // (shared/components/navbar/Sidebar.astro: `<nav class="collapse
 // navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`), not a bare div.
 func TestTablerFidelity_SidebarCollapseIsNavLandmark(t *testing.T) {
@@ -639,10 +646,6 @@ var styleSheetPaths = []string{
 // rule 10 exists to prevent, and the one that let `navbar-heading` and
 // `navbar-divider` ship propped up by project CSS.
 var structuralHookClasses = map[string]string{
-	// Tabler's own component skeletons: shared/ui/DatagridItem.astro emits the
-	// item and content wrappers, only the title of which is styled. (The item is
-	// now also selected by the task page's Details grid rule in style.css.)
-	"datagrid-content": "Tabler DatagridItem structure",
 	// Project BEM block and element names whose styled members are the
 	// children: static/style.css styles .graph-query-bar__row and
 	// .labels-sidebar__heading, and these two are their unstyled hooks.
@@ -750,37 +753,72 @@ func isClassNameByte(b byte) bool {
 	return false
 }
 
-// TestTablerFidelity_PageBodyIsTheMainLandmark asserts the page body is the
-// <main class="page-body"> landmark Tabler v1.6.0's built shell renders
-// (shared/layouts/DefaultLayout.astro: `<main id="content" class="page-body">`),
-// and that exactly one exists per page.
+// TestTablerFidelity_PageBodyIsTheMainLandmark is the regression guard for
+// SPEC/WEB.md § UI Framework, rule 18, and Acceptance Criterion 80: every page
+// renders exactly one <main class="d-flex flex-column flex-fill">, carrying no
+// id, as the child of <div class="page-wrapper">, and it holds the page header
+// followed by <div class="page-body">. That is the structure Tabler v1.7.1's
+// built shell renders (shared/layouts/DefaultLayout.astro: `<main id="content"
+// class="d-flex flex-column flex-fill">` wrapping the PageHeader and
+// `<div class="page-body">`), so the page's own content, header included, is the
+// document's one main landmark.
 //
-// The project takes the element and the class but not the id, which exists only
-// to anchor a skip link whose `skip-link` class lives in Tabler's demo
-// stylesheet rather than in the distributed tabler.min.css — the vendored sheet
-// defines no rule for it. `.page-body` is styled by class, so the element change
-// carries no visual effect; it only gives the document its main landmark.
-//
-// Tabler's older documented "Sample layout" snippet still shows a div here.
-// Where the two disagree, the built shell of the vendored version governs, so
-// this test also fails if the div comes back.
+// The project takes the element and its classes but not the id, which exists
+// only as the target of a skip link this interface does not offer. The test
+// also fails if the 1.6.x shape comes back — the page body itself rendered as
+// <main class="page-body"> after a page header outside it.
 func TestTablerFidelity_PageBodyIsTheMainLandmark(t *testing.T) {
 	t.Setenv("HOME", shortHome(t))
 	name := seedRoadmap(t, "platform-core")
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
 
+	const (
+		wrapper    = `<div class="page-wrapper">`
+		landmark   = `<main class="d-flex flex-column flex-fill">`
+		header     = `<div class="page-header d-print-none">`
+		pageBody   = `<div class="page-body">`
+		oldShape   = `<main class="page-body">`
+		mainOpenRe = `<main\b[^>]*>`
+	)
+	mainOpen := regexp.MustCompile(mainOpenRe)
 	for _, path := range allPagePaths(name) {
 		body := servePage(t, mux, path)
-		if got := strings.Count(body, `<main class="page-body">`); got != 1 {
-			t.Errorf("page %s: %d <main class=\"page-body\"> elements, want exactly 1", path, got)
+		opens := mainOpen.FindAllString(body, -1)
+		if len(opens) != 1 || opens[0] != landmark {
+			t.Errorf("page %s: <main> opening tags %q, want exactly one %s with no id", path, opens, landmark)
+			continue
 		}
 		if got := strings.Count(body, "</main>"); got != 1 {
 			t.Errorf("page %s: %d </main> closings, want exactly 1", path, got)
 		}
-		if strings.Contains(body, `<div class="page-body">`) {
-			t.Errorf("page %s: the page body regressed to a <div>; Tabler's shell "+
-				"makes it the <main> landmark", path)
+		if strings.Contains(body, oldShape) {
+			t.Errorf("page %s: renders %s, the page body as the landmark; Tabler's shell "+
+				"wraps the page header and the page body in the landmark instead", path, oldShape)
+		}
+
+		// The landmark is the first child of the page wrapper: nothing but
+		// whitespace lies between the two opening tags.
+		w := strings.Index(body, wrapper)
+		m := strings.Index(body, landmark)
+		if w < 0 || m < w || strings.TrimSpace(body[w+len(wrapper):m]) != "" {
+			t.Errorf("page %s: %s is not the first child of %s", path, landmark, wrapper)
+			continue
+		}
+
+		// It holds the page header and then the page body, both inside it.
+		closeAt := strings.Index(body, "</main>")
+		h := strings.Index(body, header)
+		b := strings.Index(body, pageBody)
+		if h < m || b < h || closeAt < b {
+			t.Errorf("page %s: the landmark (at %d to %d) does not hold the page header (at %d) "+
+				"followed by the page body (at %d)", path, m, closeAt, h, b)
+		}
+		if got := strings.Count(body, pageBody); got != 1 {
+			t.Errorf("page %s: %d %s elements, want exactly 1", path, got, pageBody)
+		}
+		if strings.TrimSpace(body[m+len(landmark):h]) != "" {
+			t.Errorf("page %s: something other than the page header opens the landmark", path)
 		}
 	}
 }
@@ -804,18 +842,19 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	// The title names the VIEW. The roadmap is named by the sidebar and the top
 	// navbar; a third statement here would repeat what the user can already see.
 	titles := map[string]string{
-		"/":                            `<h2 class="page-title">Roadmaps</h2>`,
-		"/roadmaps/" + name:            `<h2 class="page-title">Sprints</h2>`,
-		"/roadmaps/" + name + "/tasks": `<h2 class="page-title">Tasks</h2>`,
-		"/roadmaps/" + name + "/audit": `<h2 class="page-title">Audit</h2>`,
-		"/roadmaps/" + name + "/graph": `<h2 class="page-title">Knowledge graph</h2>`,
+		"/":                              `<h2 class="page-title">Roadmaps</h2>`,
+		"/roadmaps/" + name:              `<h2 class="page-title">Dashboard</h2>`,
+		"/roadmaps/" + name + "/sprints": `<h2 class="page-title">Sprints</h2>`,
+		"/roadmaps/" + name + "/tasks":   `<h2 class="page-title">Tasks</h2>`,
+		"/roadmaps/" + name + "/audit":   `<h2 class="page-title">Audit</h2>`,
+		"/roadmaps/" + name + "/graph":   `<h2 class="page-title">Knowledge graph</h2>`,
 	}
 	for path, want := range titles {
 		body := servePage(t, mux, path)
 		if !strings.Contains(body, want) {
 			t.Errorf("page %s: header title is not %s", path, want)
 		}
-		// None of these five carries a pretitle: the sprint page and the task page
+		// None of these six carries a pretitle: the sprint page and the task page
 		// are the only hierarchical headers.
 		if strings.Contains(body, "page-pretitle") {
 			t.Errorf("page %s: renders a pretitle; only a sprint's or a task's own page carries one", path)
@@ -887,7 +926,7 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	// hierarchical back link. Never navigation the sidebar already carries.
 	withActions := map[string]string{
 		"/roadmaps/" + name + "/graph":     `id="layout-select"`,
-		"/roadmaps/" + name + "/sprints/1": `href="/roadmaps/` + name + `"`,
+		"/roadmaps/" + name + "/sprints/1": `href="/roadmaps/` + name + `/sprints"><i class="ti ti-arrow-left me-1"></i>Back to sprints</a>`,
 		"/roadmaps/" + name + "/tasks/1":   `href="/roadmaps/` + name + `/tasks"><i class="ti ti-arrow-left me-1"></i>Back to tasks</a>`,
 	}
 	// The two record pages' actions column is full width below sm, so it wraps
@@ -909,7 +948,7 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 	}
 	// The tasks page's header carries no actions column content: its filter bar
 	// sits in the header of its task-list card (Acceptance Criteria 100 and 109).
-	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/audit"} {
+	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/sprints", "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/audit"} {
 		header := headerRegion(t, path, servePage(t, mux, path))
 		if strings.Contains(header, "col-auto ms-auto") || strings.Contains(header, "<input") ||
 			strings.Contains(header, "<select") {
@@ -958,8 +997,8 @@ func TestPageHeader_SharedPartialAndActions(t *testing.T) {
 			}
 		}
 	}
-	if pages != 7 {
-		t.Fatalf("found %d page templates carrying a page header, want 7; the sweep is not covering what it claims", pages)
+	if pages != 8 {
+		t.Fatalf("found %d page templates carrying a page header, want 8; the sweep is not covering what it claims", pages)
 	}
 }
 
@@ -988,7 +1027,7 @@ func titleColumn(t *testing.T, path, body string) string {
 }
 
 // headerRegion returns the markup of a page's page-header block, from the
-// opening <div class="page-header d-print-none"> to the <main> that follows it.
+// opening <div class="page-header d-print-none"> to the page body that follows it.
 // Assertions about the header are made on this region so they cannot be
 // satisfied, or falsified, by markup elsewhere on the page.
 func headerRegion(t *testing.T, path, body string) string {
@@ -1000,7 +1039,7 @@ func headerRegion(t *testing.T, path, body string) string {
 		t.Fatalf("page %s: no page header in the response, so any assertion on it would be vacuous", path)
 	}
 	rest := body[start:]
-	end := strings.Index(rest, `<main class="page-body">`)
+	end := strings.Index(rest, `<div class="page-body">`)
 	if end < 0 {
 		t.Fatalf("page %s: no page body follows the page header", path)
 	}
@@ -1103,7 +1142,7 @@ var headerOpenTagRe = regexp.MustCompile(`<header\b[^>]*\bclass="([^"]*)"`)
 // SPEC/WEB.md § UI Framework, rule 12, and Acceptance Criterion 74: the top
 // <header> carries no class beginning with navbar-expand.
 //
-// Tabler v1.6.0 treats a horizontal navbar that expands at a breakpoint as the
+// Tabler v1.7.1 treats a horizontal navbar that expands at a breakpoint as the
 // page's primary navigation: while <html> carries no data-bs-navbar-position
 // attribute, its `.page:has(> [class*=navbar-expand]:not(.navbar-vertical))
 // >.navbar-vertical` rule hides the vertical sidebar and a companion rule sets

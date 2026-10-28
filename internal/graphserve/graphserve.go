@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -349,8 +348,8 @@ const maxOpenTxPerPrincipal = maxConnections
 // [inFlightCheckpoint] at all: no ticker, no goroutine, no periodic wake-up. That
 // is what a test of the fold's EFFECTS wants — nothing the server does on its own
 // can change the store under the assertion — and it is what a test of the log
-// itself uses to hold the write-ahead log still, since a fold that truncated the
-// log mid-assertion would remove the very bytes the assertion is about. The
+// itself uses to hold the write-ahead log still, since a fold mid-assertion would
+// move the very covered position the assertion is about. The
 // shutdown checkpoint is unaffected by it.
 type checkpointCadence struct {
 	maxAge   time.Duration
@@ -395,8 +394,8 @@ type checkpointCadence struct {
 // The cost of a shorter cadence is the fold itself, paid once per window in which
 // anything was written: a serialisation of the whole graph and a rewrite of the
 // whole snapshot, proportional to the live graph and not to what changed. It does
-// not stall writers — only the capture and the prefix truncation hold the commit
-// lock, both O(1) in the graph, while the serialisation and the disk write run
+// not stall writers — only the capture holds the commit lock, and the discarding
+// of whole folded segments takes none, while the serialisation and the disk write run
 // with the lock released (rmp task #370) — so it is paid in I/O and CPU rather
 // than in latency. A knowledge graph is written in bursts, at a commit, so a
 // shorter window buys little recovery bound between bursts and turns one burst
@@ -614,18 +613,20 @@ func Run(opts Options) error {
 		return err
 	}
 
-	// Step 6. Open the store and construct the engine, through the one lifecycle
+	// Step 6. Bring graph/ to owner-only modes, back the store up when it is
+	// still in the single-file format, then open it and construct the engine, through the one lifecycle
 	// internal/graphstore owns. A failure here closes the listener — which
 	// unlinks the socket — so a caller waiting on the handshake sees the
 	// connection dropped and fails, rather than falling back onto a lock this
-	// process was about to hold (SPEC/GRAPH.md § Server Startup).
-	st, err := hold.Open()
+	// process was about to hold (SPEC/GRAPH.md § Server Startup; § Graph Store
+	// Format Migration, rules 1, 5, 7 and 9).
+	st, err := openMigrating(hold)
 	if err != nil {
 		_ = ln.Close() //nolint:errcheck // the store never opened; the close error cannot be acted on
 		return err
 	}
 
-	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger, ln.releaser.statementEnded)
+	closer, srv, err := build(st, opts.GraphDir, productionCadence(), logger, ln.releaser)
 	if err != nil {
 		_ = closer.Close() //nolint:errcheck // tearing down a server that never served; the close error cannot be acted on
 		_ = st.Close()     //nolint:errcheck // idem: the lock is released by this call whatever it returns
@@ -685,6 +686,103 @@ func Run(opts Options) error {
 	}
 
 	return serve(srv, ln, st, opts.SocketPath, sigCh)
+}
+
+// backupClock is the clock a store backup is named by. It is a variable so a
+// test can fix the instant a backup's name carries; production never reassigns
+// it.
+var backupClock = time.Now
+
+// openMigrating is step 6 of SPEC/GRAPH.md § Server Startup: it backs the store
+// up when it is still in the single-file write-ahead-log format, opens it inside
+// the hold, and removes the backup once the engine's conversion has succeeded.
+//
+// It spends the hold either way, as [graphstore.Hold.Open] does. On success the
+// returned Store owns the hold; on failure the hold is released and the error is
+// the line the start ends with.
+//
+// # The order, and what each failure leaves
+//
+//   - On a platform with POSIX file modes the step begins with
+//     [graphstore.SecureModes]: an entry of graph/ that cannot be brought to its
+//     mode ends the start before the backup and the open, so graph/ is left as
+//     the server found it, write.lock and any mode already narrowed aside.
+//   - A store that owes no backup — never in the single-file format, already
+//     converted, or not yet holding a store — is opened as on every start, and
+//     nothing in this function writes a record (rules 1 and 2).
+//   - A backup that fails ends the start BEFORE the store is opened, so the
+//     engine converts nothing and graph/ is byte for byte what the server found,
+//     write.lock aside (rule 7).
+//   - An open that fails after the backup, and an open after which the engine's
+//     inspection still finds no control file, keep the backup and report its path
+//     at WARN before the open-or-recovery line (rule 9).
+//   - A conversion that succeeded removes the backup it took, and only that one,
+//     and reports the removal at INFO; a removal that fails is reported at WARN
+//     naming what remains, and the server starts all the same (rule 9).
+//
+// Every record is queued here, before the socket is announced, and the caller
+// flushes the queue before the announcement or the error line (rule 10).
+func openMigrating(hold *graphstore.Hold) (*graphstore.Store, error) {
+	// The step begins by bringing graph/ and every entry below it to 0700 and
+	// 0600, under the lock and before the backup and the open: the umask covers
+	// only what this process creates, and a store can carry a wider entry that
+	// it did not create (SPEC/GRAPH.md § Persistence Layout, rule 4). An entry
+	// that cannot be made private ends the start as a store that cannot be
+	// opened, with nothing backed up and nothing converted.
+	if err := graphstore.SecureModes(hold.Dir()); err != nil {
+		hold.Release()
+		return nil, err
+	}
+
+	due, err := graphstore.NeedsBackup(hold.Dir())
+	if err != nil {
+		hold.Release()
+		return nil, err
+	}
+	if !due {
+		return hold.Open()
+	}
+
+	backup, err := graphstore.TakeBackup(hold.Dir(), backupClock())
+	if err != nil {
+		hold.Release()
+		return nil, err
+	}
+	logger.Info("graph store backed up before its conversion from the single-file write-ahead-log format",
+		slog.String("backup", backup.Path()))
+
+	st, err := hold.Open()
+	if err != nil {
+		logBackupKept(backup)
+		return nil, err
+	}
+	converted, err := graphstore.Converted(hold.Dir())
+	if err == nil && !converted {
+		err = fmt.Errorf("%w: graph store unavailable: the write-ahead log has no control file after the open, "+
+			"so the store was not converted", utils.ErrGraphStore)
+	}
+	if err != nil {
+		logBackupKept(backup)
+		_ = st.Close() //nolint:errcheck // the start is failing on the conversion; the close releases the hold whatever it reports
+		return nil, err
+	}
+
+	if remaining, err := backup.Remove(); err != nil {
+		logger.Warn("graph store converted, but its backup could not be removed; remove it by hand",
+			slog.String("backup", remaining), slog.String("err", err.Error()))
+	} else {
+		logger.Info("graph store converted; the backup taken before the conversion was removed",
+			slog.String("backup", backup.Path()))
+	}
+	return st, nil
+}
+
+// logBackupKept reports a backup kept because the conversion it protected did
+// not succeed (SPEC/GRAPH.md § Graph Store Format Migration, rule 9).
+func logBackupKept(backup *graphstore.Backup) {
+	logger.Warn("graph store open failed after its backup; the backup is kept, and the store may already "+
+		"have been partly converted by the engine",
+		slog.String("backup", backup.Path()))
 }
 
 // lockRefusal words an exhausted wait for the graph store lock in the terms the
@@ -783,10 +881,11 @@ func removeStaleSocket(path string) {
 // reason [checkpointCadence] gives. Production passes [productionCadence]; a
 // disabled cadence starts no in-flight fold at all.
 //
-// afterFold, which may be nil, runs after every fold that ran: the server
-// passes its memory releaser's, so the memory a fold used is returned to the
-// operating system when the fold ends (see [foldGate.foldIfOwed]).
-func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger, afterFold func()) (*shutdownCloser, *server.Server, error) {
+// memory, which may be nil, is told when every fold starts and when a fold
+// that ran ends: the server passes its memory releaser, so the memory a fold
+// used is returned to the operating system when the fold ends (see
+// [foldGate.foldIfOwed]).
+func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log *slog.Logger, memory memoryLedger) (*shutdownCloser, *server.Server, error) {
 	txnStore := st.Txn()
 	engine := st.Engine()
 
@@ -814,7 +913,7 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 		store.WithCheckpointer(cp),
 		store.WithQuiesce(txnStore.RunUnderCommitLock))
 
-	gate := &foldGate{st: st, cp: cp, afterFold: afterFold}
+	gate := &foldGate{st: st, cp: cp, memory: memory}
 	closer := &shutdownCloser{db: db, gate: gate}
 
 	if cadence.maxAge > 0 {
@@ -835,9 +934,10 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 // # The gate, and why it is the store's and not this package's
 //
 // Every fold passes through graphstore.Store.CheckpointIfAppended, which folds
-// only when the write-ahead log holds bytes no fold has covered — including a
-// tail the store already held when it was opened — and records the point the
-// fold captured as the mark the next call compares against. SPEC/GRAPH.md
+// only when the write-ahead log holds a durable record no fold has covered —
+// including records the store already held when it was opened — and records a
+// position the fold is proven to have covered as the mark the next call compares
+// against. SPEC/GRAPH.md
 // § Durability and Checkpointing in a Long-Lived Process, rules 4 and 5, require
 // ONE comparison and ONE mark for both folds, so neither fold carries a copy of
 // the rule; this type is how both reach the single realisation of it.
@@ -847,27 +947,20 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 // Until rmp task #380 an ungated fold was believed to cost nothing but a wasted
 // write. It costs a permanent one. A statement the budget cuts while it is
 // writing is rolled back, and the rollback restores the LOGICAL graph and not the
-// PHYSICAL one: the key mapper keeps the interned key of every node the statement
-// created and the tombstone set keeps a tombstone for each. An ungated fold
-// writes that residue to disk, where nothing removes it. Measured end to end
+// PHYSICAL one: the node identifiers the statement reserved for the nodes it
+// created stay reserved, and the engine's storage keeps a place for each. An
+// ungated fold writes that residue to disk, where nothing removes it. Measured end to end
 // against this server: ONE cut `MATCH (a),(b),(c) CREATE ()` over a store of 80
 // KB holding 600 nodes left the store at 134 MB — mapper.bin 80.2 MB,
 // tombstones.bin 28.3 MB — and a later `MATCH (n) RETURN count(*)` over the same
 // 600 nodes then cost 1.48 s and 670 MB against 0.01 s and 21.6 MB on a clean
 // store. The control isolates it: one cut READ over the same store left it at 80
-// KB. A cut statement appends nothing, so the gate owes no fold on its account,
-// and the residue reaches the disk only inside a fold a genuine write made owed —
-// a fold that would have captured the same graph with or without it (rule 8).
-//
-// # What the fold reports to the gate
-//
-// The gate needs to know whether the fold cut the prefix it captured, because
-// that decides the mark (see graphstore.Store.CheckpointIfAppended). The engine's
-// checkpointer does not return it, and its statistics do: WALTruncBytes is the
-// lifetime total of the prefixes it has cut, so the difference across one
-// request is what THAT fold cut. The difference is exact because nothing else
-// asks this checkpointer to fold: its own loop has no cadence (see [build]), and
-// every request is made under this type's mutex.
+// KB. A cut statement commits nothing, so the gate owes no fold on its account.
+// At the pinned engine that is all the gate can do: the statement leaves the
+// engine's reservations of node identifiers in the log, they become durable at
+// the log's next synchronisation, and the next fold that runs for any reason
+// carries the residue into the snapshot. Groadmap accepts that as the engine's
+// behaviour; it changes no element of the graph (rule 8).
 //
 // # Why the mutex
 //
@@ -880,10 +973,11 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 type foldGate struct {
 	st *graphstore.Store
 	cp *checkpoint.Checkpointer[string, float64]
-	// afterFold, when set, runs after every fold that ran; see foldIfOwed.
-	// It is fixed at construction, before any fold can run.
-	afterFold func()
-	mu        sync.Mutex
+	// memory, when set, is told when a fold starts and when a fold that ran
+	// ends; see foldIfOwed. It is fixed at construction, before any fold can
+	// run.
+	memory memoryLedger
+	mu     sync.Mutex
 }
 
 // foldIfOwed folds the write-ahead log into the snapshot when, and only when, the
@@ -897,15 +991,24 @@ type foldGate struct {
 //
 // A fold that ran serialised the whole graph, and the memory that took is
 // garbage once it returns. It is handed back to the operating system through
-// afterFold, outside the gate's mutex, for the reason [memoryReleaser] gives:
+// memory, outside the gate's mutex, for the reason [memoryReleaser] gives:
 // an idle server triggers no collection of its own, and the runtime's
 // background scavenger returns such memory over minutes. Measured on rmp task
 // #589: an in-flight fold after a cut write took an idle server from 0.38 GB
 // to 1.1 GB, where it stayed for more than two minutes without this release.
+//
+// The fold is owed on a statement's terms (SPEC/GRAPH.md § Statement-Scoped
+// Memory Release, rule 3): its start is taken before the gate's mutex, earlier
+// than the fold's first allocation, so a release made while the fold runs
+// makes its end release unconditionally.
 func (g *foldGate) foldIfOwed() (bool, error) {
+	var start uint64
+	if g.memory != nil {
+		start = g.memory.statementStarted()
+	}
 	ran, err := g.fold()
-	if ran && g.afterFold != nil {
-		g.afterFold()
+	if ran && g.memory != nil {
+		g.memory.statementEnded(start)
 	}
 	return ran, err
 }
@@ -914,26 +1017,9 @@ func (g *foldGate) foldIfOwed() (bool, error) {
 func (g *foldGate) fold() (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.st.CheckpointIfAppended(func() (int64, error) {
-		before := g.cp.Stats().WALTruncBytes
-		err := g.cp.TriggerCtx(context.Background())
-		return truncatedSince(before, g.cp.Stats().WALTruncBytes), err
+	return g.st.CheckpointIfAppended(func() error {
+		return g.cp.TriggerCtx(context.Background())
 	})
-}
-
-// truncatedSince is the number of log bytes the checkpointer cut between two
-// readings of its lifetime WALTruncBytes counter, as the signed length the gate
-// takes. A counter that did not advance — or, impossibly, went backwards — cut
-// nothing.
-func truncatedSince(before, after uint64) int64 {
-	if after <= before {
-		return 0
-	}
-	delta := after - before
-	if delta > math.MaxInt64 {
-		return math.MaxInt64
-	}
-	return int64(delta)
 }
 
 // shutdownCloser is what the engine's server closes once its connections have
@@ -1522,6 +1608,11 @@ func (l *serverListener) Accept() (net.Conn, error) {
 	}
 	l.live.Add(1)
 	wrapped := &drainConn{Conn: conn, owner: l, summaries: newSummaryScanner()}
+	// The connection's first statement starts no earlier than its acceptance
+	// (SPEC/GRAPH.md § Statement-Scoped Memory Release, rule 3).
+	accepted := l.releaser.statementStarted()
+	wrapped.start.Store(accepted)
+	wrapped.lastWrite = accepted
 	l.connsMu.Lock()
 	// Zero is the mark of a connection markWrites has never seen, and zero is
 	// even, so a connection accepted after the mark is never a candidate for the
@@ -1719,6 +1810,20 @@ type drainConn struct {
 	// writeSeq it is touched only by the connection's single writer.
 	summaries *summaryScanner
 
+	// start is the release epoch taken at an instant no later than the start
+	// of any statement this connection has open or will open next; the
+	// statements that end hand it to the releaser, which releases them
+	// unconditionally when a release has been made since (SPEC/GRAPH.md
+	// § Statement-Scoped Memory Release, rule 3). It is written by the
+	// connection's single writer and read by Close, which may run on another
+	// goroutine.
+	start atomic.Uint64
+
+	// lastWrite is the release epoch taken as the previous Write returned, or
+	// at acceptance. Every byte of the current Write was produced after that
+	// instant, by the same goroutine. Touched only by the single writer.
+	lastWrite uint64
+
 	// writeSeq is an even/odd sequence counter over this connection's writes: it
 	// is incremented on entry to Write and again on return, so an ODD value means
 	// a write is outstanding and the value itself identifies WHICH write. One
@@ -1742,15 +1847,41 @@ type drainConn struct {
 // and the write is no longer outstanding for the shutdown's selector — a write
 // that completed a statement's summary returns that statement's memory to the
 // operating system (SPEC/GRAPH.md § Statement-Scoped Memory Release).
+//
+// # Where the next statement's start is taken
+//
+// The engine buffers its responses and flushes them only when it is about to
+// wait for the client or its buffer is full, so one write can carry a
+// statement's summary followed by the first messages of the next statement,
+// which then began before this write. The start therefore moves only to an
+// instant the scanner proves earlier than any statement still open:
+//
+//   - the write ends with no statement open and no message begun: the next
+//     statement starts after this write returns, so the start is taken now,
+//     after this write's own release;
+//   - a statement ended with none other open, but more bytes followed it: the
+//     statement those bytes belong to began after that summary was produced,
+//     which was after the previous write returned, so the start is the epoch
+//     taken then;
+//   - otherwise a statement that was open is still open, and the start stays.
 func (c *drainConn) Write(b []byte) (int, error) {
 	c.writeSeq.Add(1)
 	n, err := c.Conn.Write(b)
 	c.writeSeq.Add(1)
 	// The whole buffer is scanned, written or not: a statement whose summary
 	// could not be delivered — its client has gone — has ended all the same.
+	releaser := c.owner.releaser
 	if c.summaries.feed(b) > 0 {
-		c.owner.releaser.statementEnded()
+		releaser.statementEnded(c.start.Load())
 	}
+	now := releaser.statementStarted()
+	switch {
+	case c.summaries.idle():
+		c.start.Store(now)
+	case c.summaries.quiesced:
+		c.start.Store(c.lastWrite)
+	}
+	c.lastWrite = now
 	return n, err
 }
 
@@ -1760,8 +1891,9 @@ func (c *drainConn) Close() error {
 	err := c.Conn.Close()
 	c.closeOnce.Do(func() {
 		// A connection that closes ends whatever statement it was serving,
-		// whether or not a summary was written for it.
-		defer c.owner.releaser.statementEnded()
+		// whether or not a summary was written for it, and is owed what that
+		// statement would have been owed at its outcome.
+		defer c.owner.releaser.statementEnded(c.start.Load())
 		// The registry is left BEFORE the count is decremented, so that a drain
 		// which observes live == 0 can never then find this connection still
 		// registered. See [serverListener.cutBlockedWrites] for what that

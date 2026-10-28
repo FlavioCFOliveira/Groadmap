@@ -253,6 +253,11 @@ func TestSprintBoardCollapse_ScriptIsServedAndLoadedBySprintPageAlone(t *testing
 			got, contentSecurityPolicy)
 	}
 	for _, script := range regexp.MustCompile(`<script\b[^>]*>`).FindAllString(page, -1) {
+		// The Sprint progress card's chart data block is a data block, not a
+		// script (Acceptance Criterion 293).
+		if script == sprintProgressDataTag {
+			continue
+		}
 		if !strings.Contains(script, `src="/static/`) {
 			t.Errorf("the sprint page carries an inline or off-origin script: %s", script)
 		}

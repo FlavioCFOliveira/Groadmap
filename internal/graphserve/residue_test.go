@@ -20,15 +20,25 @@
 // The server's shutdown checkpoint went straight to the engine's checkpointer,
 // which has no such gate and serialises the whole graph unconditionally.
 //
-// # Why the assertion is the WHOLE directory and not its size
+// # Why the assertion is the snapshot's CONTENT, and what the log may gain
 //
-// The acceptance criterion is that the store is the size it was. Size alone is a
-// weak reading of it: a fold whose residue happened to be small would pass while
-// still rewriting the snapshot, and the property that actually holds is stronger
-// and simpler — a shutdown that owes no fold writes NOTHING. So the fence compares
-// every file under the graph directory by name, length and content, which is an
-// assertion the gate satisfies exactly and an ungated fold cannot satisfy at all:
-// the snapshot it rewrites carries a fresh sequence number whatever the graph did.
+// The acceptance criterion (SPEC/GRAPH.md acceptance criterion 53) compares every
+// file under snapshot/ by name, length and content digest, because size alone is a
+// weak reading: a fold whose residue happened to be small would pass while still
+// rewriting the snapshot, and the property that actually holds is stronger — a
+// shutdown that owes no fold writes no snapshot. The snapshot a fold rewrites
+// carries a fresh sequence number whatever the graph did, so an ungated fold
+// cannot satisfy it at all.
+//
+// The write-ahead log is NOT required to be unchanged, and the engine is why. The
+// cut statement reserves node identifiers for the nodes it creates, and the
+// engine appends those reservations to the log as it goes, without a
+// synchronisation of their own; the close at shutdown makes them durable. They
+// describe no element of the graph. So the fence accepts that growth and asserts
+// what it may consist of: every record the log gained is such a reservation, and
+// a server started afterwards reads back exactly the graph the store held
+// (SPEC/GRAPH.md § Statement Time Budget, rule 3; § Durability and Checkpointing
+// in a Long-Lived Process, rule 8).
 //
 // # Why the statement is cut by a CLIENT-supplied timeout
 //
@@ -59,6 +69,7 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/bolt/packstream"
 	"github.com/FlavioCFOliveira/GoGraph/bolt/proto"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 )
 
 // residueSeedNodes is how many nodes the store holds. The cut statement below is
@@ -92,18 +103,19 @@ func TestServedCutWrite_LeavesTheStoreExactlyAsItFoundIt(t *testing.T) {
 		"UNWIND range(1,%d) AS i CREATE (:Bulk {i:i})", residueSeedNodes))
 	seeder.signalAndWait(t, syscall.SIGINT)
 
-	if size := walSize(t, seeder.walPath()); size != 0 {
-		t.Fatalf("the write-ahead log holds %d bytes after the seeding server's shutdown, want 0. "+
-			"That shutdown was OWED a fold — it wrote %d nodes — so a log it did not truncate "+
-			"means the gate is refusing folds it must allow, and every assertion below would "+
-			"then be measuring a store nothing ever checkpointed", size, residueSeedNodes)
+	if !logFolded(t, seeder.graphDir) {
+		t.Fatalf("the log holds records beyond the position the seeding server's shutdown covered. "+
+			"That shutdown was OWED a fold — it wrote %d nodes — so a log it did not cover means the "+
+			"gate is refusing folds it must allow, and every assertion below would then be measuring "+
+			"a store nothing ever checkpointed", residueSeedNodes)
 	}
-	baseline := fingerprintDir(t, seeder.graphDir)
+	baseline := snapshotFingerprint(t, seeder.graphDir)
 	if _, ok := baseline[filepath.Join("snapshot", "manifest.json")]; !ok {
 		t.Fatalf("there is no snapshot/manifest.json after the seeding server's shutdown; the "+
 			"store this test compares against was never checkpointed. It holds: %v",
 			sortedKeys(baseline))
 	}
+	logEndBefore := logEnd(t, seeder.graphDir)
 
 	// Phase 2. One cut write, and nothing else, against that store.
 	server := startServerProcess(t, root, "cut")
@@ -137,27 +149,52 @@ func TestServedCutWrite_LeavesTheStoreExactlyAsItFoundIt(t *testing.T) {
 	session.close()
 	server.signalAndWait(t, syscall.SIGINT)
 
-	// Phase 3. The assertion.
-	after := fingerprintDir(t, server.graphDir)
+	// Phase 3. The assertions.
+	after := snapshotFingerprint(t, server.graphDir)
 	if diff := describeFingerprintDiff(baseline, after); diff != "" {
-		t.Errorf("the graph store CHANGED across a server that served one cut write and nothing "+
-			"else:\n%s\nA statement that is rolled back appends nothing to the write-ahead log, "+
-			"so the shutdown owes no fold and must write nothing. An ungated fold publishes the "+
-			"key mapper and the tombstone set the rolled-back write left behind, which is "+
-			"permanent: measured on rmp task #380, one such write took a store from 80 KB to "+
-			"134 MB and a later count of 600 nodes from 0.01 s to 1.48 s.\nTotal size: %d bytes "+
-			"before, %d after.\nServer stderr:\n%s",
+		t.Errorf("the snapshot CHANGED across a server that served one cut write and nothing "+
+			"else:\n%s\nA statement that is rolled back commits nothing, so the shutdown owes no "+
+			"fold on its account and must write no snapshot. An ungated fold publishes the residue "+
+			"the rolled-back write left behind, which is permanent: measured on rmp task #380, one "+
+			"such write took a store from 80 KB to 134 MB and a later count of 600 nodes from 0.01 s "+
+			"to 1.48 s.\nTotal size: %d bytes before, %d after.\nServer stderr:\n%s",
 			diff, totalBytes(baseline), totalBytes(after), server.capturedStderr(t))
 	}
 
-	// And the store a fresh process opens is the seeded graph, unchanged. This is
-	// what separates "wrote nothing" from "wrote nothing because there was
-	// nothing left to write".
+	// What the log gained, if anything, is the engine's reservations of node
+	// identifiers and nothing that replays into an element.
+	for _, f := range testenv.InspectWAL(t, server.graphDir).FramesFrom(logEndBefore) {
+		if !f.Reservation {
+			t.Errorf("the log gained a record at position %d that is not a node-identifier "+
+				"reservation: a cut statement must leave no operation of its own in the log "+
+				"(SPEC/GRAPH.md § Statement Time Budget, rule 3)", f.Pos)
+		}
+	}
+
+	// And the store a fresh process opens is the seeded graph, unchanged: the
+	// nodes and the relationships it held. This is what separates "wrote nothing"
+	// from "wrote nothing because there was nothing left to write", and what shows
+	// that no record the log gained replays into an element.
 	relaunched := startServerProcess(t, root, "verify")
 	if rows := len(mustSend(t, relaunched.socket, "MATCH (n) RETURN n").Rows); rows != residueSeedNodes {
 		t.Errorf("a fresh open of the store holds %d nodes, want %d", rows, residueSeedNodes)
 	}
+	if rows := len(mustSend(t, relaunched.socket, "MATCH ()-[r]->() RETURN r").Rows); rows != 0 {
+		t.Errorf("a fresh open of the store holds %d relationships, want none: the seeded store had none", rows)
+	}
 	relaunched.signalAndWait(t, syscall.SIGINT)
+}
+
+// snapshotFingerprint is [fingerprintDir] restricted to the snapshot directory,
+// keyed by the path relative to the graph directory.
+func snapshotFingerprint(t *testing.T, graphDir string) map[string]string {
+	t.Helper()
+
+	files := map[string]string{}
+	for rel, desc := range fingerprintDir(t, filepath.Join(graphDir, "snapshot")) {
+		files[filepath.Join("snapshot", rel)] = desc
+	}
+	return files
 }
 
 // runExpectingFailure sends one autocommit statement under a client-supplied

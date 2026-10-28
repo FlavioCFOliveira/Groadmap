@@ -61,6 +61,7 @@ import (
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphclient"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 	"github.com/FlavioCFOliveira/Groadmap/internal/testenv/graphserver"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -221,8 +222,8 @@ func budgetServer(t *testing.T, roadmap string, budget time.Duration) func() {
 // It used to reopen the store, which is what a short-lived invocation did. It
 // cannot now — the server holds the store open for its lifetime and nothing else
 // may open it — so the disk half of the same question is answered by
-// storeFingerprint below, which reads the store's files directly and compares
-// them byte for byte.
+// snapshotFingerprint below, which reads the snapshot's files directly and
+// compares them byte for byte, and by the engine's own inspection of the log.
 func countNodes(t *testing.T, roadmap, label string) int64 {
 	t.Helper()
 	var out string
@@ -246,12 +247,14 @@ func countNodes(t *testing.T, roadmap, label string) int64 {
 	return parsed.Rows[0][0]
 }
 
-// storeFingerprint hashes every file under the roadmap's graph store directory,
-// so `wal` and every file under `snapshot/` are compared byte for byte rather
-// than by size or timestamp.
-func storeFingerprint(t *testing.T, roadmap string) string {
+// snapshotFingerprint hashes every file under the roadmap's snapshot directory,
+// so they are compared byte for byte rather than by size or timestamp. The
+// write-ahead log is not part of it: a cut write MAY leave the engine's
+// reservations of node identifiers in the log, and acceptance criterion 39
+// requires that growth to be accepted and asserted on separately.
+func snapshotFingerprint(t *testing.T, roadmap string) string {
 	t.Helper()
-	dir := testGraphDir(t, roadmap)
+	dir := filepath.Join(testGraphDir(t, roadmap), "snapshot")
 	var lines []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -340,10 +343,16 @@ func TestGraphExecute_StatementBudgetCutsAnExpensiveStatement(t *testing.T) {
 // It is asserted from disk in a separate invocation rather than inferred from
 // the error, because the error is exactly what a partially-applied write would
 // also report. Two independent properties are checked: the graph holds none of
-// the elements the statement was creating, and every file under the store
-// directory — `wal` and everything under `snapshot/` — is byte for byte what it
-// was, which is what proves the transaction rolled back whole AND that no
-// checkpoint ran on the cut path.
+// the elements the statement was creating, and every file under `snapshot/` is
+// byte for byte what it was, which is what proves the transaction rolled back
+// whole AND that no checkpoint ran on the cut path.
+//
+// The write-ahead log is NOT required to be unchanged: the engine appends its
+// reservations of node identifiers for the nodes the statement created, and
+// they become durable at the log's next synchronisation. The criterion accepts
+// that and asserts what it may consist of — every record beyond the log's end
+// before the statement is such a reservation, and none replays into an element
+// of the graph (SPEC/GRAPH.md § Statement Time Budget, rule 3).
 func TestGraphExecute_BudgetCutWritesNothing(t *testing.T) {
 	name := seedBudgetGraph(t, "graph-budget-cut-writes-nothing")
 
@@ -358,7 +367,8 @@ func TestGraphExecute_BudgetCutWritesNothing(t *testing.T) {
 	if seeded := countNodes(t, name, "Bulk"); seeded != budgetSeedNodes {
 		t.Fatalf("the seed produced %d :Bulk nodes, want %d", seeded, budgetSeedNodes)
 	}
-	before := storeFingerprint(t, name)
+	before := snapshotFingerprint(t, name)
+	logBefore := testenv.InspectWAL(t, testGraphDir(t, name)).End
 
 	var err error
 	stdout, _ := captureStdStreams(t, func() {
@@ -381,15 +391,21 @@ func TestGraphExecute_BudgetCutWritesNothing(t *testing.T) {
 		t.Errorf(":Bulk nodes = %d after a cut write, want the %d seeded", seeded, budgetSeedNodes)
 	}
 
-	// (ii) Nothing on disk was rewritten: no partial write landed in the
-	// write-ahead log, and no checkpoint ran to rewrite the snapshot
-	// (SPEC/GRAPH.md § Statement Time Budget, rules 2 and 3).
+	// (ii) No checkpoint ran to rewrite the snapshot, and no operation of the
+	// statement landed in the write-ahead log (SPEC/GRAPH.md § Statement Time
+	// Budget, rules 2 and 3).
 	//
 	// The fingerprint is taken before the reads above would have had a chance to
 	// change anything, and compared after them: a read commits nothing, so the
-	// store must be identical either way.
-	if after := storeFingerprint(t, name); after != before {
-		t.Errorf("the graph store changed across a cut write:\n before:\n%s\n after:\n%s", before, after)
+	// snapshot must be identical either way.
+	if after := snapshotFingerprint(t, name); after != before {
+		t.Errorf("the snapshot changed across a cut write:\n before:\n%s\n after:\n%s", before, after)
+	}
+	for _, f := range testenv.InspectWAL(t, testGraphDir(t, name)).FramesFrom(logBefore) {
+		if !f.Reservation {
+			t.Errorf("the write-ahead log gained a record at position %d that is not a node-identifier "+
+				"reservation; a cut write leaves no operation of its own in the log", f.Pos)
+		}
 	}
 }
 

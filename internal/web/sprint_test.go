@@ -165,7 +165,7 @@ func TestSprints_SprintTabsLabelsAndDefault(t *testing.T) {
 	f := seedSprintFixture(t, "web-sprint-tabs")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	// Labels appear in the required left-to-right order.
 	assertOrdered(t, "sprint-tab-labels", body, []string{
@@ -201,7 +201,7 @@ func TestSprints_CardHeaderTabs(t *testing.T) {
 	f := seedSprintFixture(t, "web-card-header-tabs")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	// The card header carries the Tabler card-header-tabs nav list with the
 	// Bootstrap-native data-bs-toggle="tabs" on the ul itself.
@@ -301,7 +301,7 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 	f := seedSprintFixture(t, "web-sprint-classify")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	// Every sprint links to its own page.
 	for _, id := range []int{f.pendingID, f.pendingID2, f.openID, f.closedLower, f.closedHigher} {
@@ -609,7 +609,7 @@ func TestTaskCards_LinkToTheTaskPageAndThePagesStayReadOnly(t *testing.T) {
 	// The page the card links to carries every long field, server-rendered, and is
 	// read-only too.
 	page := servePage(t, mux, "/roadmaps/"+f.name+"/tasks/"+itoa(f.openTaskID))
-	mainAt := strings.Index(page, `<main class="page-body">`)
+	mainAt := strings.Index(page, `<div class="page-body">`)
 	if mainAt < 0 {
 		t.Fatal("the task page has no page body")
 	}

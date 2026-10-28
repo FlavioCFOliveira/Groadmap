@@ -223,24 +223,32 @@ func TestPageLoadFailureIsLogged(t *testing.T) {
 		t.Fatalf("corrupting database: %v", err)
 	}
 
-	buf := captureLog(t)
-	rec := httptest.NewRecorder()
-	handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/roadmaps/"+name, nil))
+	// The dashboard and the sprints page each name their own subject, as the
+	// logging table of SPEC/WEB.md § What Is Logged lists them.
+	for _, tc := range []struct{ path, msg string }{
+		{"/roadmaps/" + name, `msg="dashboard load failed"`},
+		{"/roadmaps/" + name + "/sprints", `msg="sprints page load failed"`},
+	} {
+		buf := captureLog(t)
+		rec := httptest.NewRecorder()
+		handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
-	}
-	record := oneRecord(t, buf)
-	mustContainAll(t, record,
-		"level=ERROR",
-		`msg="sprints page load failed"`,
-		"method=GET",
-		"roadmap="+name,
-		"status=500",
-		"err=",
-	)
-	if body := rec.Body.String(); !strings.Contains(body, "internal server error") {
-		t.Errorf("response body = %q, want the opaque internal server error text", body)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("GET %s: status = %d, want 500", tc.path, rec.Code)
+		}
+		record := oneRecord(t, buf)
+		mustContainAll(t, record,
+			"level=ERROR",
+			tc.msg,
+			"method=GET",
+			"path="+tc.path,
+			"roadmap="+name,
+			"status=500",
+			"err=",
+		)
+		if body := rec.Body.String(); !strings.Contains(body, "internal server error") {
+			t.Errorf("GET %s: response body = %q, want the opaque internal server error text", tc.path, body)
+		}
 	}
 }
 
@@ -434,7 +442,8 @@ func TestOrdinaryOutcomesAreNotLogged(t *testing.T) {
 		want   int
 	}{
 		{"successful index", http.MethodGet, "/", http.StatusOK},
-		{"successful sprints page", http.MethodGet, "/roadmaps/" + name, http.StatusOK},
+		{"successful dashboard", http.MethodGet, "/roadmaps/" + name, http.StatusOK},
+		{"successful sprints page", http.MethodGet, "/roadmaps/" + name + "/sprints", http.StatusOK},
 		{"successful tasks board", http.MethodGet, "/roadmaps/" + name + "/tasks", http.StatusOK},
 		{"unknown roadmap", http.MethodGet, "/roadmaps/no-such-roadmap", http.StatusNotFound},
 		{"traversal-shaped name", http.MethodGet, "/roadmaps/..%2fetc", http.StatusNotFound},

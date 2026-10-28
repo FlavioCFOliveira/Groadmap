@@ -31,9 +31,9 @@ import (
 
 // Seeded comment bodies. They are declared as constants because most assertions
 // look for them verbatim in the rendered pages, and
-// because three of them carry authored line breaks, which the Markdown renderer
-// turns into <br>: the newline is written as the Go escape \n, never as a literal
-// control character in the source.
+// because three of them carry authored single newlines, which the Markdown
+// renderer keeps as soft line breaks (a newline and no <br>): the newline is
+// written as the Go escape \n, never as a literal control character in the source.
 const (
 	// The three comments of the "logged" task, oldest first.
 	bodyFinding = "The settlement reconciliation drifts by one cent on windows " +
@@ -369,9 +369,13 @@ func TestTaskPage_CommentLog(t *testing.T) {
 	if got := strings.Count(card, "edited "); got != 1 {
 		t.Errorf("the Comments card shows %d edited markers, want exactly 1", got)
 	}
-	// The authored line break of the hypothesis survives as a <br>.
-	if !strings.Contains(card, "should remove the drift.<br>") {
-		t.Errorf("the hypothesis body lost its authored line break")
+	// The authored single newline of the hypothesis is a soft line break: a
+	// newline in the HTML and no <br>.
+	if !strings.Contains(card, "should remove the drift.\nThe ledger export") {
+		t.Errorf("the hypothesis body does not render its single newline as a soft line break")
+	}
+	if strings.Contains(card, "should remove the drift.<br>") {
+		t.Errorf("the hypothesis body renders its single newline as <br>")
 	}
 
 	// The boards carry none of this: no comment body reaches either board page.
@@ -668,7 +672,7 @@ func TestSprintsLandingPage_RendersNoCommentLog(t *testing.T) {
 	f := seedCommentFixture(t, "settlement-reconciliation")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name)
+	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints")
 
 	for _, marker := range []string{
 		timelineList, timelineEvent, timelineIcon,
@@ -1088,6 +1092,7 @@ var wantRoutePatterns = []string{
 	"GET /roadmaps/{name}/audit",
 	"GET /roadmaps/{name}/graph",
 	"GET /roadmaps/{name}/graph/data",
+	"GET /roadmaps/{name}/sprints",
 	"GET /roadmaps/{name}/sprints/{id}",
 	"GET /roadmaps/{name}/tasks",
 	"GET /roadmaps/{name}/tasks/{id}",
@@ -1097,6 +1102,7 @@ var wantRoutePatterns = []string{
 	"HEAD /roadmaps/{name}/audit",
 	"HEAD /roadmaps/{name}/graph",
 	"HEAD /roadmaps/{name}/graph/data",
+	"HEAD /roadmaps/{name}/sprints",
 	"HEAD /roadmaps/{name}/sprints/{id}",
 	"HEAD /roadmaps/{name}/tasks",
 	"HEAD /roadmaps/{name}/tasks/{id}",
@@ -1186,6 +1192,7 @@ func TestCommentPages_AnswerReadMethodsOnly(t *testing.T) {
 
 	paths := []string{
 		"/roadmaps/" + f.name,
+		"/roadmaps/" + f.name + "/sprints",
 		"/roadmaps/" + f.name + "/tasks",
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.sprintID),
 		"/roadmaps/" + f.name + "/tasks/" + itoa(f.loggedTaskID),
@@ -1384,6 +1391,13 @@ func TestCommentPages_RenderOfflineWithoutInlineStyle(t *testing.T) {
 			wantSheets = 5
 		} else if strings.Contains(body, "/static/highlight.css") {
 			t.Errorf("page %s links highlight.css, but it renders no Markdown field", path)
+		}
+		// The sprint page also links the Tabler vendors stylesheet, which styles
+		// its Sprint progress card's gauge (SPEC/WEB.md § Dashboard Chart
+		// Library, rule 3; Acceptance Criterion 294).
+		if strings.Contains(path, "/sprints/") {
+			assets = append(assets, `<link rel="stylesheet" href="/static/vendor/tabler/tabler-vendors.min.css">`)
+			wantSheets++
 		}
 		for _, asset := range assets {
 			if !strings.Contains(body, asset) {

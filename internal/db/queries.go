@@ -1914,7 +1914,14 @@ type SprintMemberState struct {
 // order, GetSprintTasksFull returns for the sprint with no status filter and
 // position ordering.
 func (db *DB) GetSprintTaskStates(ctx context.Context, sprintID int) ([]SprintMemberState, error) {
-	rows, err := db.QueryContext(ctx, sprintTaskStatesQuery, sprintID)
+	return sprintTaskStates(ctx, db, sprintID)
+}
+
+// sprintTaskStates is the member read of GetSprintTaskStates on a given queryer,
+// so the web dashboard can issue it inside its one read transaction
+// (SPEC/DATABASE.md § Dashboard Queries).
+func sprintTaskStates(ctx context.Context, q queryer, sprintID int) ([]SprintMemberState, error) {
+	rows, err := q.QueryContext(ctx, sprintTaskStatesQuery, sprintID)
 	if err != nil {
 		return nil, fmt.Errorf("querying sprint tasks: %w", err)
 	}
@@ -3100,6 +3107,13 @@ type AuditFilter struct {
 //	    Limit:     100,
 //	})
 func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.AuditEntry, error) {
+	return auditEntries(ctx, db, f)
+}
+
+// auditEntries is GetAuditEntries' read on a given queryer, so the web dashboard
+// can issue the audit read inside its one read transaction (SPEC/DATABASE.md
+// § Dashboard Queries).
+func auditEntries(ctx context.Context, q queryer, f *AuditFilter) ([]models.AuditEntry, error) {
 	if f == nil {
 		f = &AuditFilter{}
 	}
@@ -3114,7 +3128,7 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 
 	query, args := buildAuditEntriesQuery(f)
 
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying audit entries: %w", err)
 	}
@@ -3881,12 +3895,20 @@ var (
 // Sprints with zero completed tasks contribute 0.0 to the average.
 // Returns 0.0 when no qualifying sprints exist.
 func (db *DB) GetAverageVelocity(ctx context.Context, limit int) (float64, error) {
+	return averageVelocity(ctx, db, limit)
+}
+
+// averageVelocity is GetAverageVelocity's read and computation on a given
+// queryer, so the web dashboard can issue it inside its one read transaction and
+// show exactly the value `rmp stats` reports (SPEC/DATABASE.md § Dashboard
+// Queries).
+func averageVelocity(ctx context.Context, q queryer, limit int) (float64, error) {
 	if limit <= 0 {
 		limit = 5
 	}
 
 	// Fetch the last N closed sprints that have both started_at and closed_at set.
-	rows, err := db.QueryContext(ctx, averageVelocityQuery, limit)
+	rows, err := q.QueryContext(ctx, averageVelocityQuery, limit)
 	if err != nil {
 		return 0.0, fmt.Errorf("querying closed sprints for velocity: %w", err)
 	}
