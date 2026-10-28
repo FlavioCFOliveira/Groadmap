@@ -215,7 +215,7 @@ func TestRunServer_SignalDrainsAnInFlightResponse(t *testing.T) {
 			awaitClosed(t, ln.closed, "the server to close its listener")
 			probe, err := net.Dial("tcp", addr.String())
 			if err == nil {
-				_ = probe.Close() // #nosec G104 -- the probe is the failure being reported
+				_ = probe.Close() // the probe is the failure being reported
 				t.Fatalf("a new connection was accepted after %s", sig)
 			}
 			if !errors.Is(err, syscall.ECONNREFUSED) {
