@@ -1,4 +1,4 @@
-# `rmp` CLI — full reference (binary v1.19.0)
+# `rmp` CLI — full reference (binary v1.20.0)
 
 Load this file when invoking a command not covered by the cheat-sheet in `SKILL.md`, or when you need exact flag semantics. The binary's own `rmp --ai-help` emits the canonical machine-readable JSON contract — prefer it whenever in doubt about a flag, an enum, or an exit code.
 

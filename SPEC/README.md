@@ -162,6 +162,9 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | The skills alignment invariant against the AI Agent Contract, the version declaration, and the test that enforces it | `SKILLS.md § Alignment Invariant` |
 | The skills release archive and its checksum | `SKILLS.md § Packaging` |
 | The skills installer `install-skills.sh` (destination, full replacement, failure modes) | `SKILLS.md § Skills Installer` |
+| `rmp skills install` command syntax, output JSON, exit codes, error lines, and warning lines | `COMMANDS.md § Skills Management` |
+| How `rmp skills install` installs the skills from `main` (fixed source, size and time bounds, staging directory, archive validation, the global, user, and project tiers and their rules and modes, replacement, rollback, interruption, verification) | `SKILLS.md § Skills Install Command` |
+| What the `skills` help and its AI Agent Contract entry must state (when an agent runs `rmp skills install`) | `HELP.md § Skills command help specifics` |
 
 ---
 
@@ -182,7 +185,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `VERSION.md` | Application and schema versioning, migrations |
 | `BUILD.md` | Build system, cross-compilation, validation gates, CI/CD |
 | `DEPLOY.md` | Installation, distribution, release process |
-| `SKILLS.md` | Agent skills shipped in `skills/`: scope partition, alignment invariant, packaging, installer |
+| `SKILLS.md` | Agent skills shipped in `skills/`: scope partition, alignment invariant, packaging, the `install-skills.sh` installer, and the behaviour of `rmp skills install` |
 
 ---
 
@@ -269,6 +272,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract generation rules | `ARCHITECTURE.md § AI Agent Contract Generation` |
+| The `rmp skills install` command-line contract (no flag, no positional argument, output keys, exit codes, the exact error and warning lines, the tier reasons) | `COMMANDS.md § Skills Management` |
+| The behaviour of `rmp skills install` (source, bounds, staging, validation, destination tiers, replacement and rollback, interruption) | `SKILLS.md § Skills Install Command` |
+| What the `skills` help and contract entry state, including when an agent runs the command | `HELP.md § Skills command help specifics` |
 
 `DATABASE.md` additionally retains `CHECK` constraints in DDL as a normative reproduction of the enums; the Go-level enum definitions remain in `MODELS.md`.
 

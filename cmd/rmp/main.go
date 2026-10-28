@@ -45,7 +45,7 @@ import (
 )
 
 const (
-	version = "1.19.0"
+	version = "1.20.0"
 	appName = "Groadmap"
 )
 
@@ -193,6 +193,18 @@ func main() {
 	}
 
 	err := cmd.DispatchFamily(os.Args[2:])
+
+	// `rmp skills install` handles SIGINT and SIGTERM itself while it holds
+	// state on disk, undoes the swap in progress, and is then interrupted as
+	// any other invocation is: exit 130 with nothing on stdout. A rollback
+	// that failed is still reported, with its error line, before the exit
+	// (SPEC/SKILLS.md § Install Interruption).
+	if rollbackErr, interrupted := commands.Interrupted(err); interrupted {
+		if rollbackErr != nil {
+			writeFailureReport(os.Stderr, rollbackErr)
+		}
+		os.Exit(ExitSigint)
+	}
 
 	exitCode := ExitSuccess
 	if err != nil {
@@ -368,7 +380,8 @@ Choosing a task-listing command:
 
 I/O conventions:
   - Every command requires -r <roadmap>, except 'rmp roadmap', 'rmp web',
-    the AI contract (--ai-help/ai-help), and global help/version.
+    'rmp skills', the AI contract (--ai-help/ai-help), and global
+    help/version.
   - Successful output is JSON on stdout; errors are plain text on stderr.
   - All timestamps in JSON use ISO 8601 UTC: YYYY-MM-DDTHH:mm:ss.sssZ.
 

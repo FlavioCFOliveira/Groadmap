@@ -23,6 +23,7 @@ is modified.
   - [Audit family help specifics](#audit-family-help-specifics)
   - [Audit operation entity-type classification](#audit-operation-entity-type-classification)
   - [Comment subcommand help specifics](#comment-subcommand-help-specifics)
+  - [Skills command help specifics](#skills-command-help-specifics)
 - [Error message format](#error-message-format)
   - [Stderr part order](#stderr-part-order)
   - [Recovery help after a dispatch failure](#recovery-help-after-a-dispatch-failure)
@@ -388,6 +389,7 @@ help text must match the command contract in `COMMANDS.md`.
 | Graph | `rmp graph serve` | `COMMANDS.md § Graph Management` |
 | Graph | `rmp graph client` | `COMMANDS.md § Graph Management` |
 | Web | `rmp web` | `COMMANDS.md § Web Interface` |
+| Skills | `rmp skills install` | `COMMANDS.md § Skills Management` |
 
 Each subcommand in the inventory has its own dedicated help printer in
 the code (e.g. `printTaskStatHelp`, `printSprintCloseHelp`,
@@ -1008,6 +1010,46 @@ Examples:
   rmp web --no-open
 ```
 
+### Skills command help specifics
+
+`rmp skills` is a family with one subcommand, `install`. Its family help and the
+help of `rmp skills install` follow the same block order as every other family
+and subcommand help. Both the plain-text help and the machine-readable AI Agent
+Contract (`rmp --ai-help`) MUST additionally make explicit the behaviours below,
+because an agent cannot infer them from the generic template, and the first of
+them is the reason the command exists:
+
+1. **When to run it.** State that an agent runs `rmp skills install` after `rmp`
+   has been installed or upgraded, and when the `rmp-version` a skill declares
+   differs from the version `rmp --version` writes; and that when the two still
+   differ after a successful run, `rmp` itself must be upgraded, so the command
+   is not run again (`SKILLS.md § Location and Identity`, item 6). In the
+   contract, this is stated by the `description` of the `skills` entry of
+   `commands` and by the `description` of its `install` subcommand.
+2. **What it replaces, and that it asks nothing.** State that the command
+   replaces the installed `roadmap-manager` and `knowledge-authority` entirely on
+   every run, without a prompt, without reading standard input, and without a
+   confirmation flag, and that it leaves every other skill untouched.
+3. **Where it installs.** State the three tiers in their order — the managed
+   settings directory's `.claude/skills`, then the user's
+   `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`, then the current working
+   directory's `.claude/skills` — that the first tier that accepts the skills is
+   used, that each tier not used is reported with a warning, and that the
+   command never requests elevated privileges (`SKILLS.md § Destination Tiers`).
+4. **Where it fetches from.** State that it downloads the archive of the
+   repository's `main` branch over HTTPS, that the download needs network access
+   to `github.com`, and that no checksum exists for that archive.
+5. **No roadmap flag.** State that the command does not take `-r` / `--roadmap`.
+
+The global help lists `skills` among its commands, and its line on the
+roadmap flag names `rmp skills` among the commands that do not require `-r`.
+
+In the contract, the `install` subcommand publishes `prerequisites` with one
+element, stating that network access to `github.com` over HTTPS is required, and
+publishes `idempotent` as `true`: two runs against an unchanged `main` branch
+leave the same skills installed at the same tier. `COMMANDS.md § Skills Management`
+is canonical for the command-line contract the help renders.
+
 ## Error message format
 
 When a command fails, the application writes a plain-text error to
@@ -1058,6 +1100,11 @@ AI agents usage: run `rmp --ai-help` for a machine-readable command contract.
 The two parts are never both present in the same invocation: the
 deduplication rule in `AI_AGENT environment variable` keeps the reader's
 count at exactly one.
+
+One command writes lines of its own ahead of the error line. The warnings of
+`rmp skills install` (`COMMANDS.md § Skills Install Warnings`) follow part 1,
+when it is present, and precede part 2, in the order the conditions arose. They
+are not an error line, and the invocation still writes exactly one.
 
 ### Recovery help after a dispatch failure
 

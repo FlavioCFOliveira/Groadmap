@@ -57,6 +57,7 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/skillsinstall"
 )
 
 // ---------------------------------------------------------------------------
@@ -413,6 +414,10 @@ func publishedKeyLists() []keyListCase {
 			models.Roadmap{}, "Array of objects", bracedCommaList},
 		{"roadmap list help / object sketch", printRoadmapListHelp,
 			models.Roadmap{}, "Array of objects, one per roadmap:", inlineJSONKeys},
+
+		// --- rmp skills --------------------------------------------------------
+		{"skills install help / JSON shape", printSkillsInstallHelp,
+			skillsinstall.Result{}, "Output (stdout JSON):", jsonShapeKeys4},
 	}
 
 	return slices.Concat(modelSurfaces, graphKeyLists())

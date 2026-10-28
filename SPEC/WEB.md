@@ -699,8 +699,8 @@ work with an explicit time budget.
    cuts while it is **reading** is cancelled, and its failure is rendered, while
    the response can still be written. A query the budget cuts while it is
    **writing** is not: the engine's rollback runs past the deadline by a factor
-   the statement itself sets, for which no ceiling is established, and it can
-   exceed the `WriteTimeout` on its own.
+   the statement itself sets, for which no ceiling is established, so nothing
+   established keeps it inside the `WriteTimeout`.
    `GRAPH.md § Statement Time Budget` is canonical for that overrun, and
    `GRAPH.md § Lock Contention` states what it costs the invariant below;
    neither is restated here. The budget is additionally the quantity the graph

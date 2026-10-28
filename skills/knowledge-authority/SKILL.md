@@ -3,7 +3,7 @@ name: knowledge-authority
 model: inherit
 description: Empirical authority and single source of truth about THIS project's code content, backed by the per-roadmap knowledge graph (`rmp graph`, Cypher over a Label-Property Graph served by a Bolt server) and the project's `./knowledge-model.md`. This is the FIRST place to look for any factual question about the codebase — which file or function implements a feature, which packages/types/functions/tests/dependencies/specs exist, what a component complies with, how the architecture fits together, or the scope and impact of a change — even when the answer looks one `grep` away; consult the graph before reading files. Also use it to sync, refresh, or audit the graph after a commit, on request, or whenever the project files change, and to maintain `./knowledge-model.md` — the label/predicate dictionary, the model's constraints, and its index recommendations, and nothing else — in conformance with the live graph; this file is written exclusively by this skill. Trigger cues: "knowledge authority", "KA", "KG", "knowledge graph", "grafo de conhecimento", "where is X implemented", "what depends on Y", "which tests cover Z", "sync/refresh/audit the graph". Do NOT use for roadmap/sprint/backlog/task-status work (that is the `roadmap-manager` skill); for writing or implementing code; for git operations; or for general programming, Cypher, or graph-algorithm questions unrelated to this repository's content.
 metadata:
-  rmp-version: "1.19.0"
+  rmp-version: "1.20.0"
 ---
 
 # Knowledge Authority
@@ -23,7 +23,7 @@ This skill is **transversal**: it is installed at the user-profile level because
 it serves every project, not one. On each invocation it operates on the *current*
 project's graph and model.
 
-> **Contract baseline: rmp 1.19.0.** The graph command was rebuilt as a
+> **Contract baseline: rmp 1.20.0.** The graph command was rebuilt as a
 > server/client pair in the 1.17 line. If `rmp --version` reports older, or a
 > behaviour here disagrees with the binary, **the binary wins** — run
 > `rmp --ai-help` and correct this skill.
@@ -40,7 +40,9 @@ or file-read fallback). Guessing is a defect.
 
 - **Uses exclusively `rmp graph`**, whose two subcommands are `serve` and
   `client`. No other `rmp` command is in scope. Full contract:
-  `references/cli.md`.
+  `references/cli.md`. `rmp skills install`, which installs this skill, is
+  shared by both skills and belongs to neither one's scope (§ Keeping this skill
+  current).
 - **Owns the project's `./knowledge-model.md` exclusively.** That file is
   maintained and updated by this skill and by nothing else — no other skill, agent
   or workflow writes to it — and this skill is answerable for its accuracy. It is
@@ -68,6 +70,27 @@ The `roadmap-manager` skill does not touch the graph: **every graph read, write
 and maintenance step routes through this skill** — and so does every edit to
 `./knowledge-model.md`, which no other skill, agent or workflow may write
 (§ Scope).
+
+## Keeping this skill current — `rmp skills install`
+
+Run `rmp skills install` on either of two occasions:
+
+- after `rmp` has been installed or upgraded;
+- when the `rmp-version` this skill declares in its frontmatter differs from
+  the version `rmp --version` writes, which is the third whitespace-separated
+  word of its line (`Groadmap version 1.19.0 (commit …)` writes `1.19.0`).
+
+```bash
+rmp skills install
+```
+
+The command replaces the installed `roadmap-manager` and `knowledge-authority`
+entirely with the copies on the repository's `main` branch, asks nothing, and
+needs network access to `github.com`. Run it **once** per occasion. When the
+declared version still differs from `rmp --version` after a successful run, the
+cause is the installed binary, not the skills: the skills on `main` declare the
+version of the release `main` carries. Report that `rmp` itself must be
+upgraded, and do not run the command again.
 
 ## How this skill is structured
 
@@ -151,11 +174,14 @@ Two constraints on any value you propose:
 
 - **Length.** The whole path must be short enough for the platform's
   `sockaddr_un`, or `serve` fails with exit 1 and a message naming the limit
-  ("… is 120 bytes and this platform allows at most 103"). **Measured on macOS:
-  103 bytes; on Linux at 1.18.0, 107 bytes for `client` and for a `serve` given
-  `--socket`, but 99 bytes for a `serve` on the derived default path.**
-  Trust the message over any remembered figure. A path under a deep scratch
-  directory will breach it.
+  ("… is 120 bytes and this platform allows at most 103"). **Measured on Linux at
+  rmp 1.19.0 (GoGraph v0.17.2): 107 bytes for `client`; for `serve`, 107 less
+  (18 − the length of the path's final component) when that component is shorter
+  than 18 bytes — 99 bytes for a path ending in `graph.sock`, the derived default
+  included, and 95 for one ending in `x.sock`.** `serve` binds a staging path
+  first, which is why its bound is lower. macOS gave 103 bytes on an earlier
+  build and was not re-measured. Trust the message over any remembered figure. A
+  path under a deep scratch directory will breach it.
 - **Prefer the derived default.** The web interface (the `web` command, which this
   skill never runs) cannot be told a socket — it resolves the derived path. A
   custom `socket` therefore leaves the web interface unable to reach the graph
@@ -229,7 +255,7 @@ than read and re-interpret files; file reading is only the fallback.
 
 **`MERGE` over a *pattern* creates every node in that pattern afresh unless the
 whole pattern already matches.** It does not bind an existing node by its
-property map the way a reader expects. Verified at 1.18.0:
+property map the way a reader expects. Measured at rmp 1.19.0 (GoGraph v0.17.2):
 
 | Statement sequence | Result |
 |---|---|
@@ -286,8 +312,8 @@ statement alone:
 - **rmp releases up to and including 1.18.0** are built against GoGraph v0.15.0
   or earlier. Hazards 2, 3 and 4 below are real on them: a write lands on the
   wrong relationship or nowhere, or a read-back misleads.
-- **rmp 1.19.0**, built against GoGraph v0.17.2, and **any build against GoGraph
-  v0.16.0 or later** direct every relationship write to the relationship the
+- **rmp 1.19.0 and 1.20.0**, both built against GoGraph v0.17.2, and **any build
+  against GoGraph v0.16.0 or later** direct every relationship write to the relationship the
   statement bound. Hazard 1 remains; hazards 2, 3 and 4 do not
   occur.
 - **Telling them apart:** a graph directory last served by a GoGraph v0.16.0
@@ -295,9 +321,10 @@ statement alone:
   refuses such a directory. When the engine is unknown, use the forms marked
   **safe on both engines** — they are correct either way.
 
-The results below were measured against a throwaway roadmap on GoGraph v0.16.0
-and v0.17.0 builds, which return the same results; the older engine's results
-are stated beside them.
+The results below were measured against a throwaway roadmap on rmp 1.19.0,
+built against GoGraph v0.17.2. The older engine's results stated beside them
+come from earlier measurements on rmp 1.18.0 and older builds, and were not
+re-measured.
 
 ### 1. `MERGE` over a pattern duplicates a relationship's endpoints (both engines)
 
@@ -443,8 +470,8 @@ matrix):
   index** and falls back to a label scan. `TEXT`/`RANGE`/`POINT`/`FULLTEXT`/
   `LOOKUP`, composite, and relationship-property indexes are all unsupported.
   `OPTIONS {indexType:'btree'}` is accepted and reported as `type: btree`, but
-  measured at 1.18.0 the planner used it for neither an equality nor a range
-  lookup — create the default hash index.
+  measured at rmp 1.19.0 (GoGraph v0.17.2) the planner used it for neither an
+  equality nor a range lookup — create the default hash index.
 
 **Recommend an index from the query shapes this skill actually issues** — the
 identity lookups in `references/cypher.md` — and prove the recommendation with

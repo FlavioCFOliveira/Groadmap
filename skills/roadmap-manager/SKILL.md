@@ -3,18 +3,31 @@ name: roadmap-manager
 model: inherit
 description: Sole operator of the local Groadmap CLI (`rmp`) — the single source of truth for a project's tasks, sprints, and backlog, in per-roadmap SQLite databases under `~/.roadmaps/<name>/`. Self-contained: needs no other skill to plan, coordinate, and report roadmap work. Trigger it to create/list/inspect/edit/transition tasks, sprints, or backlog items; run the sprint lifecycle (plan/start/close/reopen); move a task across `BACKLOG → SPRINT → DOING → TESTING → COMPLETED`; set priority or severity; manage dependencies and subtasks; reorder or move tasks within or between sprints; read the audit log or statistics; work out what to do next; resume an interrupted task; or produce a status report ("ponto de situação", PDS). Trigger it equally for the typed comment log — write a FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE or NOTE entry as the work happens, and read it back to recover a task's history and the reasoning behind past decisions. Bare cues: "rmp", "groadmap", "roadmap", "sprint", "backlog", "pds", ids like `#42`, "what's next?", "mark this done", "reopen task N", "block A on B", "close the sprint", "log this decision", "keep this test result", "why was this decided?", "what was already tried?". Do NOT use it for GitHub Issues, Jira, Linear or any remote tracker; to write code, tests, audits, git operations or specifications (delegate those); or for `rmp graph …` — the knowledge graph belongs to the `knowledge-authority` skill.
 metadata:
-  rmp-version: "1.19.0"
+  rmp-version: "1.20.0"
 ---
 
 # Roadmap Manager
 
-Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.19.0** — and coordinate all roadmap, sprint, task, and backlog work. This skill is the single source of truth for a project's planning and execution state.
+Drive the `rmp` (Groadmap) CLI — aligned with **binary v1.20.0** — and coordinate all roadmap, sprint, task, and backlog work. This skill is the single source of truth for a project's planning and execution state.
 
 **Coordinate, never implement.** This skill operates the CLI autonomously; the actual work behind a task — code, tests, security/performance audits, git operations, specifications — is out of scope and is handed to the appropriate specialist agent or human. Never mark a task `COMPLETED` without confirmation that its acceptance criteria are met.
 
 **`rmp graph …` is entirely out of scope.** This skill neither reads nor writes the per-roadmap knowledge graph, documents none of its subcommands, and no `rmp graph …` command appears in any workflow here. When a request needs the graph, hand it to the **`knowledge-authority`** skill, which owns it. The contract's `build_knowledge_graph` workflow and its five `graph_*` pitfalls belong there too, and are deliberately absent from this skill and its references.
 
 **The `web` command is out of scope as well.** It starts a long-running, read-only HTTP server; this skill never starts it. If the user wants the web interface, tell them it is a separate command they run themselves.
+
+## Keeping this skill current — `rmp skills install`
+
+Run `rmp skills install` on either of two occasions:
+
+- after `rmp` has been installed or upgraded;
+- when the `rmp-version` this skill declares in its frontmatter differs from the version `rmp --version` writes, which is the third whitespace-separated word of its line (`Groadmap version 1.19.0 (commit …)` writes `1.19.0`).
+
+```bash
+rmp skills install
+```
+
+The command replaces the installed `roadmap-manager` and `knowledge-authority` entirely with the copies on the repository's `main` branch, asks nothing, and needs network access to `github.com`. It is shared by both skills and belongs to neither one's scope. Run it **once** per occasion. When the declared version still differs from `rmp --version` after a successful run, the cause is the installed binary, not the skills: the skills on `main` declare the version of the release `main` carries. Report that `rmp` itself must be upgraded, and do not run the command again.
 
 ## How this skill is structured (progressive disclosure)
 

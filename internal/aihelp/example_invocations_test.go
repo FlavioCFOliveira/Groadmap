@@ -35,10 +35,9 @@
 // That restriction is not caution for its own sake, and it is not a guess: it is
 // measured. The contract publishes 153 examples of its own, of which 68 declare
 // a non-zero exit, and every one of those 68 fails on a VALUE or a MISSING FLAG
-// — `--sort foo`, `task get 99999`, a `task create` with no `--title` — with a
-// two deliberate exceptions, `rmp web --foo` and `rmp roadmap list --foo`,
-// which demonstrate an unknown
-// FLAG. Not one fails on an unknown command or subcommand NAME. A checker that
+// — `--sort foo`, `task get 99999`, a `task create` with no `--title` — with
+// three deliberate exceptions, `rmp web --foo`, `rmp roadmap list --foo` and
+// `rmp skills install --yes`, which demonstrate an unknown FLAG. Not one fails on an unknown command or subcommand NAME. A checker that
 // also judged values or required flags would therefore start reporting correct,
 // deliberately-failing examples as defects.
 // TestExampleInvocations_ContractExamplesFailOnValuesRatherThanNames keeps that
@@ -1664,14 +1663,17 @@ func TestExampleInvocations_OracleShape(t *testing.T) {
 	oracle := loadExampleOracle(t)
 
 	const (
-		wantCommands = 9
-		// 56: 59 minus the six `graph` subcommands withdrawn over the two passes —
+		// 10: the nine families plus `skills` (SPEC/COMMANDS.md § Skills
+		// Management).
+		wantCommands = 10
+		// 57: 59 minus the six `graph` subcommands withdrawn over the two passes —
 		// create, query, update, delete and search first, then execute — plus the
 		// two the family publishes now, `graph serve` and `graph client`
 		// (SPEC/COMMANDS.md § Graph Management; SPEC/DATA_FORMATS.md § AI Agent
 		// Contract, design principle 3: a withdrawn subcommand is absent from the
-		// contract rather than marked, so this count moves with the withdrawal).
-		wantSubcommands = 56
+		// contract rather than marked, so this count moves with the withdrawal),
+		// plus `skills install`.
+		wantSubcommands = 57
 	)
 	if len(oracle.commandOrder) != wantCommands {
 		t.Errorf("the contract declares %d command families, this gate was written against %d: %v",
@@ -1764,15 +1766,19 @@ func TestExampleInvocations_ContractExamplesFailOnValuesRatherThanNames(t *testi
 	const (
 		minContractExamples = 120
 		minFailureExamples  = 50
-		// Two documented failures fail by a NAME, and both are named here:
-		// `rmp web --foo`, titled "Unknown flag", and `rmp roadmap list --foo`,
-		// titled "Unrecognised flag". Each demonstrates the exit code for a flag
-		// the command does not have, so the thing this gate reports IS their
-		// whole point. `roadmap list` joined the class when it stopped accepting
-		// an unrecognised flag silently (rmp task 461): a subcommand that refuses
+		// Three documented failures fail by a NAME, and all three are named here:
+		// `rmp web --foo`, titled "Unknown flag", `rmp roadmap list --foo`,
+		// titled "Unrecognised flag", and `rmp skills install --yes`, titled
+		// "Confirmation flag". Each demonstrates the exit code for a flag the
+		// command does not have, so the thing this gate reports IS their whole
+		// point. `roadmap list` joined the class when it stopped accepting an
+		// unrecognised flag silently (rmp task 461): a subcommand that refuses
 		// one has to publish a failure example, and no VALUE can produce that
-		// refusal.
-		wantNameFailures = 2
+		// refusal. `skills install` takes no flag but --help, so its one
+		// refusable flag is an unknown one, and the confirmation flag an agent
+		// is likely to reach for is the one it demonstrates (SPEC/DATA_FORMATS.md
+		// § AI Agent Contract, pitfall skills_install_confirmation_flag).
+		wantNameFailures = 3
 	)
 
 	total, failures := 0, 0

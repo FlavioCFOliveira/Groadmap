@@ -22,6 +22,14 @@ curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/inst
 
 This installs the two Claude Code skills that drive `rmp` for AI agents: `roadmap-manager` (tasks, sprints and their comment logs) and `knowledge-authority` (the knowledge graph, through `rmp graph serve` and `rmp graph client`). They are installed for the current user, for every project, into `$CLAUDE_CONFIG_DIR/skills` when that variable is set and `~/.claude/skills` otherwise; no `sudo` is used. The script downloads the skills archive of the latest release and verifies it against its published SHA-256 checksum before installing. Every run replaces both skills entirely with that release's version, so no file of a previous install remains; other skills in the directory are not touched. `SPEC/SKILLS.md` states the full behaviour.
 
+Once `rmp` is installed, the binary installs the skills itself, from the repository's `main` branch:
+
+```bash
+rmp skills install
+```
+
+Run it after `rmp` has been installed or upgraded, and whenever the `rmp-version` a skill declares in its frontmatter differs from the version `rmp --version` writes. Run it once per such occasion: when the two still differ after a successful run, the installed `rmp` is older than the skills on `main`, so upgrade `rmp` itself rather than running the command again. It is non-interactive and asks for no confirmation; every run replaces both skills entirely and leaves other skills untouched. It installs into the first of three skills directories that accepts them — the machine-wide managed settings directory's `.claude/skills` (`/etc/claude-code/.claude/skills` on Linux), then `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`, then `.claude/skills` in the current directory — reporting each one it could not use with a warning, and it never asks for `sudo`. It needs network access to `github.com`; no checksum exists for a branch archive, so it relies on HTTPS and on validating the archive's structure. See [DOCS/commands/skills.md](DOCS/commands/skills.md).
+
 ## Features
 
 - **Roadmap Management**: Create, list, and remove roadmaps
@@ -47,6 +55,7 @@ The only commands that do **not** take `-r` are:
 
 - `rmp roadmap list`, `rmp roadmap create`, `rmp roadmap remove` (they operate on the roadmap set itself)
 - `rmp web` (it lists every roadmap and you pick one in the browser)
+- `rmp skills install` (it installs the agent skills and opens no roadmap)
 - `rmp ai-help` / `rmp --ai-help`, `rmp --help`, `rmp --version`
 
 ## Available Commands
@@ -61,6 +70,7 @@ The only commands that do **not** take `-r` are:
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
 | `graph` | Knowledge graph: hold a roadmap's graph open over a Unix domain socket (`serve`) and send Cypher statements to that server (`client`) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
 | `web` | Self-contained web interface for all roadmaps and their knowledge graphs; read-only except the graph query bar, which executes the statement it is given | [DOCS/commands/web.md](DOCS/commands/web.md) |
+| `skills` | Install the agent skills `roadmap-manager` and `knowledge-authority` from the repository's `main` branch (`install`) | [DOCS/commands/skills.md](DOCS/commands/skills.md) |
 | `ai-help` | Emit the AI Agent Contract (machine-readable JSON for automated callers) | [DOCS/commands/ai-help.md](DOCS/commands/ai-help.md) |
 
 ## Installation

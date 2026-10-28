@@ -113,10 +113,13 @@ Strings Are Exact, "The gate", rules 1 to 3):
 
 test_governance_checks_can_fail proves each of the three refuses a mutant.
 
-One line is published for stderr on a SUCCESSFUL path, and it is reached and
-compared exactly as an error line is: the warning `sprint close --force` writes.
-A table row whose exit code is 0 and whose stderr column quotes a line
-contributes that line to the corpus (extract_success_stderr_rows).
+Four lines are published for stderr on a SUCCESSFUL path, and each is held to
+the same exact comparison as an error line: the warning `sprint close --force`
+writes, which is reached against the binary, and the three warnings
+`rmp skills install` writes, which follow a download and are exempted by name
+(EXEMPT_KEYS) because the package tests drive them. A table row whose exit code
+is 0 and whose stderr column quotes a line contributes that line to the corpus
+(extract_success_stderr_rows).
 
 The module's own final test method (test_zz_coverage_report, alphabetically
 last so it runs after every other check has had the chance to mark its key
@@ -607,6 +610,13 @@ def extract_fenced_corpus(text):
 # span that only names the prefix (`Error: `) publishes nothing.
 _PUBLISHED_ERROR_RE = re.compile(r"Error: \S")
 
+# A server record on stderr: the canonical UTC timestamp GRAPH.md "Server
+# Diagnostics on Stderr" fixes -- three digits of milliseconds and an explicit Z
+# -- opening the line, then the level.
+_AI_HINT_LINE = "AI agents usage: run `rmp --ai-help` for a machine-readable command contract."
+
+_UTC_RECORD_RE = re.compile(r"^time=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z level=")
+
 
 def iter_prose_paragraphs(text):
     """Yield `(first line number, paragraph)` for every paragraph outside the
@@ -945,6 +955,77 @@ def _where(key):
 
 
 # ---------------------------------------------------------------------------
+# Write-ahead-log damage, for the not-clean-recovery line (rmp task #632).
+#
+# A segment file opens with a 32-byte header; each record is a 36-byte header
+# -- the magic "GGWA" first, the payload length at offset 8 (little-endian
+# uint32), and a CRC32C at offset 32 computed over the payload and then
+# continued over the header's first 32 bytes -- followed by its payload. A
+# transaction's record payload starts with the version byte 0xFD, a kind byte
+# and the transaction's sequence number (little-endian uint64). The layout is
+# GoGraph's (store/wal/format.go, store/txn/txn.go at the pinned release), and
+# every record is checked for its magic so a change of format fails loudly.
+# ---------------------------------------------------------------------------
+
+_WAL_SEGMENT_HEADER = 32
+_WAL_RECORD_HEADER = 36
+_WAL_TXN_RECORD = 0xFD
+
+
+def _crc32c(data, crc=0):
+    """CRC32C (Castagnoli), continuable like Go's crc32.Update."""
+    crc ^= 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
+    return crc ^ 0xFFFFFFFF
+
+
+def _wal_records(buf):
+    """(offset, payload length) of every complete record of a segment."""
+    records, off = [], _WAL_SEGMENT_HEADER
+    while off + _WAL_RECORD_HEADER <= len(buf):
+        assert buf[off:off + 4] == b"GGWA", f"no record magic at offset {off}"
+        length = int.from_bytes(buf[off + 8:off + 12], "little")
+        if off + _WAL_RECORD_HEADER + length > len(buf):
+            break
+        records.append((off, length))
+        off += _WAL_RECORD_HEADER + length
+    return records
+
+
+def _corrupt_last_committed_op(segment_dir):
+    """Make the first operation of the log's last transaction undecodable,
+    keeping its record's checksum valid."""
+    segments = sorted(segment_dir.glob("*.wal"))
+    found = []
+    for path in segments:
+        buf = path.read_bytes()
+        for off, length in _wal_records(buf):
+            payload = buf[off + _WAL_RECORD_HEADER:off + _WAL_RECORD_HEADER + length]
+            if length > 10 and payload[0] == _WAL_TXN_RECORD:
+                found.append((int.from_bytes(payload[2:10], "little"), path, off, length))
+    assert found, f"no transaction record under {segment_dir}"
+    last = max(seq for seq, _, _, _ in found)
+    _, path, off, length = next(f for f in found if f[0] == last)
+    buf = bytearray(path.read_bytes())
+    start = off + _WAL_RECORD_HEADER
+    for i in range(start + 10, start + length):
+        buf[i] ^= 0xFF
+    crc = _crc32c(bytes(buf[off:off + 32]), _crc32c(bytes(buf[start:start + length])))
+    buf[off + 32:off + 36] = crc.to_bytes(4, "little")
+    path.write_bytes(bytes(buf))
+
+
+def _graph_dir_bytes(graph_dir):
+    """Every regular file under graph/ but the store lock, by relative path."""
+    return {str(p.relative_to(graph_dir)): p.read_bytes()
+            for p in sorted(graph_dir.rglob("*"))
+            if p.is_file() and p.name != "write.lock"}
+
+
+# ---------------------------------------------------------------------------
 # Exemptions: published strings this module cannot deterministically drive
 # to a full character-for-character match. Each is named and reasoned here,
 # never silently dropped -- test_zz_coverage_report prints this table and
@@ -1000,6 +1081,18 @@ EXEMPT_KEYS = {
         "driven in process by internal/db/sprint_membership_guard_test.go, which "
         "hands it states no command can produce."
     ),
+    "Error: graph server error: the graph engine fail-stopped and refuses every statement; the server has shut down. Restart rmp graph serve to rebuild the indexes from the store.": (
+        "SPEC/GRAPH.md § Server Diagnostics on Stderr: the line is written when a "
+        "statement is refused with the engine's fail-stop error, which the engine "
+        "raises only after a commit-time update of its secondary indexes was cut "
+        "short by a panic. No statement a client can send makes a correct engine "
+        "panic there, so no invocation of the binary reaches it. The condition is "
+        "injected through the engine's own index manager, and this exact line, its "
+        "exit code, the skipped shutdown checkpoint, the released lock and the "
+        "removed socket are asserted, in process by "
+        "internal/graphserve/failstop_test.go "
+        "(TestServe_AFailStoppedEngineShutsTheServerDownWithoutAFold)."
+    ),
     "Error: <detail>": (
         "SPEC/HELP.md § Error message format publishes the SHAPE every failing "
         "invocation's line takes, with <detail> standing for the whole message after "
@@ -1007,6 +1100,186 @@ EXEMPT_KEYS = {
         "in full by an error table, and each of those is a key of this corpus driven "
         "on its own. A head of `Error: ` alone carries no sentinel, so the shape "
         "cannot be narrowed either (see TAIL_EXEMPT_KEYS)."
+    ),
+    "Error: I/O error: cannot download the skills from https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. The line is written when the '
+        'request itself fails. It and its exit code are driven in process, '
+        'against a local HTTPS server, by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_RefusedConnection, TestInstall_SourceMustBeHTTPS, and the '
+        'time-bound and redirect cases of TestInstall_DownloadFailures).'
+    ),
+    "Error: I/O error: cannot download the skills from https://github.com/FlavioCFOliveira/Groadmap/archive/refs/heads/main.tar.gz: HTTP status N": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures, "status other than 200"), which asserts '
+        'the whole line.'
+    ),
+    "Error: I/O error: the skills archive exceeds 64 MiB; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures, the declared and the undeclared body '
+        'over the bound), which asserts the whole line.'
+    ),
+    "Error: I/O error: the skills archive expands to more than 256 MiB; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures, "decompressed stream over its bound"), '
+        'which asserts the whole line.'
+    ),
+    "Error: I/O error: the skills in the archive exceed 16 MiB; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "selected files over 16 MiB"), which '
+        'asserts the whole line.'
+    ),
+    "Error: I/O error: the skills in the archive exceed 1,000 entries; nothing was installed": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "selected entries over 1,000"), which '
+        'asserts the whole line.'
+    ),
+    "Error: I/O error: the skills archive is not a valid gzip-compressed tar archive: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_DownloadFailures: not a gzip stream, a truncated stream, '
+        'a corrupted trailer), which asserts the whole line for each.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" has an absolute name': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "absolute name"), which asserts the '
+        'whole line.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" has an empty, "." or ".." path component': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives: a "..", a "." and an empty component, '
+        'inside and outside the skills), which asserts the whole line.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" is neither a directory nor a regular file': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives: a selected symbolic link, hard link, '
+        'character device and FIFO), which asserts the whole line.'
+    ),
+    'Error: I/O error: the skills archive is malformed: entry "X" appears more than once': (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "duplicate file"), which asserts the '
+        'whole line.'
+    ),
+    "Error: I/O error: the skills archive is malformed: it carries no regular file skills/roadmap-manager/SKILL.md": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "missing roadmap-manager SKILL.md"), '
+        'which asserts the whole line.'
+    ),
+    "Error: I/O error: the skills archive is malformed: it carries no regular file skills/knowledge-authority/SKILL.md": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_MalformedArchives, "missing knowledge-authority '
+        'SKILL.md"), which asserts the whole line.'
+    ),
+    "Error: I/O error: cannot extract the skills archive into the staging directory: <detail>": (
+        "SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches the "
+        "network, so no end-to-end test runs the binary past the refusals that "
+        "precede the download, and this line is written only while the "
+        "downloaded archive is being extracted. Driven in process by "
+        "internal/skillsinstall/skillsinstall_test.go "
+        "(TestInstall_ExtractionFailureIsReported), which asserts the head and "
+        "the operating system's account of the refused write."
+    ),
+    "Error: I/O error: the skills could not be installed in the global, user, or project skills directory; the project skills directory was not used: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Reached only after a '
+        'successful download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_AllTiersRefusedFailsAndChangesNothing), which asserts the '
+        'whole line and the two warnings before it.'
+    ),
+    "Error: I/O error: the skills replacement failed and could not be rolled back: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Reached only after a '
+        'successful download, with a rename failure injected in the swap and in '
+        'its undo. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_FailedRollbackKeepsTheWorkDirectoryAndStops, '
+        'TestInstall_SignalWithAFailedUndoKeepsTheWorkDirectory), which assert '
+        'the whole line.'
+    ),
+    "warning: the global skills directory was not used, trying the user skills directory: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. A success-path warning reached '
+        'only after a successful download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_FallsBackToUserTier), which asserts the whole line.'
+    ),
+    "warning: the user skills directory was not used, trying the project skills directory: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. A success-path warning reached '
+        'only after a successful download. Driven in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_FallsBackToProjectTierAndLeavesTheRefusedPathAsFound), '
+        'which asserts the whole line.'
+    ),
+    "warning: the temporary directory <path> could not be removed: <detail>": (
+        'SPEC/SKILLS.md § Install Verification: `rmp skills install` reaches '
+        "the network and, run with sufficient privileges, writes the machine's "
+        'managed settings directory, so no end-to-end test runs the binary past '
+        'the refusals that precede the download. Written when the operating '
+        'system refuses the removal of a directory the command created; the '
+        'removal failure is injected in process by '
+        'internal/skillsinstall/skillsinstall_test.go '
+        '(TestInstall_RemovalRefusedIsWarnedAndDoesNotChangeTheOutcome), which '
+        'asserts the whole line.'
     ),
 }
 
@@ -1020,6 +1293,17 @@ EXEMPT_KEYS = {
 # NARROWING, not an exemption: the key is marked reached, and the sentinel
 # half is asserted rather than skipped.
 TAIL_EXEMPT_KEYS = {
+    "Error: I/O error: cannot create a private staging directory: <detail>": (
+        "<detail>",
+        "SPEC/COMMANDS.md § Skills Install Error Cases: <detail> is a "
+        "description the command composes, naming the directory and the "
+        "condition, and the table publishes no fixed wording for it. The "
+        "refusal precedes the download (SPEC/SKILLS.md § Install Staging "
+        "Directory, item 2), so it is driven against the binary with a "
+        "relative TMPDIR; the head, which carries the sentinel, is asserted "
+        "exactly, and the tail must name the relative directory and why it is "
+        "refused."
+    ),
     "Error: I/O error: reading query from stdin: <detail>": (
         "<detail>",
         "The head \"Error: I/O error: reading query from stdin: \" is asserted "
@@ -1076,6 +1360,14 @@ TAIL_EXEMPT_KEYS = {
         "neither a regular file nor a directory -- and the head, which carries the "
         "sentinel and the fact that the store was not migrated, is asserted exactly "
         "(GRAPH.md \"Graph Store Format Migration\", rule 7)."
+    ),
+    "Error: graph store error: graph store recovery was not clean; the write-ahead log was left unchanged and the store was not served: <detail>": (
+        "<detail>",
+        "COMMANDS.md § Serve Error Cases: <detail> is the recovery's own account of "
+        "the damage, the engine's text and not specified (GRAPH.md \"Error Handling "
+        "and Exit Codes\", rule 11). The head, which carries the sentinel, the fact "
+        "that the log was left unchanged and that the store was not served, is "
+        "asserted exactly."
     ),
     "Error: running migrations: migration <version> failed: applying migration: <step>: <detail>": (
         "<detail>",
@@ -1185,16 +1477,21 @@ class TestErrorStringParity:
     # Invocation helpers
     # ------------------------------------------------------------------
 
-    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None, home=None):
+    def run_stdin(self, args, input_text=None, stdin_fd=None, timeout=None, home=None, extra_env=None):
         """Run the CLI with `input_text` (or a closed/empty stdin when None)
         piped in, returning (exit_code, stdout, stderr).
 
         `stdin_fd` hands the child a descriptor DIRECTLY instead of a pipe,
         which is the only way to drive a stdin whose failure is a property of
         the descriptor rather than of the bytes on it -- a directory, whose
-        read(2) is EISDIR. It and `input_text` are mutually exclusive."""
+        read(2) is EISDIR. It and `input_text` are mutually exclusive.
+
+        `extra_env` adds or overrides variables of the child's environment, such
+        as a time zone a timestamp check needs to be meaningful."""
         env = os.environ.copy()
         env["HOME"] = str(self.test.home_dir) if home is None else home
+        if extra_env:
+            env.update(extra_env)
         if stdin_fd is not None:
             assert input_text is None, "stdin_fd and input_text are mutually exclusive"
             result = subprocess.run(
@@ -1248,7 +1545,7 @@ class TestErrorStringParity:
         REACHED.add(key)
 
     def check_head(self, key, args, exit_code, tail_contains, subs=None,
-                   stdin=None, note="", stdin_fd=None, timeout=None):
+                   stdin=None, note="", stdin_fd=None, timeout=None, extra_env=None):
         """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
 
         Everything BEFORE the named placeholder is compared character for
@@ -1287,7 +1584,8 @@ class TestErrorStringParity:
             f"sentinel -- narrowing it would assert nothing of substance"
         )
 
-        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd, timeout=timeout)
+        rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd, timeout=timeout,
+                                      extra_env=extra_env)
         actual_line = err.splitlines()[0] if err else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
@@ -4446,6 +4744,71 @@ class TestErrorStringParity:
         leftovers = sorted(p.name for p in graph_dir.parent.iterdir() if p.name.startswith("graph-backup-"))
         assert leftovers == [], f"a failed backup left {leftovers} in the roadmap home"
 
+    def test_graph_store_recovery_not_clean_line(self):
+        """The line of a store whose recovery returned no error and still did
+        not replay the log cleanly (GRAPH.md "Concurrency and Recovery"; rmp
+        task #632), driven by the damage that produces it: an operation inside
+        an already-committed transaction that cannot be decoded, behind a
+        record checksum that is still valid. The server must refuse the store
+        with exit code 1 and leave every file of graph/ byte for byte as it
+        found it."""
+        r = self._another_roadmap("unclean")
+        server = self.test.start_graph_server(r)
+        for i in (1, 2, 3):
+            rc, _, err = self.test.run_cli(["graph", "client", "-r", r, "--query",
+                                            f"CREATE (:Task {{i: {i}}})"], timeout=60)
+            assert rc == 0, f"seeding commit {i} failed ({rc}): {err}"
+        server.kill_dash_9()
+        socket_path = self.test.default_socket_path(r)
+        if os.path.lexists(socket_path):
+            os.remove(socket_path)
+
+        graph_dir = self.test.home_dir / ".roadmaps" / r / "graph"
+        _corrupt_last_committed_op(graph_dir / "wal.d")
+        before = _graph_dir_bytes(graph_dir)
+
+        # The engine's recovery reports the damage in a record of its own before
+        # the start ends, so stderr's first line is that record, and the
+        # invocation's own error line -- the Error: line followed by the AI-agent
+        # hint, HELP.md "Error message format" -- closes the stream. Every line
+        # before the Error: line must be a server record stamped in canonical UTC
+        # (GRAPH.md "Server Diagnostics on Stderr"; rmp task #640): the child runs
+        # in a zone other than UTC, so a record that escaped the server's handler
+        # -- the standard log package's local-time prefix -- cannot pass. The rest
+        # is check_head's assertion: the exit code, an empty stdout, the head
+        # character for character, and a non-empty tail.
+        key = ("Error: graph store error: graph store recovery was not clean; the write-ahead log was "
+               "left unchanged and the store was not served: <detail>")
+        assert key in CORPUS and key in TAIL_EXEMPT_KEYS, key
+        head = key[:-len(TAIL_EXEMPT_KEYS[key][0])]
+        rc, out, err = self.run_stdin(["graph", "serve", "-r", r], None, timeout=60,
+                                      extra_env={"TZ": "Asia/Kolkata"})
+        assert rc == 1, f"the refused start exited {rc}, want 1\n  stderr: {err!r}"
+        assert out == "", f"the refused start wrote to stdout: {out!r}"
+        lines = err.splitlines()
+        error_at = [i for i, text in enumerate(lines) if text.startswith("Error: ")]
+        assert len(error_at) == 1, f"want exactly one error line, got {len(error_at)}\n  stderr: {err!r}"
+        line = lines[error_at[0]]
+        tail = lines[error_at[0] + 1:]
+        while tail and tail[-1] == "":
+            tail.pop()
+        assert tail == ["", _AI_HINT_LINE], (
+            f"the error line is not the last line before the AI-agent hint\n  stderr: {err!r}")
+        assert error_at[0] >= 1, f"want the recovery's record before the error line\n  stderr: {err!r}"
+        for number, record in enumerate(lines[:error_at[0]], start=1):
+            assert _UTC_RECORD_RE.match(record), (
+                f"stderr line {number} is neither a server record stamped in canonical UTC nor the "
+                f"error line: {record!r}\n  stderr: {err!r}")
+        assert line.startswith(head), (
+            f"the published head does not match the binary\n  published at: {_where(key)}\n"
+            f"  published: {head!r} (then <detail>)\n  captured:  {line!r}")
+        assert "corrupt op" in line[len(head):], f"the <detail> tail lost the recovery's account: {line!r}"
+        REACHED.add(key)
+        assert _graph_dir_bytes(graph_dir) == before, (
+            "the refused start changed graph/; the write-ahead log must be left byte for byte "
+            "as it was found")
+        assert not os.path.lexists(socket_path), "the refused start left its socket behind"
+
     # ------------------------------------------------------------------
     # The lines rmp tasks #577-#588 published: the home directory, the
     # database file's shape and links, the newer schema, repeated flags, the
@@ -4646,14 +5009,42 @@ class TestErrorStringParity:
                 f"NOT_PUBLISHED_SPANS names a span no file carries any longer: {s!r}")
         print(f"\n  governed files: {', '.join(sorted(named))}")
 
-    def test_success_path_stderr_lines_are_the_force_warning(self):
+    def test_skills_install_errors(self):
+        """SPEC/COMMANDS.md § Skills Install Error Cases: the lines the binary
+        can reach before any request. The confirmation flag is refused as an
+        unknown flag, and a staging parent that is not an absolute path is
+        refused before the download. Every other line of the table follows a
+        download and is exempted by name above."""
+        self.check(
+            "Error: invalid input: unknown flag: --yes",
+            ["skills", "install", "--yes"], 2, note="skills install has no confirmation flag",
+        )
+        self.check_head(
+            "Error: I/O error: cannot create a private staging directory: <detail>",
+            ["skills", "install"], 1,
+            ['the temporary-file directory "relative-staging-parent" is not an absolute path'],
+            note="a relative TMPDIR is refused before the download",
+            extra_env={"TMPDIR": "relative-staging-parent"},
+        )
+
+    def test_success_path_stderr_lines_are_the_published_warnings(self):
+        """COMMANDS.md § Published Error Strings Are Exact: the success-path
+        stderr lines are the warning `sprint close --force` writes and the three
+        warnings `rmp skills install` writes (§ Skills Install Warnings), in the
+        order the file publishes them."""
         lines = {}
         for path, _supplemental in SPEC_SOURCES:
             for s in extract_success_stderr_rows(path.read_text(encoding="utf-8")):
                 lines.setdefault(s, []).append(_rel(path))
-        assert list(lines) == ["warning: closing sprint #N with M incomplete task(s): <id-status-list>"], (
-            f"COMMANDS.md publishes one success-path stderr line, the --force warning; "
-            f"extraction found {lines}")
+        assert list(lines) == [
+            "warning: closing sprint #N with M incomplete task(s): <id-status-list>",
+            "warning: the global skills directory was not used, trying the user skills directory: <detail>",
+            "warning: the user skills directory was not used, trying the project skills directory: <detail>",
+            "warning: the temporary directory <path> could not be removed: <detail>",
+        ], (
+            f"COMMANDS.md publishes four success-path stderr lines, the --force "
+            f"warning and the three skills install warnings; extraction found {lines}")
+        assert all(where == ["SPEC/COMMANDS.md"] for where in lines.values()), lines
         for s in lines:
             assert s in CORPUS, f"the success-path line is not in the corpus: {s!r}"
 

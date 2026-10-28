@@ -1,11 +1,13 @@
 package testenv
 
 import (
+	"encoding/binary"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 )
 
@@ -46,6 +48,36 @@ type WALFrame struct {
 	// operation. Such a record describes no node, relationship, property, label,
 	// index or constraint (SPEC/GRAPH.md § Statement Time Budget, rule 3).
 	Reservation bool
+	// Transactional reports a record of a transaction — one of its operations
+	// or its commit marker — and TxnSeq is then the transaction's sequence
+	// number, which recovery tells transactions apart by (SPEC/GRAPH.md § Engine
+	// Construction and Lifecycle, step 4). TxnSeq is zero for any other record.
+	Transactional bool
+	TxnSeq        uint64
+}
+
+// txnSeqOffset and txnSeqEnd bound the sequence word of a transactional record:
+// it follows the record's version byte and kind byte (txn.OpRecordV3).
+const (
+	txnSeqOffset = 2
+	txnSeqEnd    = txnSeqOffset + 8
+)
+
+// TxnSeqs returns the sequence numbers of the transactions the retained records
+// belong to, in log order, each once per run of consecutive records that carry
+// it. A log whose sequence is resumed on every reopen yields a strictly
+// increasing list; one that restarted it repeats an earlier value.
+func (s *WALState) TxnSeqs() []uint64 {
+	var out []uint64
+	for _, f := range s.Frames {
+		if !f.Transactional {
+			continue
+		}
+		if len(out) == 0 || out[len(out)-1] != f.TxnSeq {
+			out = append(out, f.TxnSeq)
+		}
+	}
+	return out
 }
 
 // Covered is the position the control file records as covered by the last fold:
@@ -89,11 +121,16 @@ func InspectWAL(tb testing.TB, graphDir string) *WALState {
 	state.oldestRetained = logPosition(tb, "the control file's oldest retained position", state.Control.OldestRetainedPos)
 	for f := range log.Frames() {
 		pos := logPosition(tb, "a record's position", f.Pos)
-		state.Frames = append(state.Frames, WALFrame{
+		frame := WALFrame{
 			Pos:         pos,
 			End:         pos + int64(wal.HeaderSizeV2) + int64(len(f.Payload)),
 			Reservation: len(f.Payload) > 0 && f.Payload[0] == wal.ControlRecordTag,
-		})
+		}
+		if len(f.Payload) >= txnSeqEnd && f.Payload[0] == txn.OpRecordV3 {
+			frame.Transactional = true
+			frame.TxnSeq = binary.LittleEndian.Uint64(f.Payload[txnSeqOffset:txnSeqEnd])
+		}
+		state.Frames = append(state.Frames, frame)
 	}
 	state.End = log.TailOffset()
 	return state
