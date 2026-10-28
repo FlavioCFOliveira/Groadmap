@@ -1117,8 +1117,8 @@ These two subcommands are the whole of the `graph` command, so this section is t
 | Exit Code | Sentinel | Cause |
 |-----------|----------|-------|
 | `0` | — | The server started, served, and was stopped by `SIGINT` or `SIGTERM`. The drain completed or its bound expired; in both cases every acknowledged commit is durable. |
-| `1` | `utils.ErrGraphStore` | The store could not be opened or recovered; or, found in the single-file write-ahead-log format, it could not be backed up before its conversion, and was neither opened nor converted; or its exclusive advisory lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap. |
-| `1` | `utils.ErrGraphServer` | The resolved socket path is longer than the platform allows, whether it was derived from the roadmap or supplied through `--socket`; or the socket could not be bound; or a live server already answers on the resolved socket. |
+| `1` | `utils.ErrGraphStore` | The store could not be opened or recovered; or its recovery returned no error but did not replay the log cleanly, so the write-ahead log was left unchanged and the store was not served; or, found in the single-file write-ahead-log format, it could not be backed up before its conversion, and was neither opened nor converted; or its exclusive advisory lock could not be taken within the bounded wait, which is what refuses a second server against the same roadmap. |
+| `1` | `utils.ErrGraphServer` | The resolved socket path is longer than the platform allows, whether it was derived from the roadmap or supplied through `--socket`; or the socket could not be bound; or a live server already answers on the resolved socket; or, while serving, a statement was refused with the engine's fail-stop error, and the server shut down without a shutdown checkpoint. |
 | `2` | `utils.ErrInvalidInput` | An unknown flag, or a positional argument: the subcommand accepts none. |
 | `2` | `utils.ErrRequired` | `--socket` was supplied with an empty value. |
 | `3` | `utils.ErrNoRoadmap` | No roadmap selected and none provided via `-r`. |

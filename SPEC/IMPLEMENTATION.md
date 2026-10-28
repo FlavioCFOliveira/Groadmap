@@ -697,8 +697,8 @@ the boundary.
    - A statement the budget cuts while it is **writing** overruns its deadline by
      a factor the statement itself sets, with no ceiling established, so its hold
      has no known upper bound and the wait does not cover one. A waiter can fail
-     against a holder that is inside every published budget, and one such
-     statement exceeds the web server's write timeout on its own.
+     against a holder that is inside every published budget, and nothing
+     established keeps one such statement inside the web server's write timeout.
    - A finite wait can cover only a hold that has an upper bound, and
      `rmp graph serve` holds the lock for its process lifetime, which has none, so
      no finite wait can be derived from it. That limit is not reached by bounding

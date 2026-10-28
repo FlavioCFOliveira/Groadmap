@@ -88,11 +88,14 @@ is 120 bytes and this platform allows at most 103. Use --socket to name a
 shorter path.
 ```
 
-**Measured on macOS: 103 bytes. Measured on Linux at 1.18.0: 107 bytes for
-`client` and for a `serve` given `--socket`, but 99 bytes for a `serve` on the
-derived default path** — the two ends need not agree, so a path that a client
-accepts can still be too long for the server. Believe the message over any
-remembered number.
+**Measured on Linux at rmp 1.19.0 (GoGraph v0.17.2): 107 bytes for `client`.
+`serve` binds a staging path first, so its bound is 107 less (18 − the length
+of the path's final component) when that component is shorter than 18 bytes:
+99 bytes for a path ending in `graph.sock` — the derived default included — and
+95 for one ending in `x.sock`; a final component of 18 bytes or more leaves it
+at 107.** macOS gave 103 bytes on an earlier build and was not re-measured. The
+two ends need not agree, so a path that a client accepts can still be too long
+for the server. Believe the message over any remembered number.
 
 ## `client`
 
@@ -113,7 +116,12 @@ Sends **exactly one** Cypher statement and prints what comes back.
   only once that policy or the time budget is exhausted.
 - **A 5-second statement time budget** is enforced by the server. A statement
   cancelled for exceeding it **writes nothing** and exits 1 — narrow it, or split
-  it. The client keeps a later deadline purely as a backstop.
+  it. The client keeps a later deadline purely as a backstop. A **write** cut by
+  the budget can take longer to roll back than that backstop allows, and the
+  client then reports `did not answer within 7.5s; the statement's outcome is
+  unknown` instead of the budget line (measured at rmp 1.19.0, GoGraph v0.17.2,
+  on a cut Cartesian-product `CREATE`, which left no element behind). Verify such
+  a write with a labelled read once the rollback is over.
 - **Maximum statement length 1048576 bytes** → exit 6. Exit 6 has exactly one
   other cause: a `-r` value that breaks the roadmap-name character rule, which
   either subcommand refuses with exit 6 before it does anything else.
@@ -146,7 +154,8 @@ should have matched an existing node is the pattern-`MERGE` duplication trap
 firing — see SKILL.md. Read it on every write.
 
 `DROP INDEX … IF EXISTS` and `DROP CONSTRAINT … IF EXISTS` on an object that does
-not exist return `{"ok":true}` with no counters (measured at 1.18.0).
+not exist return `{"ok":true}` with no counters (measured at rmp 1.19.0,
+GoGraph v0.17.2).
 
 ### `EXPLAIN` / `PROFILE`
 
@@ -169,7 +178,7 @@ usable index) versus **`NodeByIndexSeek`** (index in use).
 ## Schema DDL — the measured support matrix
 
 `client` runs schema statements and listings like any other. What the engine
-actually accepts was probed directly at 1.18.0; **every unsupported form fails
+actually accepts was probed directly at rmp 1.19.0 (GoGraph v0.17.2); **every unsupported form fails
 with exit 1**, most of them with a message naming what is not supported.
 
 ### Indexes

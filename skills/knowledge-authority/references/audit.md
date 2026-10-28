@@ -57,6 +57,16 @@ kg "MATCH (n) WHERE n.<X> IS NOT NULL RETURN labels(n)[0] AS l, count(*) AS c"
 kg "MATCH ()-[e]->() WHERE e.<X> IS NOT NULL RETURN type(e) AS t, count(*) AS c"
 ```
 
+**Caution — checks 7 and 8 scan without a label.** On rmp 1.19.0 (GoGraph
+v0.17.2), an unlabelled read may observe uncommitted state while a write cut by
+the 5-second statement budget is rolling back: measured over 645 committed
+nodes, `MATCH (n) WHERE … IS NULL` and `UNWIND keys(n)` returned figures that
+disagreed with the committed state in that window, and an unlabelled `count(n)`
+returned over a million. Reads anchored on a label stayed correct.
+Never run the audit alongside a write that may exceed the budget, and re-run any
+unlabelled check taken just after a budget failure. This is an engine
+limitation, documented in Groadmap's `SPEC/GRAPH.md` § Concurrency and Recovery.
+
 A property the model gives a different meaning (for example a `Release`'s own
 `commit`) is content, not a second provenance set; judge each against the
 dictionary, never by name alone.

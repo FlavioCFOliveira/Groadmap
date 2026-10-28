@@ -453,11 +453,27 @@ implementation:
    state from the snapshot and write-ahead log. When the store is still in the
    single-file write-ahead-log format, it first copies the store to a backup, and
    opens it only once the backup is complete and durable (see
-   [Graph Store Format Migration](#graph-store-format-migration)).
+   [Graph Store Format Migration](#graph-store-format-migration)). When the
+   recovery reports that it did not complete cleanly, the sequence stops here:
+   the write-ahead log is not opened for writing, nothing later in this sequence
+   runs, and the server refuses the store (see
+   [Concurrency and Recovery](#concurrency-and-recovery)).
 4. Constructs the Cypher engine that will run the statement: it wraps the
    recovered graph and a write-ahead-log writer in a transactional store and
-   constructs a store-backed engine over that store. There is one such
-   construction and it is fixed by
+   constructs a store-backed engine over that store. The transactional store is
+   built by the recovery result's own handoff, `Result.NewStore`, and by no
+   other constructor, because the handoff **resumes the write-ahead log's
+   transaction sequence** from the highest sequence the recovered log holds.
+   The sequence is therefore strictly increasing across every reopen of the
+   store, including a reopen after a kill that left a torn tail. A store built
+   without that handoff restarts the sequence at its first value on every open,
+   so one log comes to hold two different transactions under the same sequence
+   number; recovery tells transactions apart by that number, so after two
+   unclean stops with a write between them the store can no longer be opened at
+   all. The same handoff also keeps the per-transaction operation cap the store
+   enforces no looser than the bound the recovery replayed under, so the store
+   never commits a transaction its own next recovery would refuse. There is one
+   such construction and it is fixed by
    [Engine Constructor by Path](#engine-constructor-by-path).
 5. Runs the statement through the engine's transactional path
    (`RunInTx` / `RunInTxAny`), so that a change it makes is committed atomically.
@@ -467,8 +483,16 @@ implementation:
    produces a self-sufficient snapshot of the committed graph state and truncates
    the write-ahead log, synchronously, before the process exits (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-7. Closes the result and the store, ensuring committed writes are durable, then
-   exits.
+7. Closes the result and the store, ensuring committed writes are durable, and
+   closes the engine (`Engine.Close`), then exits. Closing the engine stops the
+   engine's background reclamation goroutine and waits for it to end, so no
+   goroutine of the engine outlives the shutdown. It runs after the drain and
+   after the shutdown checkpoint, and it writes nothing to the store: it touches
+   neither the write-ahead log nor `snapshot/`, so it changes nothing that
+   [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
+   rule 4, requires an idle shutdown to leave byte for byte. It is a different
+   call from the transactional store's own close, which the shutdown does not
+   make (same section, rule 4).
 
 **There is one execution path, because nothing decides between two.** Groadmap
 does not examine a statement to learn whether it reads or writes, so it cannot
@@ -517,7 +541,7 @@ instead. The table covers every Cypher engine Groadmap constructs.
 
 | Path | Surface | GoGraph constructor | Transactional store and write-ahead-log writer |
 |------|---------|---------------------|------------------------------------------------|
-| Transactional | `graph serve` | `cypher.NewEngineWithStoreAndRecovery`, over a transactional store, given the whole recovery result the store open returned | Both are opened: the write-ahead-log writer over `wal`, and the transactional store over the recovered graph and that writer |
+| Transactional | `graph serve` | `cypher.NewEngineWithStoreAndRecovery`, over a transactional store, given the whole recovery result the store open returned | Both are opened: the write-ahead-log writer over `wal`, and the transactional store over the recovered graph and that writer, built by the recovery result's handoff, which resumes the transaction sequence |
 
 There is **one** path and **one** surface on it. `rmp graph serve` is the only
 process that opens a roadmap's graph store, so it is the only process that
@@ -555,10 +579,14 @@ the engine it builds is the same engine. What it cannot be given is the store th
 section's lifecycle opens: the composed open performs the recovery open, the
 write-ahead-log open and the transactional store's construction itself, in one
 call, and adopting the constructor means adopting that open in place of the
-sequence `internal/graphstore` owns. That open also decides differently what a
-store whose recovery was not clean becomes. Each of those is a change to the
-lifecycle this specification fixes, so it is decided here first, if ever, and the
-constructor is not adopted as a refactor.
+sequence `internal/graphstore` owns. That sequence stays Groadmap's own: it builds
+the transactional store through the recovery result's handoff, `Result.NewStore`,
+which resumes the transaction sequence exactly as the composed open does, and it
+refuses a store whose recovery was not clean, as the composed open does by
+default (see [Engine Construction and Lifecycle](#engine-construction-and-lifecycle),
+steps 3 and 4). Adopting the composed open is a change to the lifecycle this
+specification fixes, so it is decided here first, if ever, and the constructor is
+not adopted as a refactor.
 
 **Why the one path must be the transactional one.** The server executes
 caller-supplied Cypher and does not examine it, so a statement that arrives — from
@@ -1174,7 +1202,10 @@ Rules:
      reported.** A store open that fails after the backup was taken, and an open
      after which the log still has no control file, both end the start as a store
      that cannot be opened (`utils.ErrGraphStore`, exit code 1, the
-     open-or-recovery line of `COMMANDS.md § Serve Error Cases`). Before that line,
+     open-or-recovery line of `COMMANDS.md § Serve Error Cases`, or the
+     not-clean-recovery line when the recovery returned no error and reported
+     itself not clean, as [Concurrency and Recovery](#concurrency-and-recovery)
+     requires). Before that line,
      the server writes one structured record at level `WARN` naming the absolute
      path of the backup it kept and stating that the store may already have been
      partly converted by the engine. The backup is the store as it was before the
@@ -2888,6 +2919,7 @@ graph subcommand can reach would be incomplete without it.
 | The statement exhausts the statement time budget and is cancelled (see [Statement Time Budget](#statement-time-budget)) | `utils.ErrGraphEngine` | 1 |
 | Every attempt of the client's retry policy loses a serialisation conflict against a graph server (see [Concurrency Inside the Server](#concurrency-inside-the-server), rule 9) | `utils.ErrGraphEngine` | 1 |
 | `graph serve` cannot open, recover, read, or write the graph store, or cannot create its directory (I/O or corruption), or cannot bring the graph directory or an entry below it to the mode `0700` or `0600` it requires (see [Persistence Layout](#persistence-layout), rule 4) | `utils.ErrGraphStore` | 1 |
+| `graph serve` recovers the graph store without an error, but the recovery reports that it did not replay the log cleanly; the write-ahead log is left unchanged and the store is not served (see [Concurrency and Recovery](#concurrency-and-recovery), and rule 11 below) | `utils.ErrGraphStore` | 1 |
 | `graph serve` finds the graph store in the single-file write-ahead-log format and cannot complete the backup that must precede its conversion; the store is neither opened nor converted (see [Graph Store Format Migration](#graph-store-format-migration), rule 7) | `utils.ErrGraphStore` | 1 |
 | `graph serve` cannot bring the data directory `~/.roadmaps/` or the roadmap home directory `~/.roadmaps/<name>/` to `0700`, or cannot verify it (see [Server Startup](#server-startup), step 1) | `utils.ErrIO` | 1 |
 | `graph serve` finds the graph store's exclusive lock still held when the bounded wait is exhausted, so another server is likely already running for the roadmap (see [Lock Contention](#lock-contention), rule 3) | `utils.ErrGraphStore` | 1 |
@@ -2897,6 +2929,7 @@ graph subcommand can reach would be incomplete without it.
 | `graph client` finds no server listening for the selected roadmap (see [The Bolt Client](#the-bolt-client)) | `utils.ErrGraphServer` | 1 |
 | A resolved socket path is longer than the platform's bound, whether derived from the roadmap or supplied through `--socket` (see [Socket Path Length](#socket-path-length)) | `utils.ErrGraphServer` | 1 |
 | `graph serve` cannot bind its socket, or a live server already answers on the resolved socket (see [Server Startup](#server-startup)) | `utils.ErrGraphServer` | 1 |
+| The engine fail-stops while `graph serve` is serving: a statement is refused with the engine's fail-stop error, and the server shuts down (see [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), and rule 12 below) | `utils.ErrGraphServer` | 1 |
 | Successful execution, and a server stopped by `SIGINT` or `SIGTERM` after a graceful shutdown | — | 0 |
 
 Rules:
@@ -3021,8 +3054,8 @@ Rules:
    **"Nothing was written" speaks of the graph's content, and not of every byte
    in the store.** A failed or cut statement that had created nodes before it
    failed can leave the engine's node-identifier reservations in the write-ahead
-   log, and the physical state those reservations describe reaches the snapshot
-   at a later fold
+   log, and the identifiers those reservations describe stay reserved across a
+   restart and later folds
    ([Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
    rule 8). Neither changes a node, a relationship, a property, a label, an index
    or a constraint.
@@ -3045,6 +3078,42 @@ Rules:
     for a roadmap home that is a symbolic link. The definition is the CLI-wide one
     of `COMMANDS.md § Roadmap Selection (Always Required)`, which every other
     roadmap-scoped subcommand applies in the same way.
+11. **A recovery that was not clean ends the start with a line of its own.** It
+    carries `utils.ErrGraphStore` and exit code 1, because what failed is the
+    store on disk and what the operator must act on is that store; the statement
+    is not involved, since no statement has been accepted. It is not the
+    open-or-recovery line: that line reports a recovery that returned an error,
+    and this one a recovery that returned none and still did not replay the log
+    cleanly, which is the case a server would otherwise have opened for writing.
+    The exact line is:
+
+    ```
+    Error: graph store error: graph store recovery was not clean; the write-ahead log was left unchanged and the store was not served: <detail>
+    ```
+
+    `<detail>` is the recovery's own account of the damage, the engine's text and
+    not specified here. Nothing precedes the line on stdout: the socket is not
+    announced. [Concurrency and Recovery](#concurrency-and-recovery) states the
+    behaviour behind it.
+12. **A fail-stopped engine ends the server with a line of its own.** It carries
+    `utils.ErrGraphServer` and exit code 1. It does not carry
+    `utils.ErrGraphEngine`, whose action is to correct the statement: the
+    statement that met the fail-stop is not at fault, every later statement would
+    be refused alike, and the action this failure calls for is to restart the
+    server, which rebuilds the engine's indexes from the store. Once the
+    condition is recognised the server starts no further checkpoint, and its
+    shutdown skips the shutdown checkpoint, so no index payload is written from
+    the undefined state; every acknowledged commit is already durable in the
+    write-ahead log. The whole line is `rmp`'s own text:
+
+    ```
+    Error: graph server error: the graph engine fail-stopped and refuses every statement; the server has shut down. Restart rmp graph serve to rebuild the indexes from the store.
+    ```
+
+    The client whose statement met the fail-stop is not given this line: it
+    receives the engine's refusal as a statement failure, under rule 2.
+    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr) states the
+    behaviour behind it.
 
 ## The Dedicated Graph Server
 
@@ -3591,9 +3660,28 @@ The sequence:
    last folded (see
    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
    rule 4).
-5. Close the store and release the exclusive advisory lock.
+5. Close the store and the engine, and release the exclusive advisory lock.
+   Closing the engine stops its background reclamation goroutine and writes
+   nothing to the store (see
+   [Engine Construction and Lifecycle](#engine-construction-and-lifecycle),
+   step 7).
 6. Ensure the socket file is gone.
 7. Exit 0.
+
+**A fail-stopped engine stops the server through the same sequence, with three
+differences: the trigger, step 4, and the exit code.** When a statement is
+refused with the engine's fail-stop error, the server begins this sequence at
+step 1 exactly as on a signal and runs it in the same order, except that it
+**skips step 4**: no shutdown checkpoint is taken, whether or not the log has
+grown since it was last folded. A fold serialises the engine's secondary indexes
+as they stand in memory, and after a fail-stop their state is undefined, so a
+fold could persist index payloads that the next open would load instead of
+rebuilding. Skipping it loses nothing: every acknowledged commit is already
+durable in the write-ahead log, which the next open replays, and that open
+rebuilds the indexes from the recovered graph. At step 7 the server writes its
+own error line and exits 1 instead of 0 (see
+[Server Diagnostics on Stderr](#server-diagnostics-on-stderr)). The lock is
+released and the socket removed as on any graceful stop.
 
 **The queued diagnostics outlive every step of that sequence, deliberately.** The
 records this teardown writes — a store that failed to close, a shutdown
@@ -4046,6 +4134,41 @@ than by a figure invented for it (`IMPLEMENTATION.md § Retry Logic`), because t
 sink being emptied may be the dead one and an unbounded wait at exit would
 reintroduce on the last line the hang the bound above exists to remove.
 
+**A fail-stopped engine is reported once, as the invocation's own error line, and
+the server stops.** The engine fail-stops when a commit-time update of its
+secondary indexes is cut short by a panic: their state is then undefined, and the
+engine refuses every later statement, transaction and commit with its fail-stop
+error (`cypher.ErrEngineFailStopped`) rather than answer from, or write into,
+indexes that may be wrong. The graph and the write-ahead log remain consistent
+with each other, and reopening the store rebuilds the indexes from the recovered
+graph. A server that went on serving would answer every statement with the same
+refusal while appearing healthy, and nothing would tell the operator that a
+restart is the remedy. So:
+
+1. **The server recognises the condition from a statement's failure.** When a
+   statement it executes fails with the engine's fail-stop error, the server
+   treats the engine as fail-stopped. The statement during whose commit the
+   index update failed reports a failure of its own rather than the fail-stop
+   error; the first statement refused afterwards is the one that triggers the
+   shutdown.
+2. **The server stops checkpointing at once.** From the moment it recognises
+   the condition, no further in-flight checkpoint starts, whatever the cadence
+   makes due, because a fold would serialise indexes whose state is undefined. A
+   fold that had already started before that moment is not interrupted.
+3. **The server shuts down through its ordinary sequence, without the shutdown
+   checkpoint.** It runs
+   [Server Shutdown and the Drain](#server-shutdown-and-the-drain) from its first
+   step and skips that sequence's step 4, so the statements already in flight are
+   drained, no fold is taken, the lock is released and the socket is removed.
+   Every acknowledged commit stays durable in the write-ahead log, and the next
+   open replays it and rebuilds the indexes from the recovered graph.
+4. **The server writes exactly one line for the condition, and exits 1.** The
+   line is the invocation's own error line of kind 2 above, with
+   `utils.ErrGraphServer`; it is written once however many statements met the
+   refusal, after the shutdown sequence and its queued records, and
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 12,
+   publishes it.
+
 ### Concurrency Inside the Server
 
 The store's only concurrency control is MVCC, and the server is the first place in
@@ -4075,6 +4198,31 @@ process. What that means is fixed by the engine and is not Groadmap's to choose:
    The shape is a second entry point of the one package that owns retrying,
    selected by the caller; it is never a constant moved out of that package for
    this caller's benefit, and never a loop the client keeps privately.
+
+   **One concurrent refusal is retriable in fact and is still not retried.** A
+   transaction that frees a `UNIQUE` value — for example by deleting the node
+   that holds it — releases it only once the transaction is visible. A concurrent
+   transaction that writes the same value inside the window between the freeing
+   transaction's commit decision and its visibility is therefore refused with a
+   constraint violation, reported as
+   `Neo.ClientError.Schema.ConstraintValidationFailed`, and the same write run
+   again once the freeing transaction is visible succeeds. The engine's own
+   changelog records this as a behaviour change, in its entry "Readers can no
+   longer briefly see two holders of a `UNIQUE` value": the release was moved
+   after publication so that no reader ever sees a value held twice. The clients
+   this product ships do **not** retry it. They retry
+   `Neo.TransientError.Transaction.Outdated` and nothing else, because that code
+   means only a lost conflict, while `ConstraintValidationFailed` is equally the
+   code of a genuine violation — a write of a value another node still holds —
+   and the two arrive identical, so a client cannot tell which one it has. A
+   retry of a genuine violation would only fail again, under a delay, and a
+   policy that retried every violation would turn each one into an exhausted
+   retry. The refusal therefore reaches the caller on its first occurrence, as
+   any statement the engine refuses does
+   ([Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 2), and
+   nothing was written. A caller that knows it is racing a transaction that frees
+   the value MAY run the statement again; whether to do so is the caller's
+   decision, because only the caller knows which case it is in.
 5. **A retry is safe because the conflict is detected before anything is
    applied.** The losing transaction committed nothing, so re-running its
    statement runs it against a graph that never saw it. A statement that is not
@@ -4160,6 +4308,13 @@ something.
    behind ([Statement Time Budget](#statement-time-budget), rule 3). That is what
    rule 8 below requires of the shutdown.
 
+   **A fail-stopped engine is the one exception to this rule and to rule 5.**
+   Once the server has recognised that the engine fail-stopped, it starts no
+   further fold, and its shutdown takes none even when the log has grown, because
+   a fold would serialise indexes whose state is undefined (see
+   [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)). The unfolded
+   tail is left for the next open to replay.
+
    **"Grown since it was last folded" counts every record of the log that no fold
    has covered, including the records it already held when the server opened the
    store.** Every record in the log carries a logical position, positions only
@@ -4189,6 +4344,28 @@ something.
    captured position itself; the cost of that choice is at most one further fold,
    and it never records an unfolded record as folded. A fold that failed moves
    nothing, and the fold stays owed.
+
+   **The shutdown does not close the transactional store, and node `id()`
+   values may therefore jump across a restart.** The engine issues node
+   identifiers from batches it reserves in the write-ahead log, and the
+   transactional store's own close appends the exact high-water mark of every
+   batch, so that the next open resumes where the last identifier was issued.
+   Calling that close would append to the log on every shutdown, an idle one
+   included, and an idle shutdown MUST leave every file of the log byte for byte
+   as it found it (this rule, and rule 10). The shutdown therefore does not call
+   it, and the next open treats each reserved batch as it would after a kill:
+   the identifiers left unissued in it are skipped, never reissued. The
+   consequences are bounded to the value of `id()`:
+   - a node created after a restart can receive an `id()` far above the highest
+     one issued before it, and the gap grows with every restart;
+   - `id()` values are unique and are never reused, but they are not dense and
+     do not count nodes, and a caller MUST NOT infer a node count, an order of
+     creation across restarts, or the absence of a node from them;
+   - no node, relationship, property, label, index or constraint is affected,
+     and a node's own identifier does not change across a restart.
+
+   A caller that needs a stable, meaningful identity for a node uses its `key`
+   property ([Node Key Uniqueness](#node-key-uniqueness)), not `id()`.
 5. **The server MUST also checkpoint while it runs, and only when the
    write-ahead log has grown since it was last folded**, because the log
    otherwise grows for the whole process lifetime and the cost of recovering from
@@ -4214,40 +4391,42 @@ something.
    so it refuses every later checkpoint too, and the server reports it as its own
    condition on both checkpoint paths, because it holds the error of each (see
    [Field Length Limits](#field-length-limits), rules 6 to 9).
-8. **An unconditional checkpoint is not merely a wasted write; it publishes a
-   permanent residue, and that is why rule 4's condition is a requirement rather
-   than an optimisation.** A statement the deadline cuts while it is writing is
-   rolled back whole, and the rollback restores the **logical** graph but not the
-   **physical** one: the node identifiers the statement reserved for the nodes it
-   created stay reserved, and the engine's storage keeps a place for every one of
-   them. A checkpoint that captures the graph afterwards serialises that residue
-   to disk, where nothing removes it. The observable is the store on disk and the
-   graph in it, and the two disagree: after one cut
-   `MATCH (a),(b),(c) CREATE ()` over a store of a few hundred nodes, the snapshot
-   the next fold writes has grown by orders of magnitude while a `MATCH (n)` over
-   it still returns exactly the nodes the graph held before the statement ran. A
-   later ordinary write rewrites the same residue, so it does not decay. The
-   control isolates it to the write path: one cut **read** over the same store
-   appends nothing and leaves the store byte-identical.
+8. **An unconditional checkpoint is a wasted write of the whole graph, and it
+   would break the idle guarantee; that is why rule 4's condition is a
+   requirement rather than an optimisation.** A fold serialises the whole live
+   graph and rewrites the whole snapshot, so a fold taken when nothing was
+   appended costs work that grows with the graph and changes files that rule 10
+   requires an idle server to leave byte for byte. The condition is what keeps a
+   server that received no write from writing at all.
 
-   **Rule 4's condition keeps the cut statement from making a fold owed, and at
-   the pinned engine that is all it can do.** A cut statement commits nothing, so
-   no fold is owed on its account, and neither the shutdown nor any in-flight fold
-   takes one because of it. But the statement leaves the engine's reservations
-   for the nodes it created in the write-ahead log
-   ([Statement Time Budget](#statement-time-budget), rule 3); they become durable
-   at the log's next synchronisation; recovery replays them; and the next fold
-   that runs for any reason — owed by a genuine write, or by those records
-   themselves as a tail no fold has covered (rule 4) — carries the residue into
-   the snapshot. Measured: a server that took a cut write and then one ordinary
-   write, and was killed before any fold, came back with the residue, and the next
-   fold wrote it. Under an earlier pinned engine the residue lived in the server's
-   memory alone, so the condition kept it off the disk until a genuine write's
-   fold captured it, and a restart before that cleared it; the pinned engine
-   carries it through the log and through a restart. This is the engine's
-   behaviour and Groadmap accepts it as the expected one: the residue changes no
-   node, relationship, property, label, index or constraint, and Groadmap neither
-   prevents nor removes it.
+   **A cut write leaves no material residue for a fold to publish.** A statement
+   the deadline cuts while it is writing is rolled back whole, and the rollback
+   restores the physical state as well as the logical graph: the node keys
+   the statement minted for the nodes it created are released, and the
+   identifiers they held become holes that cost no memory and that the engine
+   never reissues. What survives the rollback is therefore only the reservation
+   of those identifiers. Measured at the pinned engine, after a seed write, one
+   cut `MATCH (a),(b),(c) CREATE ()` and a shutdown, the snapshot the shutdown
+   fold wrote was smaller by more than three orders of magnitude, and that fold
+   shorter by more than two, than under the engine pinned before, which kept a
+   place in the snapshot for every identifier the cut statement had reserved; a
+   `MATCH (n)` over either store returns exactly the nodes the graph held before
+   the statement ran. The control isolates the cause to the write path: one cut
+   **read** over the same store appends nothing and leaves the store
+   byte-identical.
+
+   **Rule 4's condition keeps the cut statement from making a fold owed.** A cut
+   statement commits nothing, so no fold is owed on its account, and neither the
+   shutdown nor any in-flight fold takes one because of it. The statement does
+   leave the engine's reservations for the nodes it created in the write-ahead
+   log ([Statement Time Budget](#statement-time-budget), rule 3); they become
+   durable at the log's next synchronisation, recovery replays them, and the
+   identifiers they reserve stay reserved across a restart and are never
+   reissued, including by the next fold that runs for any reason — owed by a
+   genuine write, or by those records themselves as a tail no fold has covered
+   (rule 4). This is the engine's behaviour and Groadmap accepts it as the
+   expected one: it changes no node, relationship, property, label, index or
+   constraint, and Groadmap neither prevents nor removes it.
 9. **Groadmap drives the in-flight fold itself, and the cadence decides only when
    a fold is due; the condition decides whether it runs.** The engine's own
    checkpoint loop folds unconditionally: it serialises the whole graph and
@@ -4565,7 +4744,8 @@ this section is about.**
 ## Concurrency and Recovery
 
 GoGraph's store is transactional, and MVCC is its only concurrency-control
-mechanism. Reads observe a consistent committed state. Independent write
+mechanism. Reads observe a consistent committed state, with the one exception
+stated below, which belongs to the pinned engine and not to Groadmap. Independent write
 transactions are not excluded from one another inside a single process: a
 write-write collision is detected rather than prevented, on a first-updater-wins
 basis, and the losing transaction receives a retriable serialization-conflict
@@ -4575,6 +4755,29 @@ process. A conflict is therefore an ordinary outcome rather than an unreachable
 one, and every client is obliged to retry it. What a conflict means, and the retry
 it obliges, are specified in
 [Concurrency Inside the Server](#concurrency-inside-the-server).
+
+**The exception: while a cut write rolls back, an unlabelled read may observe
+uncommitted state.** This is a limitation of the pinned GoGraph engine, not a
+guarantee Groadmap gives or a defect Groadmap introduces, and Groadmap does not
+work around it. It arrived with the engine change that made the rollback of a
+write cut by its deadline linear rather than quadratic (upstream commit
+`b1e9e21f`, the changelog entry "A write statement cut by its context deadline no
+longer takes many times its deadline to roll back"); the engine releases
+immediately before that change did not show it.
+
+- **The affected shape is a read that scans every node without a label**, such
+  as `MATCH (n) RETURN count(n)`, run while a write that the statement time
+  budget cut ([Statement Time Budget](#statement-time-budget)) is being rolled
+  back. Measured over a store of 600 committed nodes, during the rollback of a
+  cut `MATCH (a),(b),(c) CREATE ()`, that read returned 2,361,458, then 0 for
+  about two seconds, then 600; `MATCH (n) WHERE n.i IS NULL RETURN count(n)`
+  returned 1,479,352 in the same window.
+- **Reads anchored on a label, and reads filtered on a property value, stayed
+  correct** in the same measurement and returned only committed state.
+- **The exposure ends with the rollback.** Once it completes, every read again
+  observes the committed state, and the cut write itself leaves no element
+  behind ([Statement Time Budget](#statement-time-budget), rule 2). What is
+  wrong is the answer to a read during that interval, not the stored graph.
 
 Groadmap does not depend on the engine to serialise access to the store between
 processes. It serialises it itself, at the process level, through a single advisory
@@ -4642,6 +4845,40 @@ the single-file format, performs the one-way conversion that
 Durability is provided by a write-ahead log with CRC32C integrity checks plus
 atomic on-disk snapshots; on opening the store, GoGraph runs recovery to restore
 the last committed state from the snapshot and log.
+
+**A store whose recovery was not clean is refused, and nothing is written to its
+log.** Recovery reports two things: an error, and whether it replayed the log
+cleanly (`Result.IsClean`). The second is the stronger signal and the one
+`rmp graph serve` MUST decide on. A torn last record is benign and leaves the
+recovery clean. Genuine damage does not, and in one case the recovery returns no
+error while reporting itself not clean: an operation that cannot be decoded inside
+a transaction that had already committed (`ErrCommittedTxnCorruptOp`). The
+recovered graph then holds the committed prefix before the damage and omits every
+committed transaction after it. A server that went on to open that log for
+writing would accept and acknowledge new writes after the damaged record, and a
+later recovery would discard them with everything else beyond it: acknowledged
+writes would be lost with no failure reported to anyone. The server therefore:
+
+1. Decides after the recovery and before anything else is opened. A recovery that
+   returns an error ends the start with the open-or-recovery line, as before. A
+   recovery that returns no error and reports itself not clean ends the start
+   with a line of its own (see
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes)), carrying
+   `utils.ErrGraphStore` and exit code 1.
+2. Opens nothing for writing. The write-ahead log is not opened for appending, no
+   transactional store or engine is constructed, no fold runs, and every file of
+   the write-ahead log is left byte for byte as the server found it. What the
+   recovery itself repaired before it replayed anything — a stale `snapshot.tmp`
+   removed, `snapshot.bak` promoted — is not undone, because it is not part of
+   the log (see [What a Statement That Writes Nothing Changes on Disk](#what-a-statement-that-writes-nothing-changes-on-disk)).
+   A backup taken because the store was still in the single-file format is kept,
+   as after any open that fails
+   ([Graph Store Format Migration](#graph-store-format-migration), rule 9).
+3. Does not serve the store in any reduced mode. The engine can open such a store
+   read-only, serving the committed prefix and refusing every write; Groadmap
+   does not offer that mode, because an operator who kept using the graph would
+   be reading a state that silently lacks committed writes. The store is left for
+   the operator to inspect or restore; Groadmap repairs nothing.
 
 ### What a Statement That Writes Nothing Changes on Disk
 
@@ -4768,35 +5005,41 @@ the invocation took.
 overrun is a property of the statement rather than a constant.** The forward pass
 is cut at the deadline exactly as a read's is. The transaction is then rolled back
 whole (rule 2), and the rollback undoes every mutation the statement had already
-applied, one inverse write per mutation. The excess over the deadline is therefore
-proportional to the number of rows the statement managed to write inside its
-budget — and a **cheaper** write per row is worse rather than better, because more
-rows fit inside the same budget. The ordering that follows from this, from
-shortest overrun to longest, is by cost per applied row:
+applied before the call returns. How long that takes depends on what the statement
+wrote, and the ordering measured at the pinned engine, from shortest overrun to
+longest, is by the kind of write rather than by how many rows fit inside the
+budget:
 
 1. A statement that applies no row at all carries no overrun. A write-routed
    statement whose `WHERE` matches no row is in this class, so it is not the
    routing to the write path that costs the time.
-2. A write whose every row is expensive — a relationship between two matched
-   nodes, a property set on an existing node — applies few rows inside its budget
-   and carries a short overrun.
-3. A write whose every row is cheap — the creation of a bare node — applies the
-   most rows inside the same budget and carries the longest overrun of any shape
-   tried.
+2. A write that creates bare nodes carries the shortest overrun of the writing
+   shapes tried.
+3. A write that sets a property on existing nodes carries a longer one, a few
+   times the bare-node overrun on the same store.
+4. A write that creates a relationship between two matched nodes carries by far
+   the longest — more than an order of magnitude beyond the bare-node overrun on a
+   small store, and the longest of every shape tried at every store size tried.
 
-**No ceiling exists and none is published.** The ordering above is monotone in how
-cheap the writing clause is, the cheapest clause tried is merely the cheapest that
-was tried, and the corpus of shapes is not exhaustive. This specification
-therefore states no upper bound on the hold and publishes no figure for one, and
+The ordering is a measurement, and this specification states no mechanism for
+it; the cause of each shape's overrun is not established.
+
+**No ceiling exists and none is published.** The corpus of shapes tried is not
+exhaustive, and nothing in the engine bounds the undo replay, so a shape not tried
+may overrun longer than any that was. This specification therefore states no upper
+bound on the hold and publishes no figure for one, and
 [Lock Contention](#lock-contention) states what having no upper bound costs the
 wait that must cover such a hold.
 
-**The overrun is neither a fixed cost nor a function of the graph's size.** It is
-not part of the fixed part of a hold: it scales with the budget and with what the
-statement wrote, and a statement that writes nothing does not carry it at all. It
-does not grow with the store either — the same cheap write over stores of
-increasing size carries the same overrun — so what governs it is the rate at which
-rows are applied, which is a different quantity from the per-megabyte cost of the
+**The overrun is not a fixed cost, and whether it grows with the graph depends on
+the shape.** It is not part of the fixed part of a hold: it scales with the budget
+and with what the statement wrote, and a statement that writes nothing does not
+carry it at all. A relationship-creating write carries the same overrun over
+stores of increasing size, from a few hundred nodes to hundreds of thousands. A
+bare-node write does not: its overrun grows by more than an order of magnitude
+between a store of a few hundred nodes and one of a few thousand, and then stays
+flat as the store grows by two further orders of magnitude, while remaining
+shorter than the relationship write's. Neither is the per-megabyte cost of the
 fixed part that [Lock Contention](#lock-contention) accounts for.
 
 **The overrun cannot be cancelled once it has begun, and that is a limitation of
@@ -4839,38 +5082,44 @@ statement whose `WHERE` matches no row runs the identical Cartesian product for
 its whole budget and stays at baseline, and so does a read that materialises
 nothing.
 
-**Four accumulators hold that memory, and the undo log is the minority of it.**
-[Statement Time Budget](#statement-time-budget) states that a cut write retains
-every mutation it has applied so that the rollback can undo it. That is true, and
-it is not where most of the memory goes. The four, and their order at the
-deadline, are:
+**Four accumulators hold that memory, and the undo log is never the majority of
+it.** [Statement Time Budget](#statement-time-budget) states that a cut write
+retains every mutation it has applied so that the rollback can undo it. That is
+true, and it is not where most of the memory goes. The four are:
 
-1. the transactional store's in-memory write-ahead-log operation buffer, and the
-   applied in-memory graph state, which between them hold the great majority;
-2. the undo log, which is a minority on every shape;
-3. the Cypher engine's index buffer, which is material on some shapes and absent
-   on others.
+1. the transactional store's in-memory write-ahead-log operation buffer;
+2. the applied in-memory graph state;
+3. the undo log;
+4. the Cypher engine's index buffer.
 
-The order is what decides what a repair can reach, which is why it is stated
+Their shares at the deadline depend on the shape. On a write that creates bare
+nodes, the first two hold about three quarters between them, the undo log about a
+fifth, and the index buffer nothing. On a write that sets a property on existing
+nodes, the write-ahead-log buffer is still the largest, the undo log is the
+second and larger than the applied graph state, and the index buffer is material;
+the first two hold under half between them. On every shape measured the undo log
+holds about a quarter or less.
+
+The shares are what decide what a repair can reach, which is why they are stated
 rather than summarised as one quantity: threading a deadline into the undo replay
 — the repair [Statement Time Budget](#statement-time-budget) names for the
-**hold** — would leave the majority of this memory untouched, because that
-majority is accumulated before the replay begins.
+**hold** — would leave most of this memory untouched, because the other three
+accumulators are filled before the replay begins.
 
-**A pure read costs as much and carries none of the hold defect, so the two
+**A pure read costs memory too and carries none of the hold defect, so the two
 defects are distinct.** A read over a large Cartesian product materialises its
-rows and costs as much as the heaviest write, while having no undo log, no
-rollback and no overrun. Ordering the shapes by hold and by memory gives two
-orderings that are close to inverted, and the reason is one mechanism: a write
-whose every row is expensive applies few rows, so it holds the lock longest in
-rollback and costs least in memory, while a write whose every row is cheap
-applies the most rows and is the reverse. An expensive per-row write is exactly
-what stops a statement applying enough rows to consume memory, so what makes a
-shape hold the lock is what keeps it cheap in memory, and the shape that is nearly
-invisible on the availability axis is among the heaviest on the memory one.
-**The memory defect is therefore not the availability defect seen from another
-side.** The two overlap and neither contains the other, and a repair aimed at one
-does not settle the other.
+rows and costs memory of the same order as a write, while having no undo log, no
+rollback and no overrun; measured at the pinned engine, such a read was stopped by
+the engine's cap on the rows a statement may produce before the budget expired,
+at about a third of the heaviest write's peak. Ordering the writing shapes by hold
+and by memory gives two different orderings, and no mechanism this specification
+can state relates them: the write that creates relationships holds the lock
+longest in rollback and costs the least memory; the write that sets properties
+costs the most memory, several times either of the others, with a hold between
+the two; and the write that creates bare nodes has the shortest hold and a cost
+between the two. **The memory defect is therefore not the availability defect
+seen from another side.** The two overlap and neither contains the other, and a
+repair aimed at one does not settle the other.
 
 **There is a ceiling, it is the engine's, and it is not a useful bound.** The
 engine applies a default cap on the number of rows one statement may produce. Its
@@ -4939,7 +5188,7 @@ figures:
    requirement that removes it.
 2. **The store on disk is unchanged whichever surface paid.** On the server that
    is a requirement rather than an accident: an unconditional shutdown checkpoint
-   would leave a residue on disk instead, which is why
+   would rewrite the snapshot on every shutdown instead, which is why
    [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process),
    rules 4 and 8, conditions the fold.
 3. **The caller is answered by its own backstop, not by the statement.** The
@@ -4949,7 +5198,11 @@ figures:
 
 **Concurrency does not multiply the cost.** N clients sending the same statement
 to one server at once do not cost N times what one costs, in either direction:
-concurrent cut writes stop multiplying almost at once, and concurrent heavy reads
+concurrent cut writes that create nodes cost more as writers are added, but far
+less than in proportion — eight cost under three times what one costs — and
+concurrent cut writes that set properties on the same nodes do not accumulate at
+all, because all but one lose the serialisation conflict within milliseconds, so
+their cost never piles up; concurrent heavy reads
 rise to a plateau that further clients do not exceed. The plateau's cause is
 **not** established and this specification offers none. What follows is negative
 and it is the point: peak resident memory in a server is not a connection ceiling
@@ -4980,11 +5233,11 @@ declining each is a decision rather than an oversight.**
    an operator meets, and one set below it refuses an ordinary read.
 2. **The Go runtime's soft memory limit.** It is a real lever on the read path,
    where setting it brings concurrent served reads down substantially.
-   **Declined**, on three costs. On the write path it buys memory with
-   availability — a cut write's hold grows several times longer under it, because
-   the collector runs while the rollback does — which makes the defect
-   [Lock Contention](#lock-contention) records worse rather than repairing it.
-   It is a soft limit and behaves like one: set below the live set, the collector
+   On the write path it changes a cut write's hold little: measured at the
+   pinned engine, the hold was unchanged or slightly longer on a small store and
+   shorter on a large one, so it neither worsens nor repairs the defect
+   [Lock Contention](#lock-contention) records. **Declined**, on two costs. It
+   is a soft limit and behaves like one: set below the live set, the collector
    runs continuously and the process still exceeds the limit it was given. And
    the engine derives two of its own byte budgets from it, so setting it silently
    narrows both: at the pinned version the engine-wide result-byte ceiling and

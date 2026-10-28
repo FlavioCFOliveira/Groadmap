@@ -5,16 +5,20 @@
 //
 // Found on rmp task #380 against this server: ONE statement the budget cut while
 // it was writing — `MATCH (a),(b),(c) CREATE ()`, rolled back whole — grew a
-// small store by orders of magnitude, permanently, and every later reader of that
-// store paid for it. The isolating control was a cut READ over the same store,
+// small store by orders of magnitude under the engine pinned then, and every
+// later reader of that store paid for it. The isolating control was a cut READ over the same store,
 // which left it byte-identical. SPEC/GRAPH.md § Durability and Checkpointing in a
 // Long-Lived Process, rule 8, is canonical for the condition, and no figure is
 // published for the growth
 // (SPEC/BUILD.md § No Benchmarks and No Performance-Measurement Tests).
 //
-// The rollback restores the LOGICAL graph and not the PHYSICAL one: the key
-// mapper keeps the interned key of every node the statement created and the
-// tombstone set keeps a tombstone for each. Nothing on the direct path ever
+// Under the engine pinned then, the rollback restored the LOGICAL graph and not
+// the PHYSICAL one: the key mapper kept the interned key of every node the
+// statement created and the tombstone set kept a tombstone for each. GoGraph
+// v0.17.1 made the rollback release those keys, so the pinned engine leaves no
+// such residue and only the identifier reservations described below survive;
+// the fence stays, because the gate it pins is what keeps an idle shutdown from
+// rewriting the snapshot at all (rule 8). Nothing on the direct path ever
 // published that, because graphstore.Store.Checkpoint refuses to fold when the
 // write-ahead log has not grown — and a rolled-back transaction appends nothing.
 // The server's shutdown checkpoint went straight to the engine's checkpointer,
@@ -154,10 +158,10 @@ func TestServedCutWrite_LeavesTheStoreExactlyAsItFoundIt(t *testing.T) {
 	if diff := describeFingerprintDiff(baseline, after); diff != "" {
 		t.Errorf("the snapshot CHANGED across a server that served one cut write and nothing "+
 			"else:\n%s\nA statement that is rolled back commits nothing, so the shutdown owes no "+
-			"fold on its account and must write no snapshot. An ungated fold publishes the residue "+
-			"the rolled-back write left behind, which is permanent: measured on rmp task #380, one "+
-			"such write took a store from 80 KB to 134 MB and a later count of 600 nodes from 0.01 s "+
-			"to 1.48 s.\nTotal size: %d bytes before, %d after.\nServer stderr:\n%s",
+			"fold on its account and must write no snapshot. An ungated fold rewrites the whole "+
+			"snapshot for nothing, and under the engine pinned before GoGraph v0.17.1 it also "+
+			"published the residue the rolled-back write left behind (rmp task #380).\n"+
+			"Total size: %d bytes before, %d after.\nServer stderr:\n%s",
 			diff, totalBytes(baseline), totalBytes(after), server.capturedStderr(t))
 	}
 

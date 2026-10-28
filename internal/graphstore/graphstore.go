@@ -309,6 +309,20 @@ func (h *Hold) Open() (*Store, error) {
 		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrGraphStore, err)
 	}
 
+	// The recovery's error is the weaker of its two signals. An undecodable
+	// operation inside a transaction that had already committed returns NO error
+	// and reports the recovery not clean: the graph holds the committed prefix and
+	// omits every committed transaction after the damage. Appending to that log
+	// would acknowledge writes the next recovery discards with the rest of the
+	// suffix, so the decision is taken here, before the log is opened for writing
+	// and before anything else is constructed, and the log is left byte for byte
+	// as it was found (SPEC/GRAPH.md § Concurrency and Recovery; § Error Handling
+	// and Exit Codes, rule 11).
+	if !res.IsClean() {
+		release()
+		return nil, notCleanRecovery(res.TailErr)
+	}
+
 	w, err := openWAL(filepath.Join(graphDir, walFileName))
 	if err != nil {
 		release()
@@ -332,7 +346,15 @@ func (h *Hold) Open() (*Store, error) {
 		return nil, err
 	}
 
-	st := txn.NewStoreWithOptions[string, float64](res.Graph, w, txn.Options[string, float64]{
+	// The recovery result's own handoff, and no other constructor: it resumes the
+	// log's transaction sequence from the highest one the recovered log holds, and
+	// clamps the per-transaction operation cap to the bound the recovery replayed
+	// under. A store built without it restarts the sequence at its first value on
+	// every open, so one log comes to hold two transactions under one sequence
+	// number, and after two unclean stops with a write between them the store can
+	// no longer be opened (SPEC/GRAPH.md § Engine Construction and Lifecycle, step
+	// 4; rmp task #631).
+	st := res.NewStore(w, txn.Options[string, float64]{
 		Codec:       txn.NewStringCodec(),
 		WeightCodec: txn.NewFloat64WeightCodec(),
 	})
@@ -355,6 +377,19 @@ func (h *Hold) Open() (*Store, error) {
 		dir:     graphDir,
 		mark:    mark,
 	}, nil
+}
+
+// notCleanRecovery is the failure of an open whose recovery returned no error but
+// reported itself not clean. detail is the recovery's own account of the damage,
+// the engine's text; it is never nil for a recovery that is not clean, and the
+// fallback exists only so that the line keeps its published shape if it were.
+func notCleanRecovery(detail error) error {
+	text := "the recovery reported no cause"
+	if detail != nil {
+		text = detail.Error()
+	}
+	return fmt.Errorf("%w: graph store recovery was not clean; the write-ahead log was left unchanged "+
+		"and the store was not served: %s", utils.ErrGraphStore, text)
 }
 
 // walRetryable is the classifier openWAL hands the retry policy, held in a
@@ -516,8 +551,16 @@ func openingMark(graphDir string, legacyPending bool) (int64, error) {
 }
 
 // Close releases everything Open took, in the one order that is safe: the
-// write-ahead-log writer is closed FIRST and the advisory lock released after it,
-// so the log is never closed outside the hold that covers this store.
+// write-ahead-log writer is closed FIRST, the engine next, and the advisory lock
+// released last, so the log is never closed outside the hold that covers this
+// store and no goroutine of the engine outlives that hold.
+//
+// Closing the engine stops the graph's background reclamation goroutine and waits
+// for it to end (SPEC/GRAPH.md § Engine Construction and Lifecycle, step 7). It
+// writes nothing to the store, so it changes nothing an idle shutdown must leave
+// byte for byte. It is NOT the transactional store's own close, which appends to
+// the log and which this package deliberately never calls (§ Durability and
+// Checkpointing in a Long-Lived Process, rule 4).
 //
 // It is idempotent, so a deferred Close beside an explicit one is harmless. The
 // write-ahead log's close error is returned; the lock is released whether or not
@@ -529,6 +572,10 @@ func (s *Store) Close() error {
 	}
 	s.closed = true
 	err := s.wal.Close()
+	// Engine.Close joins the reclamation goroutine with no deadline and reports
+	// no failure of its own: its only error is a cancelled join, which an
+	// uncancellable close cannot produce.
+	_ = s.engine.Close() //nolint:errcheck // see above: Engine.Close without a context returns nil
 	s.release()
 	return err
 }

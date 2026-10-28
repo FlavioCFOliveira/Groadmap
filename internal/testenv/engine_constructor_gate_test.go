@@ -95,10 +95,11 @@ const noOtherConstructorMarker = "Groadmap constructs an engine through no other
 // The GoGraph packages the sweep recognises. Import paths rather than package
 // names, so an aliased import is followed by resolving the alias per file.
 const (
-	goGraphModulePath = "github.com/FlavioCFOliveira/GoGraph"
-	cypherImportPath  = goGraphModulePath + "/cypher"
-	walImportPath     = goGraphModulePath + "/store/wal"
-	txnImportPath     = goGraphModulePath + "/store/txn"
+	goGraphModulePath  = "github.com/FlavioCFOliveira/GoGraph"
+	cypherImportPath   = goGraphModulePath + "/cypher"
+	walImportPath      = goGraphModulePath + "/store/wal"
+	txnImportPath      = goGraphModulePath + "/store/txn"
+	recoveryImportPath = goGraphModulePath + "/store/recovery"
 )
 
 const (
@@ -110,7 +111,20 @@ const (
 
 	// txnStoreConstructorPrefix is what makes a txn package function a
 	// transactional store constructor (txn.NewStore, txn.NewStoreWithOptions).
+	// The same prefix names the recovery result's handoff methods
+	// (Result.NewStore, Result.NewStoreCapped), which build the same store and
+	// also resume the write-ahead log's transaction sequence.
 	txnStoreConstructorPrefix = "NewStore"
+
+	// handoffMarker is the phrase of the table's fourth column that states the
+	// transactional store is built by the recovery result's handoff. When the
+	// cell carries it, a construction reached by a txn package constructor is a
+	// different construction, however alike the two calls look: only the handoff
+	// resumes the transaction sequence (SPEC/GRAPH.md § Engine Construction and
+	// Lifecycle, step 4; rmp task #631). A reworded marker turns the check off
+	// in the direction that fails loudly, because a cell without it then
+	// forbids the handoff the code uses.
+	handoffMarker = "built by the recovery result's handoff"
 
 	// engineTypeName is the type an engine constructor returns.
 	engineTypeName = "Engine"
@@ -171,7 +185,8 @@ type specConstructorRow struct {
 	subcommands []string // the `graph X` subcommands the Surface cell names, sorted
 	expect      storeExpectation
 	line        int
-	claimed     int // how many constructions in the tree matched this row
+	claimed     int  // how many constructions in the tree matched this row
+	viaHandoff  bool // the store is built by the recovery result's handoff
 }
 
 // constructionSite is one call to a Cypher engine constructor in production
@@ -185,6 +200,11 @@ type constructionSite struct {
 	line        int
 	opensStore  bool
 	opensWAL    bool
+	// viaHandoff and viaTxn split opensStore by how the store is built: through
+	// a recovery result's NewStore* method, or through a txn package
+	// constructor called directly.
+	viaHandoff bool
+	viaTxn     bool
 }
 
 // where renders the site for a failure message.
@@ -449,6 +469,14 @@ func checkStoreExpectation(t *testing.T, row *specConstructorRow, site *construc
 			site.where(), opened, missing, specGraphRelPath)
 		return
 	}
+	if row.viaHandoff && (!site.viaHandoff || site.viaTxn) {
+		t.Errorf("%s builds its transactional store through a txn package constructor, and %s:%d says "+
+			"the %s path builds it by the recovery result's handoff (Result.NewStore).\n"+
+			"  The two are not interchangeable: only the handoff resumes the write-ahead log's "+
+			"transaction sequence, and a store that restarts it on every open becomes unopenable after "+
+			"two unclean stops with a write between them (rmp task #631)",
+			site.where(), specGraphRelPath, row.line, row.path)
+	}
 	if opens != row.expect {
 		t.Errorf("%s opens %s, and %s:%d says the %s path serving %s opens %s.\n"+
 			"  The fourth column is the reason the third one reads as it does: a read is given a plain "+
@@ -524,6 +552,7 @@ func parseConstructorTable(t *testing.T, spec string) []*specConstructorRow {
 		}
 		row.constructor = "cypher." + names[0]
 
+		row.viaHandoff = strings.Contains(raw.cells[3], handoffMarker)
 		switch cell := raw.cells[3]; {
 		case strings.HasPrefix(cell, "Neither"):
 			row.expect = expectNeither
@@ -699,7 +728,9 @@ type packageScan struct {
 	dir         string
 	calls       map[string]map[string]bool // caller -> same-package callees
 	directWAL   map[string]bool            // functions calling the wal package
-	directStore map[string]bool            // functions calling txn.NewStore*
+	directStore map[string]bool            // functions building a transactional store either way
+	handoff     map[string]bool            // functions calling a recovery result's NewStore*
+	directTxn   map[string]bool            // functions calling txn.NewStore*
 	sites       []*constructionSite
 }
 
@@ -740,6 +771,8 @@ func scanEngineConstructions(t *testing.T, root string) []*constructionSite {
 				calls:       make(map[string]map[string]bool),
 				directWAL:   make(map[string]bool),
 				directStore: make(map[string]bool),
+				handoff:     make(map[string]bool),
+				directTxn:   make(map[string]bool),
 			}
 			scans[dir] = scan
 		}
@@ -758,9 +791,13 @@ func scanEngineConstructions(t *testing.T, root string) []*constructionSite {
 		}
 		opensWAL := closeOverCalls(scan.directWAL, scan.calls)
 		opensStore := closeOverCalls(scan.directStore, scan.calls)
+		viaHandoff := closeOverCalls(scan.handoff, scan.calls)
+		viaTxn := closeOverCalls(scan.directTxn, scan.calls)
 		for _, site := range scan.sites {
 			site.opensWAL = opensWAL[site.function]
 			site.opensStore = opensStore[site.function]
+			site.viaHandoff = viaHandoff[site.function]
+			site.viaTxn = viaTxn[site.function]
 			sites = append(sites, site)
 		}
 	}
@@ -779,6 +816,8 @@ func inspectProductionFile(t *testing.T, fset *token.FileSet, path, rel string, 
 	cypherName := importLocalName(file, cypherImportPath)
 	walName := importLocalName(file, walImportPath)
 	txnName := importLocalName(file, txnImportPath)
+	recoveryName := importLocalName(file, recoveryImportPath)
+	imported := importLocalNames(file)
 
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -814,6 +853,16 @@ func inspectProductionFile(t *testing.T, fset *token.FileSet, path, rel string, 
 				case txnName != "" && qualifier.Name == txnName &&
 					strings.HasPrefix(fun.Sel.Name, txnStoreConstructorPrefix):
 					scan.directStore[enclosing] = true
+					scan.directTxn[enclosing] = true
+				case recoveryName != "" && !imported[qualifier.Name] &&
+					strings.HasPrefix(fun.Sel.Name, txnStoreConstructorPrefix):
+					// A NewStore* method called on a value rather than on a
+					// package, in a file that imports the recovery package: the
+					// recovery result's handoff. The sweep is syntactic, so the
+					// receiver's type is inferred from the import, which is the
+					// one way this file can hold a recovery result to call it on.
+					scan.directStore[enclosing] = true
+					scan.handoff[enclosing] = true
 				}
 			case *ast.Ident:
 				// A call to a function of the same package. The edge carries the
@@ -923,6 +972,22 @@ func importLocalName(file *ast.File, path string) string {
 		return spec.Name.Name
 	}
 	return ""
+}
+
+// importLocalNames returns the set of names a file refers to its imports by, so a
+// selector on one of them can be told apart from a method call on a value.
+func importLocalNames(file *ast.File) map[string]bool {
+	names := make(map[string]bool, len(file.Imports))
+	for _, spec := range file.Imports {
+		value, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		if name := importLocalName(file, value); name != "" {
+			names[name] = true
+		}
+	}
+	return names
 }
 
 // firstStringArgument returns the value of a call's first argument when it is an
