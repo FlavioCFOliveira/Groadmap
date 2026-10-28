@@ -4384,7 +4384,9 @@ several servers, one per roadmap, each on its own socket.
 | A live server already answers on the resolved socket | 1 | The already-serving line of `§ Graph Server Socket Error Lines` |
 | Socket could not be bound | 1 | The bind line of `§ Graph Server Socket Error Lines` |
 | Graph store open/recovery failure | 1 | "Error: graph store error: graph store unavailable: <detail>" |
+| The recovery returned no error but did not replay the log cleanly; the write-ahead log was left unchanged and the store was not served (`GRAPH.md § Concurrency and Recovery`) | 1 | "Error: graph store error: graph store recovery was not clean; the write-ahead log was left unchanged and the store was not served: <detail>" |
 | The store is in the single-file write-ahead-log format and its backup could not be completed; the store was neither opened nor converted (`GRAPH.md § Graph Store Format Migration`, rule 7) | 1 | "Error: graph store error: graph store backup failed; the store was not migrated: <detail>" |
+| While serving, a statement is refused with the engine's fail-stop error; the server shut down without a shutdown checkpoint (`GRAPH.md § Server Diagnostics on Stderr`) | 1 | "Error: graph server error: the graph engine fail-stopped and refuses every statement; the server has shut down. Restart rmp graph serve to rebuild the indexes from the store." |
 
 ### Client Options
 

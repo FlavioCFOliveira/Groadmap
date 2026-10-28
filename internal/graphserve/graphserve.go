@@ -685,7 +685,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	return serve(srv, ln, st, opts.SocketPath, sigCh)
+	return serve(srv, ln, st, opts.SocketPath, sigCh, closer.failStop.stopped())
 }
 
 // backupClock is the clock a store backup is named by. It is a variable so a
@@ -860,8 +860,9 @@ func removeStaleSocket(path string) {
 // unconditionally — it serialises the whole graph and rewrites the whole snapshot
 // at every fold it takes, whether or not anything was appended since the last
 // one — so a server left to it rewrote its snapshot at every tick while no client
-// was connected, and published at the first tick after a cut write the residue
-// that write left behind (see [foldGate]). Driving the fold from here puts both
+// was connected, and, under the engine pinned before GoGraph v0.17.1, published
+// at the first tick after a cut write the residue that write then left behind
+// (see [foldGate]). Driving the fold from here puts both
 // folds behind the gate the store lifecycle owns (rules 9 and 10).
 //
 // A [shutdownCloser] over the composed store.DB is handed to the server as its
@@ -914,14 +915,20 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 		store.WithQuiesce(txnStore.RunUnderCommitLock))
 
 	gate := &foldGate{st: st, cp: cp, memory: memory}
-	closer := &shutdownCloser{db: db, gate: gate}
+	// The engine's index state is read through the graph on every confirmation
+	// rather than captured once, because the engine reads it the same way.
+	graph := st.Graph()
+	watch := newFailStopWatch(func() error { return graph.IndexManager().Undefined() }, gate)
+	closer := &shutdownCloser{db: db, gate: gate, failStop: watch}
 
 	if cadence.maxAge > 0 {
 		closer.inFlight = newInFlightCheckpoint(gate.foldIfOwed, cadence, log)
 		closer.inFlight.start()
 	}
 
-	srv, err := server.NewServer(engine, serverOptions(closer, log))
+	// The server's logger is the one place a statement's fail-stop refusal stays
+	// recognisable inside this process; see failstop.go.
+	srv, err := server.NewServer(engine, serverOptions(closer, watchedLogger(log, watch)))
 	if err != nil {
 		return closer, nil, fmt.Errorf("%w: graph server unavailable: %v", utils.ErrGraphServer, err)
 	}
@@ -942,25 +949,35 @@ func build(st *graphstore.Store, graphDir string, cadence checkpointCadence, log
 // ONE comparison and ONE mark for both folds, so neither fold carries a copy of
 // the rule; this type is how both reach the single realisation of it.
 //
-// # What an ungated fold publishes
+// # What an ungated fold costs
 //
-// Until rmp task #380 an ungated fold was believed to cost nothing but a wasted
-// write. It costs a permanent one. A statement the budget cuts while it is
-// writing is rolled back, and the rollback restores the LOGICAL graph and not the
-// PHYSICAL one: the node identifiers the statement reserved for the nodes it
-// created stay reserved, and the engine's storage keeps a place for each. An
-// ungated fold writes that residue to disk, where nothing removes it. Measured end to end
-// against this server: ONE cut `MATCH (a),(b),(c) CREATE ()` over a store of 80
-// KB holding 600 nodes left the store at 134 MB — mapper.bin 80.2 MB,
-// tombstones.bin 28.3 MB — and a later `MATCH (n) RETURN count(*)` over the same
-// 600 nodes then cost 1.48 s and 670 MB against 0.01 s and 21.6 MB on a clean
-// store. The control isolates it: one cut READ over the same store left it at 80
-// KB. A cut statement commits nothing, so the gate owes no fold on its account.
-// At the pinned engine that is all the gate can do: the statement leaves the
-// engine's reservations of node identifiers in the log, they become durable at
-// the log's next synchronisation, and the next fold that runs for any reason
-// carries the residue into the snapshot. Groadmap accepts that as the engine's
-// behaviour; it changes no element of the graph (rule 8).
+// A fold serialises the whole live graph and rewrites the whole snapshot, so a
+// fold nothing owes is a write that grows with the graph and changes files an
+// idle server must leave byte for byte (rules 8 and 10). That is why the gate is
+// a requirement and not an optimisation.
+//
+// A cut write no longer adds a residue for such a fold to publish. Under the
+// engine pinned before GoGraph v0.17.1 the rollback of a write the budget cut
+// restored the logical graph but kept a physical place for every node
+// identifier the statement had reserved, and a fold serialised that residue:
+// rmp task #380 measured one cut `MATCH (a),(b),(c) CREATE ()` over a store of
+// 600 nodes growing the snapshot by orders of magnitude. The pinned engine's
+// rollback releases the node keys the statement minted and leaves only holes
+// that cost no memory; what survives is the reservation of those identifiers,
+// which the statement leaves in the log, which recovery replays, and which no
+// later fold turns into stored state. A cut statement commits nothing, so the
+// gate owes no fold on its account; the reservations change no element of the
+// graph, and Groadmap accepts them as the engine's behaviour (rule 8).
+//
+// # Why the gate also refuses after a fail-stop
+//
+// A fold serialises the engine's secondary indexes as they stand in memory. Once
+// the server has recognised that the engine fail-stopped, their state is
+// undefined, so from that moment no fold starts — neither in flight nor at
+// shutdown — and the unfolded tail is left for the next open to replay, which
+// rebuilds the indexes from the recovered graph. A fold that had already started
+// is not interrupted (SPEC/GRAPH.md § Server Diagnostics on Stderr; § Durability
+// and Checkpointing in a Long-Lived Process, rule 4).
 //
 // # Why the mutex
 //
@@ -978,7 +995,15 @@ type foldGate struct {
 	// run.
 	memory memoryLedger
 	mu     sync.Mutex
+	// failStopped is set once the server has recognised that the engine
+	// fail-stopped; from then on no fold starts. It is read under mu, so a fold
+	// already holding the mutex when it is set runs to its end.
+	failStopped atomic.Bool
 }
+
+// refuseFolds makes every later fold a no-op, because the engine fail-stopped.
+// It does not wait for a fold in progress, which is allowed to finish.
+func (g *foldGate) refuseFolds() { g.failStopped.Store(true) }
 
 // foldIfOwed folds the write-ahead log into the snapshot when, and only when, the
 // log has grown since it was last folded, and reports whether a fold ran.
@@ -1017,6 +1042,9 @@ func (g *foldGate) foldIfOwed() (bool, error) {
 func (g *foldGate) fold() (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.failStopped.Load() {
+		return false, nil
+	}
 	return g.st.CheckpointIfAppended(func() error {
 		return g.cp.TriggerCtx(context.Background())
 	})
@@ -1072,6 +1100,10 @@ type shutdownCloser struct {
 	// inFlight is the in-flight fold, or nil when the cadence is disabled. Close
 	// stops it before anything else; see there for why.
 	inFlight *inFlightCheckpoint
+	// failStop recognises a fail-stopped engine from a statement's failure. Once
+	// it has, the gate refuses every fold, so Close takes no shutdown checkpoint;
+	// serve waits on it beside the signals.
+	failStop *failStopWatch
 	err      error
 	once     sync.Once
 }
@@ -1099,7 +1131,9 @@ func (c *shutdownCloser) Close() error {
 		}
 
 		// Step 4, under the gate: fold ONLY if the write-ahead log has grown since
-		// it was last folded. See [foldGate] for what an ungated fold publishes.
+		// it was last folded, and never once the engine has been recognised as
+		// fail-stopped, when the gate refuses and this step is skipped. See
+		// [foldGate] for both.
 		if _, err := c.gate.foldIfOwed(); err != nil {
 			logger.Error(shutdownCheckpointMessage(err), slog.String("err", err.Error()))
 		}
@@ -1250,7 +1284,13 @@ func serverOptions(closer io.Closer, log *slog.Logger) server.Options {
 // the take-over has to happen before the announcement and the announcement
 // happens in [Run]; see the comment at that line, and internal/signals for why
 // re-registering is what the defect was.
-func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketPath string, sigCh <-chan os.Signal) error {
+//
+// failStop closes once a statement's failure has shown that the engine
+// fail-stopped (see failstop.go). It starts the same shutdown a signal does,
+// without the shutdown checkpoint, and the server then ends with its own line
+// and exit code 1 rather than 0.
+func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketPath string,
+	sigCh <-chan os.Signal, failStop <-chan struct{}) error {
 	// The context is never cancelled. Cancelling it is one of the two ways to
 	// stop the engine's server, and both of them CUT: every connection's context
 	// derives from this one. The drain below is what stops it instead.
@@ -1262,6 +1302,12 @@ func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketP
 	select {
 	case <-sigCh:
 		signalled = true
+		runErr = stop(srv, ln, serveErr)
+	case <-failStop:
+		// The engine fail-stopped. The shutdown is the signal's, from its first
+		// step: the gate already refuses every fold, so step 4 is skipped, and
+		// the line and the exit code are decided below (SPEC/GRAPH.md § Server
+		// Shutdown and the Drain).
 		runErr = stop(srv, ln, serveErr)
 	case runErr = <-serveErr:
 		// The accept loop failed on its own, which is not a stop this command
@@ -1284,6 +1330,20 @@ func serve(srv *server.Server, ln *serverListener, st *graphstore.Store, socketP
 
 	// Step 6.
 	removeSocketIfStale(socketPath)
+
+	// A fail-stopped engine ends the server with its own line and exit code 1,
+	// whichever way the shutdown began: a fail-stop recognised during a
+	// signalled drain is still the condition the operator must act on. The line
+	// is written once, by the caller, after this function and the diagnostic
+	// queue have finished (SPEC/GRAPH.md § Server Diagnostics on Stderr).
+	select {
+	case <-failStop:
+		if runErr != nil {
+			logger.Error("graph server teardown reported a failure", slog.String("err", runErr.Error()))
+		}
+		return errFailStopped
+	default:
+	}
 
 	if !signalled {
 		if runErr == nil {

@@ -945,6 +945,77 @@ def _where(key):
 
 
 # ---------------------------------------------------------------------------
+# Write-ahead-log damage, for the not-clean-recovery line (rmp task #632).
+#
+# A segment file opens with a 32-byte header; each record is a 36-byte header
+# -- the magic "GGWA" first, the payload length at offset 8 (little-endian
+# uint32), and a CRC32C at offset 32 computed over the payload and then
+# continued over the header's first 32 bytes -- followed by its payload. A
+# transaction's record payload starts with the version byte 0xFD, a kind byte
+# and the transaction's sequence number (little-endian uint64). The layout is
+# GoGraph's (store/wal/format.go, store/txn/txn.go at the pinned release), and
+# every record is checked for its magic so a change of format fails loudly.
+# ---------------------------------------------------------------------------
+
+_WAL_SEGMENT_HEADER = 32
+_WAL_RECORD_HEADER = 36
+_WAL_TXN_RECORD = 0xFD
+
+
+def _crc32c(data, crc=0):
+    """CRC32C (Castagnoli), continuable like Go's crc32.Update."""
+    crc ^= 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
+    return crc ^ 0xFFFFFFFF
+
+
+def _wal_records(buf):
+    """(offset, payload length) of every complete record of a segment."""
+    records, off = [], _WAL_SEGMENT_HEADER
+    while off + _WAL_RECORD_HEADER <= len(buf):
+        assert buf[off:off + 4] == b"GGWA", f"no record magic at offset {off}"
+        length = int.from_bytes(buf[off + 8:off + 12], "little")
+        if off + _WAL_RECORD_HEADER + length > len(buf):
+            break
+        records.append((off, length))
+        off += _WAL_RECORD_HEADER + length
+    return records
+
+
+def _corrupt_last_committed_op(segment_dir):
+    """Make the first operation of the log's last transaction undecodable,
+    keeping its record's checksum valid."""
+    segments = sorted(segment_dir.glob("*.wal"))
+    found = []
+    for path in segments:
+        buf = path.read_bytes()
+        for off, length in _wal_records(buf):
+            payload = buf[off + _WAL_RECORD_HEADER:off + _WAL_RECORD_HEADER + length]
+            if length > 10 and payload[0] == _WAL_TXN_RECORD:
+                found.append((int.from_bytes(payload[2:10], "little"), path, off, length))
+    assert found, f"no transaction record under {segment_dir}"
+    last = max(seq for seq, _, _, _ in found)
+    _, path, off, length = next(f for f in found if f[0] == last)
+    buf = bytearray(path.read_bytes())
+    start = off + _WAL_RECORD_HEADER
+    for i in range(start + 10, start + length):
+        buf[i] ^= 0xFF
+    crc = _crc32c(bytes(buf[off:off + 32]), _crc32c(bytes(buf[start:start + length])))
+    buf[off + 32:off + 36] = crc.to_bytes(4, "little")
+    path.write_bytes(bytes(buf))
+
+
+def _graph_dir_bytes(graph_dir):
+    """Every regular file under graph/ but the store lock, by relative path."""
+    return {str(p.relative_to(graph_dir)): p.read_bytes()
+            for p in sorted(graph_dir.rglob("*"))
+            if p.is_file() and p.name != "write.lock"}
+
+
+# ---------------------------------------------------------------------------
 # Exemptions: published strings this module cannot deterministically drive
 # to a full character-for-character match. Each is named and reasoned here,
 # never silently dropped -- test_zz_coverage_report prints this table and
@@ -999,6 +1070,18 @@ EXEMPT_KEYS = {
         "it. The guard itself, its two halves, its exact line and its exit code are "
         "driven in process by internal/db/sprint_membership_guard_test.go, which "
         "hands it states no command can produce."
+    ),
+    "Error: graph server error: the graph engine fail-stopped and refuses every statement; the server has shut down. Restart rmp graph serve to rebuild the indexes from the store.": (
+        "SPEC/GRAPH.md § Server Diagnostics on Stderr: the line is written when a "
+        "statement is refused with the engine's fail-stop error, which the engine "
+        "raises only after a commit-time update of its secondary indexes was cut "
+        "short by a panic. No statement a client can send makes a correct engine "
+        "panic there, so no invocation of the binary reaches it. The condition is "
+        "injected through the engine's own index manager, and this exact line, its "
+        "exit code, the skipped shutdown checkpoint, the released lock and the "
+        "removed socket are asserted, in process by "
+        "internal/graphserve/failstop_test.go "
+        "(TestServe_AFailStoppedEngineShutsTheServerDownWithoutAFold)."
     ),
     "Error: <detail>": (
         "SPEC/HELP.md § Error message format publishes the SHAPE every failing "
@@ -1076,6 +1159,14 @@ TAIL_EXEMPT_KEYS = {
         "neither a regular file nor a directory -- and the head, which carries the "
         "sentinel and the fact that the store was not migrated, is asserted exactly "
         "(GRAPH.md \"Graph Store Format Migration\", rule 7)."
+    ),
+    "Error: graph store error: graph store recovery was not clean; the write-ahead log was left unchanged and the store was not served: <detail>": (
+        "<detail>",
+        "COMMANDS.md § Serve Error Cases: <detail> is the recovery's own account of "
+        "the damage, the engine's text and not specified (GRAPH.md \"Error Handling "
+        "and Exit Codes\", rule 11). The head, which carries the sentinel, the fact "
+        "that the log was left unchanged and that the store was not served, is "
+        "asserted exactly."
     ),
     "Error: running migrations: migration <version> failed: applying migration: <step>: <detail>": (
         "<detail>",
@@ -4445,6 +4536,55 @@ class TestErrorStringParity:
             "a backup that failed must leave the store unconverted; graph/ now holds wal.control")
         leftovers = sorted(p.name for p in graph_dir.parent.iterdir() if p.name.startswith("graph-backup-"))
         assert leftovers == [], f"a failed backup left {leftovers} in the roadmap home"
+
+    def test_graph_store_recovery_not_clean_line(self):
+        """The line of a store whose recovery returned no error and still did
+        not replay the log cleanly (GRAPH.md "Concurrency and Recovery"; rmp
+        task #632), driven by the damage that produces it: an operation inside
+        an already-committed transaction that cannot be decoded, behind a
+        record checksum that is still valid. The server must refuse the store
+        with exit code 1 and leave every file of graph/ byte for byte as it
+        found it."""
+        r = self._another_roadmap("unclean")
+        server = self.test.start_graph_server(r)
+        for i in (1, 2, 3):
+            rc, _, err = self.test.run_cli(["graph", "client", "-r", r, "--query",
+                                            f"CREATE (:Task {{i: {i}}})"], timeout=60)
+            assert rc == 0, f"seeding commit {i} failed ({rc}): {err}"
+        server.kill_dash_9()
+        socket_path = self.test.default_socket_path(r)
+        if os.path.lexists(socket_path):
+            os.remove(socket_path)
+
+        graph_dir = self.test.home_dir / ".roadmaps" / r / "graph"
+        _corrupt_last_committed_op(graph_dir / "wal.d")
+        before = _graph_dir_bytes(graph_dir)
+
+        # The engine's recovery reports the damage in a record of its own before
+        # the start ends, as GRAPH.md "Graph Store Format Migration", rule 9,
+        # admits for a failed open, so the line compared is the invocation's own
+        # error line rather than stderr's first line. Everything else is
+        # check_head's assertion: the exit code, an empty stdout, the head
+        # character for character, and a non-empty tail.
+        key = ("Error: graph store error: graph store recovery was not clean; the write-ahead log was "
+               "left unchanged and the store was not served: <detail>")
+        assert key in CORPUS and key in TAIL_EXEMPT_KEYS, key
+        head = key[:-len(TAIL_EXEMPT_KEYS[key][0])]
+        rc, out, err = self.run_stdin(["graph", "serve", "-r", r], None, timeout=60)
+        assert rc == 1, f"the refused start exited {rc}, want 1\n  stderr: {err!r}"
+        assert out == "", f"the refused start wrote to stdout: {out!r}"
+        error_lines = [line for line in err.splitlines() if line.startswith("Error: ")]
+        assert len(error_lines) == 1, f"want exactly one error line, got {error_lines!r}\n  stderr: {err!r}"
+        line = error_lines[0]
+        assert line.startswith(head), (
+            f"the published head does not match the binary\n  published at: {_where(key)}\n"
+            f"  published: {head!r} (then <detail>)\n  captured:  {line!r}")
+        assert "corrupt op" in line[len(head):], f"the <detail> tail lost the recovery's account: {line!r}"
+        REACHED.add(key)
+        assert _graph_dir_bytes(graph_dir) == before, (
+            "the refused start changed graph/; the write-ahead log must be left byte for byte "
+            "as it was found")
+        assert not os.path.lexists(socket_path), "the refused start left its socket behind"
 
     # ------------------------------------------------------------------
     # The lines rmp tasks #577-#588 published: the home directory, the
