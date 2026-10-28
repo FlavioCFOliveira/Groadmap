@@ -37,8 +37,33 @@ guess the intended answer. When your information is insufficient:
 - Consult the **Knowledge Graph** first — it is the primary source, both to
   query and to record the relationships you discover (see Section 5).
 - Then search official or authoritative sources — specifications, RFCs,
-  standards, papers, books, or reference authors in the field — to determine the
-  best result.
+  standards, papers, books, reference authors in the field, or reference
+  open-source projects (see Open Source First) — to determine the best result.
+
+### Open Source First
+
+At every moment of analysis, exploration, and development, determine whether an
+open-source project already implements or solves what is required. Always seek
+the reference open-source projects of the field.
+
+- Use ONLY reference projects that are demonstrably useful and trustworthy for
+  the intended contribution.
+- Where possible, COPY that solution, in whole or in part.
+- Otherwise, STUDY it and use it as the example to follow.
+
+### Do Not Reinvent
+
+When analysing an existing problem, a new feature, or the refactoring of an
+existing feature, do NOT invent a solution entirely from scratch.
+
+- Base the work primarily on the knowledge already available on the subject.
+- Wherever possible, reuse the knowledge, engineering, architecture, and approach
+  of an open-source project that already solves the problem, as a whole or in
+  part. You are authorised to copy and to study the projects that implement what
+  you need.
+- Such a project is ONLY the starting point. Never stay bound to its source
+  code: the code of other projects serves THIS project's needs, never the
+  reverse.
 
 ### Language: Explicit, Objective, Closed, Concise
 
@@ -69,6 +94,14 @@ Act in a way that is HIGHLY directed at the objective of each piece of work.
 Whenever you must assess performance, completeness (whether something is
 finished), or correctness, ALWAYS gather evidence from the project itself.
 Decide empirically — never by assumption.
+
+### Investigation and Optimisation
+
+Whenever you investigate the cause of a problem in the code, or optimise a
+component, first determine which technique — or combination of techniques —
+identifies and locates the problem: profiling, tracing, metrics, logs, and any
+other suitable instrument. Dissect the problem with them until its cause is
+ABSOLUTELY clear. Act on a cause only once it is established.
 
 ### Decision Framework: Correct → Safe → Fast
 
@@ -723,8 +756,10 @@ global Claude Code configuration.
 | Pre-existing bug found | Report it and ASK the user how to proceed; NEVER fix it proactively |
 | Bug fixed (any) | Add regression test(s) in the SAME cycle so it cannot reappear |
 | Assess performance / completeness / correctness | Gather evidence; decide empirically |
+| Investigating a problem's cause, or optimising a component | Choose the techniques (profiling, tracing, metrics, logs, ...) that locate it; dissect until the cause is absolutely clear (Section 0, Investigation and Optimisation) |
 | Trade-off between correctness, safety, and speed | Apply Correct → Safe → Fast; if they conflict, ASK the user |
 | Information insufficient | Consult Knowledge Graph first, then authoritative sources — never guess |
+| Analysis, exploration, new feature, refactoring | Look for a reference open-source project that already solves it; copy or study it as the starting point — never invent from scratch (Section 0, Open Source First, Do Not Reinvent) |
 | Code vs SPEC diverge | Follow SPEC, ask the user |
 
 ---
@@ -791,6 +826,8 @@ global Claude Code configuration.
 - Committing sprint work to `main`, or continuing work on `main` outside a
   release or hotfix flow the user asked for (Rule 3, Branching)
 - Performing a git WRITE outside the `gitflow` skill (reads stay direct)
+- Acting on a problem's cause, or optimising, before the cause is established
+  with suitable investigation techniques
 - Destructive Git operations without confirmation
 - Security compromises (SQL injection, etc.)
 - Reference Claude/AI in commits
