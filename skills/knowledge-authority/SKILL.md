@@ -151,11 +151,14 @@ Two constraints on any value you propose:
 
 - **Length.** The whole path must be short enough for the platform's
   `sockaddr_un`, or `serve` fails with exit 1 and a message naming the limit
-  ("… is 120 bytes and this platform allows at most 103"). **Measured on macOS:
-  103 bytes; on Linux at 1.18.0, 107 bytes for `client` and for a `serve` given
-  `--socket`, but 99 bytes for a `serve` on the derived default path.**
-  Trust the message over any remembered figure. A path under a deep scratch
-  directory will breach it.
+  ("… is 120 bytes and this platform allows at most 103"). **Measured on Linux at
+  rmp 1.19.0 (GoGraph v0.17.2): 107 bytes for `client`; for `serve`, 107 less
+  (18 − the length of the path's final component) when that component is shorter
+  than 18 bytes — 99 bytes for a path ending in `graph.sock`, the derived default
+  included, and 95 for one ending in `x.sock`.** `serve` binds a staging path
+  first, which is why its bound is lower. macOS gave 103 bytes on an earlier
+  build and was not re-measured. Trust the message over any remembered figure. A
+  path under a deep scratch directory will breach it.
 - **Prefer the derived default.** The web interface (the `web` command, which this
   skill never runs) cannot be told a socket — it resolves the derived path. A
   custom `socket` therefore leaves the web interface unable to reach the graph
@@ -229,7 +232,7 @@ than read and re-interpret files; file reading is only the fallback.
 
 **`MERGE` over a *pattern* creates every node in that pattern afresh unless the
 whole pattern already matches.** It does not bind an existing node by its
-property map the way a reader expects. Verified at 1.18.0:
+property map the way a reader expects. Measured at rmp 1.19.0 (GoGraph v0.17.2):
 
 | Statement sequence | Result |
 |---|---|
@@ -295,9 +298,10 @@ statement alone:
   refuses such a directory. When the engine is unknown, use the forms marked
   **safe on both engines** — they are correct either way.
 
-The results below were measured against a throwaway roadmap on GoGraph v0.16.0
-and v0.17.0 builds, which return the same results; the older engine's results
-are stated beside them.
+The results below were measured against a throwaway roadmap on rmp 1.19.0,
+built against GoGraph v0.17.2. The older engine's results stated beside them
+come from earlier measurements on rmp 1.18.0 and older builds, and were not
+re-measured.
 
 ### 1. `MERGE` over a pattern duplicates a relationship's endpoints (both engines)
 
@@ -443,8 +447,8 @@ matrix):
   index** and falls back to a label scan. `TEXT`/`RANGE`/`POINT`/`FULLTEXT`/
   `LOOKUP`, composite, and relationship-property indexes are all unsupported.
   `OPTIONS {indexType:'btree'}` is accepted and reported as `type: btree`, but
-  measured at 1.18.0 the planner used it for neither an equality nor a range
-  lookup — create the default hash index.
+  measured at rmp 1.19.0 (GoGraph v0.17.2) the planner used it for neither an
+  equality nor a range lookup — create the default hash index.
 
 **Recommend an index from the query shapes this skill actually issues** — the
 identity lookups in `references/cypher.md` — and prove the recommendation with

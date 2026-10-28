@@ -82,7 +82,7 @@ That is how one production graph acquired 249 stub `Package` nodes.
 **Why the recipe has this shape — the relationship half of the trap.** Merging
 the whole pattern `(a:L {…})-[:R]->(b:L2 {…})` over nodes that already exist
 creates the relationship **and two fresh copies of its endpoints**, measured on
-rmp 1.18.0 as `nodesCreated: 2` with both keys now held twice. That is why the
+rmp 1.19.0 (GoGraph v0.17.2) as `nodesCreated: 2` with both keys now held twice. That is why the
 endpoints are `MATCH`ed and only the relationship is `MERGE`d.
 
 Stamp edge provenance by **re-binding the relationship with an outgoing `MATCH`**,
@@ -159,6 +159,17 @@ kg "MATCH ()-[e]->() RETURN type(e) AS edge, count(*) AS c ORDER BY c DESC"
 kg "MATCH (n) RETURN count(n) AS nodes"
 kg "MATCH ()-[r]->() RETURN count(r) AS rels"
 ```
+
+**Caution — an unlabelled read can be wrong during a rollback.** On rmp 1.19.0
+(GoGraph v0.17.2), a read that scans every node without a label — the node
+counts and the `labels(n)` census above — may observe uncommitted state while a
+write cut by the 5-second budget is rolling back. Measured over 645 committed
+nodes: `MATCH (n) RETURN count(n)` returned 1292645, then 0, then 645 again
+within about two seconds, and the `labels(n)` census under-counted a label by 6
+in the same window; reads anchored on a label stayed correct. Do not trust such
+a result taken just after a budget failure: re-run it once that statement's
+rollback is over. This is an engine limitation, documented in Groadmap's
+`SPEC/GRAPH.md` § Concurrency and Recovery.
 
 ## Reading — answer the common questions
 
