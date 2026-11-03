@@ -699,8 +699,9 @@ class _StreamDrain:
     thread-safe, timeout-capable view of what has arrived.
 
     A graph server's own stdout carries exactly one line (the startup JSON)
-    and then nothing until it exits; its stderr carries the two engine
-    warnings early and nothing else on the happy path. Both must be drained
+    and then nothing until it exits; its stderr carries the
+    processor-parallelism record and the two engine warnings early and nothing
+    else on the happy path. Both must be drained
     continuously regardless, because a client-under-test can print to either
     at any point in the process's life, and an un-drained pipe backs up and
     wedges the child the moment its buffer fills.
@@ -812,6 +813,7 @@ class GraphServeProcess:
         self.roadmap = roadmap
         self.socket_path_flag = socket_path
         self.proc = None
+        self.env = None
         self.socket = None
         self._out = None
         self._err = None
@@ -831,6 +833,9 @@ class GraphServeProcess:
 
         env = os.environ.copy()
         env["HOME"] = str(self.harness.home_dir)
+        # Kept so a caller can judge stderr against what the child was given,
+        # such as the GOMAXPROCS the processor-parallelism record must state.
+        self.env = env
 
         self.proc = subprocess.Popen(
             args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
@@ -993,6 +998,116 @@ class GraphServeProcess:
             return self.proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
+
+
+# --------------------------------------------------------------------------
+# The processor-parallelism record of a serve start that fails late
+#
+# `rmp graph serve` writes one INFO record, `processor parallelism`, at Server
+# Startup step 5, before the listener is bound. A start that fails at the bind or
+# at step 6 (the pre-migration backup, the store open, the engine construction)
+# has therefore already written it, and empties the record queue before its own
+# `Error:` line, so that record opens stderr ahead of the error line, and stdout
+# stays empty (SPEC/GRAPH.md "Processor Parallelism", rule 4, and "Server
+# Startup", step 5; SPEC/COMMANDS.md "Serve Output", the processor-parallelism
+# record). Under AI_AGENT=1 the AI-agent hint is written first of all, as on
+# every failing invocation (SPEC/HELP.md "AI_AGENT environment variable").
+#
+# This is the one place that record is parsed for a failing start, so the suites
+# that assert a late serve failure's error line cannot come to disagree about
+# what is allowed to precede it.
+# --------------------------------------------------------------------------
+
+AI_HINT_LINE = "AI agents usage: run `rmp --ai-help` for a machine-readable command contract."
+
+PROCESSOR_PARALLELISM_RECORD_RE = re.compile(
+    r'^time=(?P<time>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) level=INFO '
+    r'msg="processor parallelism" source=(?P<source>derived|environment) '
+    r'gomaxprocs=(?P<gomaxprocs>[1-9]\d*)(?: cpus=(?P<cpus>[1-9]\d*))?$'
+)
+
+
+def _usable_cpu_ceiling() -> int:
+    """The most CPUs the Go runtime can derive for a child of this process: the
+    affinity mask where the platform exposes one, the logical CPU count
+    otherwise. A cgroup quota may lower the runtime's figure, never raise it."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 1
+
+
+def split_serve_failure_stderr(stderr: str, env: Dict[str, str]) -> Tuple[Dict[str, Any], str]:
+    """Validate the processor-parallelism record that opens the stderr of a
+    `rmp graph serve` start that failed at or after the bind, and return
+    `(record, rest)`: the record's attributes and the stderr text after it.
+
+    `env` is the environment the child ran with; it fixes what the record must
+    say. The record must be the first line (after the AI-agent hint and its
+    blank line when AI_AGENT is exactly `1`), it must occur exactly once, and:
+
+    - with no non-empty GOMAXPROCS in `env`: `source=derived`, a `cpus`
+      attribute, `gomaxprocs` equal to `cpus`, and `cpus` within this host's
+      usable CPUs;
+    - with a non-empty GOMAXPROCS: `source=environment`, no `cpus`, and, when
+      the value is a positive decimal integer the runtime honours, `gomaxprocs`
+      equal to it.
+
+    Nothing is said about `rest`; the caller asserts the error line it expects
+    to open it.
+    """
+    text = stderr
+    if env.get("AI_AGENT") == "1":
+        preamble = AI_HINT_LINE + "\n\n"
+        assert text.startswith(preamble), (
+            f"under AI_AGENT=1 a failing start's stderr must open with the AI-agent hint; "
+            f"got {stderr!r}"
+        )
+        text = text[len(preamble):]
+
+    first, newline, rest = text.partition("\n")
+    assert newline, f"a failing start's stderr ends after its first line: {stderr!r}"
+    match = PROCESSOR_PARALLELISM_RECORD_RE.match(first)
+    assert match, (
+        f"the first stderr line of a start that failed at or after the bind is not "
+        f"the processor-parallelism record: {first!r}\n  full stderr: {stderr!r}"
+    )
+    occurrences = stderr.count('msg="processor parallelism"')
+    assert occurrences == 1, (
+        f"a start writes the processor-parallelism record exactly once; found "
+        f"{occurrences}:\n  full stderr: {stderr!r}"
+    )
+
+    source = match.group("source")
+    gomaxprocs = int(match.group("gomaxprocs"))
+    cpus = int(match.group("cpus")) if match.group("cpus") is not None else None
+    env_value = env.get("GOMAXPROCS", "")
+    if env_value == "":
+        assert source == "derived", (
+            f"GOMAXPROCS is not set, so the record must say source=derived: {first!r}"
+        )
+        assert cpus is not None, f"a derived record must carry cpus: {first!r}"
+        assert gomaxprocs == cpus, (
+            f"a derived record's gomaxprocs must equal its cpus: {first!r}"
+        )
+        ceiling = _usable_cpu_ceiling()
+        assert cpus <= ceiling, (
+            f"the record claims {cpus} usable CPUs; this host offers at most {ceiling}: {first!r}"
+        )
+    else:
+        assert source == "environment", (
+            f"GOMAXPROCS={env_value!r} is set, so the record must say source=environment: "
+            f"{first!r}"
+        )
+        assert cpus is None, f"an environment record must carry no cpus: {first!r}"
+        if env_value.isdecimal() and int(env_value) > 0:
+            assert gomaxprocs == int(env_value), (
+                f"the record must state the environment's GOMAXPROCS={env_value}: {first!r}"
+            )
+
+    record = {"time": match.group("time"), "source": source,
+              "gomaxprocs": gomaxprocs, "cpus": cpus}
+    return record, rest
 
 
 # --------------------------------------------------------------------------

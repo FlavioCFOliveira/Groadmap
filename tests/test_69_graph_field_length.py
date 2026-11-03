@@ -348,11 +348,13 @@ class TestHealthyPathStaysSilent(_GraphFixture):
             f"must be empty, not merely free of one phrase: {err!r}"
         )
 
-    def test_a_healthy_server_writes_its_two_startup_warnings_and_nothing_else(self):
+    def test_a_healthy_server_writes_its_startup_records_and_nothing_else(self):
         """A server that starts, serves a WRITING statement -- so a checkpoint
         really is taken, at shutdown -- and stops cleanly on SIGINT writes its
-        two startup warnings and nothing further, with no checkpoint record of
-        any kind among them."""
+        processor-parallelism record, its two startup warnings and nothing
+        further, with no checkpoint record of any kind among them
+        (SPEC/GRAPH.md "Processor Parallelism", rule 4, and "Server Startup",
+        step 5, which writes the record before the warnings exist)."""
         roadmap = "release-pipeline"
         server = self.test.served_roadmap(
             roadmap, "CREATE (:Component {key:'artifact-signer', language:'go'})")
@@ -369,15 +371,21 @@ class TestHealthyPathStaysSilent(_GraphFixture):
         server.drain_stderr_to_eof()
 
         lines = [line for line in server.stderr_text().splitlines() if line.strip()]
-        assert len(lines) == 2, (
-            f"a healthy server's stderr must carry exactly the two engine startup "
-            f"warnings; got {len(lines)} lines:\n" + "\n".join(lines)
+        assert len(lines) == 3, (
+            f"a healthy server's stderr must carry exactly the processor-parallelism "
+            f"record and the two engine startup warnings; got {len(lines)} lines:\n"
+            + "\n".join(lines)
         )
-        assert re.search(r"(?i)no authentication", lines[0]), (
-            f"the first line is not the no-authentication warning: {lines[0]!r}"
+        assert re.search(
+            r' level=INFO msg="processor parallelism" source=(derived|environment) '
+            r'gomaxprocs=\d+( cpus=\d+)?$', lines[0]), (
+            f"the first line is not the processor-parallelism record: {lines[0]!r}"
         )
-        assert re.search(r"(?i)no tls", lines[1]), (
-            f"the second line is not the no-TLS warning: {lines[1]!r}"
+        assert re.search(r"(?i)no authentication", lines[1]), (
+            f"the second line is not the no-authentication warning: {lines[1]!r}"
+        )
+        assert re.search(r"(?i)no tls", lines[2]), (
+            f"the third line is not the no-TLS warning: {lines[2]!r}"
         )
         for line in lines:
             assert "checkpoint" not in line.lower(), (

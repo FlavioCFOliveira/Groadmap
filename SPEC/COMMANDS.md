@@ -4302,6 +4302,23 @@ canonical for the path, the mode, and the access model.
   makes this a diagnostic stream rather than an audit log — under sustained load
   the server drops records rather than block on a destination that has stopped
   reading them, and reports how many it dropped.
+- **The processor-parallelism record (stderr):** one `INFO` record per start,
+  with the message `processor parallelism`, stating the Go runtime's
+  `GOMAXPROCS` setting in force at startup and its source: `derived`, the Go
+  runtime's own default, equal to the usable CPU count, when the `GOMAXPROCS`
+  environment variable is not set, or `environment`, the variable's value left
+  unchanged, when it is. The server changes the setting in neither case. It is
+  informational and is not a failure. Like the warnings below, it is written
+  **before** the socket object appears on stdout. A start refused before the
+  listener is bound writes no such record. A start that fails at the bind or
+  later still writes it, ahead of every other record and ahead of the start's
+  `Error:` line, and stdout stays empty; neither startup warning is written when
+  the failure is the bind, the pre-migration backup or the store open. When
+  `AI_AGENT=1` is active, the AI-agent hint line and its blank line precede the
+  record; otherwise the record is the first line and the hint follows the
+  `Error:` line (`HELP.md § AI_AGENT environment variable`).
+  `GRAPH.md § Processor Parallelism` is canonical for the rule and for the
+  record's attributes.
 - **The two startup warnings (stderr):** one for a server running without
   transport security and one for a server running without authentication. Both
   are expected and neither is a failure; `GRAPH.md § Socket Path and Permissions`
