@@ -699,8 +699,9 @@ class _StreamDrain:
     thread-safe, timeout-capable view of what has arrived.
 
     A graph server's own stdout carries exactly one line (the startup JSON)
-    and then nothing until it exits; its stderr carries the two engine
-    warnings early and nothing else on the happy path. Both must be drained
+    and then nothing until it exits; its stderr carries the
+    processor-parallelism record and the two engine warnings early and nothing
+    else on the happy path. Both must be drained
     continuously regardless, because a client-under-test can print to either
     at any point in the process's life, and an un-drained pipe backs up and
     wedges the child the moment its buffer fills.

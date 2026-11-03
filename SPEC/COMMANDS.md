@@ -4302,6 +4302,16 @@ canonical for the path, the mode, and the access model.
   makes this a diagnostic stream rather than an audit log — under sustained load
   the server drops records rather than block on a destination that has stopped
   reading them, and reports how many it dropped.
+- **The processor-parallelism record (stderr):** one `INFO` record per start,
+  with the message `processor parallelism`, stating the Go runtime's
+  `GOMAXPROCS` value the server applied and its source: `derived`, twice the
+  usable CPU count, when the `GOMAXPROCS` environment variable is not set, or
+  `environment`, the variable's value left unchanged, when it is. It is
+  informational and is not a failure. Like the warnings below, it is written
+  **before** the socket object appears on stdout. A start refused before the
+  listener is bound writes no such record.
+  `GRAPH.md § Processor Parallelism` is canonical for the rule and for the
+  record's attributes.
 - **The two startup warnings (stderr):** one for a server running without
   transport security and one for a server running without authentication. Both
   are expected and neither is a failure; `GRAPH.md § Socket Path and Permissions`
