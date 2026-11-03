@@ -3529,13 +3529,14 @@ each step is what makes a later one safe.
    narrowed afterwards does not meet this step. On Windows the listener is bound
    and the mode set afterwards, as that rule states.
 
-   **The processor parallelism is settled first.** Before the listener is bound,
-   the server settles the Go runtime's `GOMAXPROCS` and writes the record that
-   states it, as [Processor Parallelism](#processor-parallelism) requires. Every
-   refusal of steps 1 to 4 has been passed by then, so a server that cannot start
-   writes no such record; and the setting precedes both the first accepted
-   connection and the store open of step 6, so no engine work runs under any other
-   value.
+   **The processor parallelism is established first.** Before the listener is
+   bound, the server establishes the Go runtime's `GOMAXPROCS` setting in force
+   and writes the record that states it, as
+   [Processor Parallelism](#processor-parallelism) requires. Every refusal of
+   steps 1 to 4 has been passed by then, so a server that cannot start writes no
+   such record; and the record precedes both the first accepted connection and
+   the store open of step 6, so it states the value in force when engine work
+   begins.
 6. **Back the store up when it is still in the single-file format, then open the
    store and construct the engine**, through the one lifecycle
    `internal/graphstore` owns, so the server is on the same single path as the
@@ -3991,7 +3992,7 @@ has no host and no port, and a routing table over one describes nothing.
 
 ### Processor Parallelism
 
-**One value governs the engine's parallelism, and the server sets it on every
+**One value governs the engine's parallelism, and the server reports it on every
 start.** Every parallel worker count the engine derives — the parallel scan, the
 index backfill, the label count and the bulk load among them — is read from the Go
 runtime's `GOMAXPROCS` setting at the moment the work starts, and from nothing
@@ -4000,33 +4001,33 @@ engine's work may occupy at once. It is not an engine option, so the rule of
 [Engine Construction and Lifecycle](#engine-construction-and-lifecycle) that keeps
 every engine option at its default is untouched by it.
 
-1. **The server MUST settle `GOMAXPROCS` on every start, automatically.** No
-   flag, no configuration file and no action by the operator is involved: the
-   server applies rule 2 or rule 3, whichever the environment selects, before the
-   listener is bound and before the store is opened
-   ([Server Startup](#server-startup), step 5), so no connection is accepted and
-   no engine work runs under any other value.
-2. **When the `GOMAXPROCS` environment variable is not set, the value applied
-   MUST be twice the usable CPU count.** The variable counts as not set when it is
-   absent and when it is present with an empty value. The **usable CPU count** is
-   the Go runtime's own default `GOMAXPROCS`, read at startup before the server
-   changes anything. The runtime derives that default from the CPUs available to
-   the process: the machine's logical CPUs, the process's CPU affinity mask and,
-   on Linux, the process's cgroup CPU quota. The count is read on the host the
-   server is running on, at every start; no value specific to any host is fixed
-   in this specification, in the code, or in the build.
+1. **The server MUST establish the `GOMAXPROCS` setting in force on every start,
+   automatically.** No flag, no configuration file and no action by the operator
+   is involved: the server applies rule 2 or rule 3, whichever the environment
+   selects, before the listener is bound and before the store is opened
+   ([Server Startup](#server-startup), step 5), so the setting is established
+   before any connection is accepted and before any engine work runs.
+2. **When the `GOMAXPROCS` environment variable is not set, the server MUST NOT
+   change the setting.** The variable counts as not set when it is absent and
+   when it is present with an empty value. The value in force is then the Go
+   runtime's own default `GOMAXPROCS`, which is the **usable CPU count**. The
+   runtime derives that default from the CPUs available to the process: the
+   machine's logical CPUs, the process's CPU affinity mask and, on Linux, the
+   process's cgroup CPU quota. The count is read on the host the server is
+   running on, at every start; no value specific to any host is fixed in this
+   specification, in the code, or in the build.
 3. **When the `GOMAXPROCS` environment variable is set, the server MUST leave the
    setting unchanged.** A value in the environment is the operator's explicit
-   choice, and the server neither doubles it nor replaces it.
-4. **The server MUST write exactly one record stating what it applied.** The
+   choice, and the server neither adjusts it nor replaces it.
+4. **The server MUST write exactly one record stating the setting in force.** The
    record is a structured record of
    [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), at level
    `INFO`, with the message `processor parallelism` and these attributes:
 
    | Attribute | Value |
    |-----------|-------|
-   | `source` | `derived` when rule 2 applied the value; `environment` when rule 3 left the environment's value in force |
-   | `gomaxprocs` | The `GOMAXPROCS` setting in force once the rule has run |
+   | `source` | `derived` when rule 2 left the runtime's default in force; `environment` when rule 3 left the environment's value in force |
+   | `gomaxprocs` | The `GOMAXPROCS` setting in force once the rule has run; equal to `cpus` when `source` is `derived` |
    | `cpus` | The usable CPU count of rule 2; present only when `source` is `derived` |
 
    When `source` is `environment`, the record carries no `cpus` attribute. The
@@ -4037,13 +4038,17 @@ every engine option at its default is untouched by it.
    refused at an earlier step of [Server Startup](#server-startup) writes no such
    record. It is flushed with the other startup records at step 7, so it reaches
    stderr before the socket announcement reaches stdout.
-5. **A change to the CPUs available to a running server takes effect at its next
-   start.** The Go runtime periodically updates its default `GOMAXPROCS` when the
-   logical CPU count, the CPU affinity mask or the cgroup quota changes, but
-   setting a value by calling `runtime.GOMAXPROCS`, or through the environment
-   variable, disables those updates. Under rule 2 and under rule 3 alike, a
-   running server therefore keeps the value it started with, and a CPU quota
-   raised or lowered while it serves is applied when it is next started.
+5. **Under rule 2, a change to the CPUs available to a running server is applied
+   while it serves; under rule 3, it is not.** The Go runtime periodically
+   updates its default `GOMAXPROCS` when the logical CPU count, the CPU affinity
+   mask or the cgroup quota changes, and setting a custom value through the
+   environment variable or by calling `runtime.GOMAXPROCS` disables those
+   updates. Because the server never sets the value under rule 2, the runtime's
+   automatic updates stay active, and a CPU affinity mask or cgroup quota changed
+   while the server serves is applied by the runtime without a restart. Under
+   rule 3 the environment's value stays in force for the life of the process.
+   Under either rule, the record of rule 4 states the value in force at startup
+   only; no further record is written when the runtime updates it.
 
 **What this rule does not change.** Three neighbouring settings stay exactly as
 the sections that own them fix them, and each is stated so that this rule is not

@@ -4304,9 +4304,10 @@ canonical for the path, the mode, and the access model.
   reading them, and reports how many it dropped.
 - **The processor-parallelism record (stderr):** one `INFO` record per start,
   with the message `processor parallelism`, stating the Go runtime's
-  `GOMAXPROCS` value the server applied and its source: `derived`, twice the
-  usable CPU count, when the `GOMAXPROCS` environment variable is not set, or
-  `environment`, the variable's value left unchanged, when it is. It is
+  `GOMAXPROCS` setting in force at startup and its source: `derived`, the Go
+  runtime's own default, equal to the usable CPU count, when the `GOMAXPROCS`
+  environment variable is not set, or `environment`, the variable's value left
+  unchanged, when it is. The server changes the setting in neither case. It is
   informational and is not a failure. Like the warnings below, it is written
   **before** the socket object appears on stdout. A start refused before the
   listener is bound writes no such record.

@@ -17,34 +17,34 @@ import (
 // and each one restores what it changed (SPEC/GRAPH.md § Processor Parallelism).
 
 // TestProcessorParallelism_Derivation pins every branch of the pure rule: an
-// absent or empty variable derives twice the runtime default and reports that
-// default as the usable CPU count; any non-empty value, valid or not, changes
-// nothing and reports no CPU count (rules 2, 3 and 4).
+// absent or empty variable reports the source as derived and the runtime
+// default as the usable CPU count; any non-empty value, valid or not, reports
+// the source as environment and no CPU count (rules 2, 3 and 4). The rule
+// returns no value to apply, so no branch can change the setting.
 func TestProcessorParallelism_Derivation(t *testing.T) {
 	cases := []struct {
 		name           string
 		envValue       string
 		envSet         bool
 		runtimeDefault int
-		wantApply      int
 		wantSource     string
 		wantCPUs       int
 	}{
-		{"unset, 1 CPU", "", false, 1, 2, parallelismDerived, 1},
-		{"unset, 2 CPUs", "", false, 2, 4, parallelismDerived, 2},
-		{"unset, 4 CPUs", "", false, 4, 8, parallelismDerived, 4},
-		{"unset, 512 CPUs", "", false, 512, 1024, parallelismDerived, 512},
-		{"empty counts as unset", "", true, 4, 8, parallelismDerived, 4},
-		{"set to a valid value", "3", true, 4, 0, parallelismEnvironment, 0},
-		{"set to an invalid value", "abc", true, 4, 0, parallelismEnvironment, 0},
+		{"unset, 1 CPU", "", false, 1, parallelismDerived, 1},
+		{"unset, 2 CPUs", "", false, 2, parallelismDerived, 2},
+		{"unset, 4 CPUs", "", false, 4, parallelismDerived, 4},
+		{"unset, 512 CPUs", "", false, 512, parallelismDerived, 512},
+		{"empty counts as unset", "", true, 4, parallelismDerived, 4},
+		{"set to a valid value", "3", true, 4, parallelismEnvironment, 0},
+		{"set to an invalid value", "abc", true, 4, parallelismEnvironment, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			apply, source, cpus := processorParallelism(tc.envValue, tc.envSet, tc.runtimeDefault)
-			if apply != tc.wantApply || source != tc.wantSource || cpus != tc.wantCPUs {
-				t.Errorf("processorParallelism(%q, %v, %d) = (%d, %q, %d), want (%d, %q, %d)",
-					tc.envValue, tc.envSet, tc.runtimeDefault, apply, source, cpus,
-					tc.wantApply, tc.wantSource, tc.wantCPUs)
+			source, cpus := processorParallelism(tc.envValue, tc.envSet, tc.runtimeDefault)
+			if source != tc.wantSource || cpus != tc.wantCPUs {
+				t.Errorf("processorParallelism(%q, %v, %d) = (%q, %d), want (%q, %d)",
+					tc.envValue, tc.envSet, tc.runtimeDefault, source, cpus,
+					tc.wantSource, tc.wantCPUs)
 			}
 		})
 	}
@@ -99,23 +99,25 @@ func unsetGOMAXPROCSEnv(t *testing.T) {
 	}
 }
 
-// TestSettleProcessorParallelism_AppliesAndRecords drives the side-effecting
-// caller in this process: it must apply the derived value to the runtime, leave
-// the setting alone under an environment value, and write exactly one record
-// that states the setting in force afterwards.
-func TestSettleProcessorParallelism_AppliesAndRecords(t *testing.T) {
+// TestSettleProcessorParallelism_LeavesTheSettingAndRecords drives the
+// side-effecting caller in this process: under every branch it must leave the
+// GOMAXPROCS setting it found unchanged, and write exactly one record that
+// states that setting. A start value of 0 selects the runtime's own default,
+// the production case of rule 2; any other start value is a setting placed by
+// the test, which the rule must not move either.
+func TestSettleProcessorParallelism_LeavesTheSettingAndRecords(t *testing.T) {
 	cases := []struct {
 		name    string
 		env     *string // nil: absent
-		start   int
-		want    int
+		start   int     // 0: the runtime's default
 		source  string
 		hasCPUs bool
 	}{
-		{"absent", nil, 3, 6, parallelismDerived, true},
-		{"empty", ptr(""), 3, 6, parallelismDerived, true},
-		{"set", ptr("5"), 3, 3, parallelismEnvironment, false},
-		{"invalid", ptr("abc"), 3, 3, parallelismEnvironment, false},
+		{"absent, runtime default", nil, 0, parallelismDerived, true},
+		{"absent, placed setting", nil, 3, parallelismDerived, true},
+		{"empty, runtime default", ptr(""), 0, parallelismDerived, true},
+		{"set", ptr("5"), 3, parallelismEnvironment, false},
+		{"invalid", ptr("abc"), 3, parallelismEnvironment, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,25 +129,31 @@ func TestSettleProcessorParallelism_AppliesAndRecords(t *testing.T) {
 			}
 			// The runtime reads the variable only at process start, so the
 			// setting the rule finds is the one placed here.
-			runtime.GOMAXPROCS(tc.start)
+			if tc.start == 0 {
+				runtime.SetDefaultGOMAXPROCS()
+			} else {
+				runtime.GOMAXPROCS(tc.start)
+			}
+			before := runtime.GOMAXPROCS(0)
 
 			var captured syncBuffer
 			settleProcessorParallelism(newLogger(&captured))
 
-			if got := runtime.GOMAXPROCS(0); got != tc.want {
-				t.Errorf("GOMAXPROCS is %d after the rule ran, want %d", got, tc.want)
+			if got := runtime.GOMAXPROCS(0); got != before {
+				t.Errorf("GOMAXPROCS is %d after the rule ran, want the %d it found: the rule must not change it",
+					got, before)
 			}
 			lines := strings.Split(strings.TrimRight(captured.String(), "\n"), "\n")
 			if len(lines) != 1 {
 				t.Fatalf("the rule wrote %d records, want exactly 1:\n%s", len(lines), captured.String())
 			}
 			r := parseParallelismRecord(t, lines[0])
-			if r.source != tc.source || r.gomaxprocs != tc.want || r.hasCPUs != tc.hasCPUs {
+			if r.source != tc.source || r.gomaxprocs != before || r.hasCPUs != tc.hasCPUs {
 				t.Errorf("record %+v, want source=%s gomaxprocs=%d with cpus present=%v",
-					r, tc.source, tc.want, tc.hasCPUs)
+					r, tc.source, before, tc.hasCPUs)
 			}
-			if tc.hasCPUs && r.cpus != tc.start {
-				t.Errorf("record reports cpus=%d, want the runtime default the rule read, %d", r.cpus, tc.start)
+			if tc.hasCPUs && r.cpus != before {
+				t.Errorf("record reports cpus=%d, want the setting the rule read, %d", r.cpus, before)
 			}
 		})
 	}
@@ -204,8 +212,9 @@ func requireOneParallelismRecordFirst(t *testing.T, stderr string) parsedParalle
 // TestServe_DerivesProcessorParallelismBeforeTheAnnouncement is acceptance
 // criterion coverage for SPEC/GRAPH.md § Processor Parallelism, rules 1, 2 and
 // 4, through the production entry point: a server started with no GOMAXPROCS
-// variable runs at twice the usable CPU count, and states so in exactly one
-// record that is on stderr before the socket is announced on stdout.
+// variable runs at the runtime's default, which is the usable CPU count, leaves
+// it unchanged, and states so in exactly one record that is on stderr before
+// the socket is announced on stdout.
 func TestServe_DerivesProcessorParallelismBeforeTheAnnouncement(t *testing.T) {
 	cpus := runtimeDefaultGOMAXPROCS(t)
 	unsetGOMAXPROCSEnv(t)
@@ -216,8 +225,9 @@ func TestServe_DerivesProcessorParallelismBeforeTheAnnouncement(t *testing.T) {
 	p.requireAnnounced(t)
 
 	r := requireOneParallelismRecordFirst(t, early)
-	if r.source != parallelismDerived || !r.hasCPUs || r.cpus != cpus || r.gomaxprocs != 2*cpus {
-		t.Errorf("record %+v, want source=derived cpus=%d gomaxprocs=%d", r, cpus, 2*cpus)
+	if r.source != parallelismDerived || !r.hasCPUs || r.cpus != cpus || r.gomaxprocs != cpus {
+		t.Errorf("record %+v, want source=derived cpus=%d gomaxprocs=%d (the runtime default, unchanged)",
+			r, cpus, cpus)
 	}
 
 	p.signalAndWait(t, syscall.SIGTERM)
