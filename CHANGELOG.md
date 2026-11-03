@@ -5,6 +5,78 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-11-03
+
+### Added
+
+- **`rmp graph serve` reports its processor parallelism on every start**
+  (`5ab6696`, `f487e36`, rmp tasks #645 and #647;
+  `SPEC/GRAPH.md § Processor Parallelism`, `SPEC/COMMANDS.md § Serve Output`).
+  Before the listener is bound, the server writes one `INFO` record to stderr
+  with the message `processor parallelism` and the attributes `source`,
+  `gomaxprocs` and, when `source` is `derived`, `cpus`. Every parallel worker
+  count of the graph engine is read from the Go runtime's `GOMAXPROCS` setting,
+  so this record states the one value that governs them.
+  - **The setting itself is not changed.** When the `GOMAXPROCS` environment
+    variable is absent or empty, the Go runtime's default stays in force
+    (`source=derived`, `gomaxprocs` equal to `cpus`, the usable CPU count), and
+    the runtime keeps updating it when the CPU affinity mask or the cgroup quota
+    changes. When the variable is set, the operator's value is left unchanged
+    (`source=environment`, no `cpus` attribute).
+  - `5ab6696` first set `GOMAXPROCS` to twice the usable CPUs; `f487e36`
+    withdrew that before any release, because the measurement of rmp task #646
+    found no significant difference between the two values. No released binary
+    has set `GOMAXPROCS`.
+  - The parallel-scan threshold, the memory budgets and the connection and
+    transaction quotas are unchanged.
+  - Covered by `TestProcessorParallelism_Derivation`,
+    `TestSettleProcessorParallelism_LeavesTheSettingAndRecords`,
+    `TestServe_DerivesProcessorParallelismBeforeTheAnnouncement`,
+    `TestServe_LeavesAnEnvironmentParallelismUnchanged` and
+    `TestServe_ARefusedStartWritesNoParallelismRecord`.
+
+### Changed
+
+- **Compatibility: on a `rmp graph serve` start that fails at or after the bind,
+  the `Error:` line is no longer the first line of stderr** (`5ab6696`,
+  `c91e305`, #648; `SPEC/GRAPH.md § Server Startup`, step 5, and
+  `§ Processor Parallelism`, rule 4; `SPEC/COMMANDS.md § Serve Output`). This
+  covers a failure at the bind itself, at the pre-migration backup, at the store
+  open and at the engine construction. The `processor parallelism` record
+  precedes the `Error:` line, and stdout stays empty. With `AI_AGENT=1` the
+  AI-agent hint line and its blank line come first, then the record, then the
+  `Error:` line; otherwise the record is the first line and the hint follows the
+  `Error:` line. A start refused before the bind (steps 1 to 4) writes no record,
+  so its stderr is unchanged. A script that reads the error with `head -1` must
+  select it with `grep '^Error:'` instead.
+- **On a successful start, the `processor parallelism` record precedes the two
+  startup warnings on stderr** (`5ab6696`), and all three still reach stderr
+  before the socket object reaches stdout. The stdout announcement is unchanged.
+
+### Internal
+
+These change no output of the binary.
+
+- **The E2E suite expects the record** (`5ab6696`, `c91e305`):
+  `tests/base_test.py` gains `split_serve_failure_stderr`, which validates the
+  single leading record (its `source`, `gomaxprocs` and `cpus` attributes, its
+  UTC timestamp and its position relative to the AI-agent hint) and returns the
+  stderr after it; `tests/test_65` asserts the record and then the `Error:` line
+  on a failed bind; `tests/test_55` accepts the record ahead of the bind and
+  backup failure lines only; `tests/test_69` expects it among the startup
+  records of a healthy server.
+
+### Notes
+
+- **`1.21.0` is `MINOR` under a strict reading of Semantic Versioning 2.0.0**,
+  and matches the owner's decision of 2026-11-03. The release adds one stderr
+  diagnostic record. The project's output contract places machine-readable
+  output on stdout, which is unchanged; the reordering of stderr on a late
+  `rmp graph serve` failure is recorded above as a compatibility note.
+- **No SQLite schema change.** Databases stay at schema `1.17.0`.
+- **No dependency change.** `go.mod` and `go.sum` are unchanged since `1.20.0`;
+  the graph engine stays at GoGraph `v0.17.2`.
+
 ## [1.20.0] - 2026-10-28
 
 ### Added
@@ -4624,6 +4696,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.21.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.17.3...v1.18.0

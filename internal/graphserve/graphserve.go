@@ -618,7 +618,14 @@ func Run(opts Options) error {
 	// reserved prefix (SPEC/GRAPH.md § Socket Path and Permissions, rule 9).
 	removeStagingResidue(filepath.Dir(opts.SocketPath))
 
-	// Step 5. Bind, with the socket at mode 0600 from its first instant at the
+	// Step 5. Settle the processor parallelism first: every refusal of steps 1
+	// to 4 has been passed, so a start that cannot proceed writes no record of
+	// it, and the setting precedes the first accepted connection and the store
+	// open, so no engine work runs under any other value (SPEC/GRAPH.md
+	// § Processor Parallelism, rule 1).
+	settleProcessorParallelism(logger)
+
+	// Then bind, with the socket at mode 0600 from its first instant at the
 	// path (see bind).
 	ln, err := bind(opts.SocketPath)
 	if err != nil {
@@ -684,6 +691,10 @@ func Run(opts Options) error {
 	// would proceed on their absence. Measured before this flush existed: the
 	// first complete line reached a line-oriented reader 5.1 ms after the
 	// announcement, and the E2E case for those rules failed deterministically.
+	//
+	// The processor-parallelism record of step 5 is queued ahead of those
+	// warnings and is flushed by the same call, for the same reason
+	// (SPEC/GRAPH.md § Processor Parallelism, rule 4).
 	//
 	// This is the one place the sink's non-blocking property is deliberately
 	// suspended, and it is safe here for a reason that does not hold later: at

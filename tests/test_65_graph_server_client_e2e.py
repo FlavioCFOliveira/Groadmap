@@ -138,7 +138,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import (GraphServeProcess, GroadmapTestBase,
                              assert_graph_write_shape,
-                             measure_socket_path_bound)
+                             measure_socket_path_bound,
+                             split_serve_failure_stderr)
 
 
 EXIT_OK = 0
@@ -805,11 +806,22 @@ class TestServeFlagsAndErrorCases(GraphServerTestBase):
             raised = True
         assert raised
         assert server.proc.returncode == EXIT_DATABASE, f"got {server.proc.returncode}"
-        prefix = f"Error: graph server error: cannot bind {bad_socket}: "
-        assert server.stderr_text().startswith(prefix), (
-            f"got {server.stderr_text()!r}, want prefix {prefix!r}"
+        # The child has exited, but the drain runs on its own thread: close
+        # that window before reading the whole stream.
+        server.drain_stderr_to_eof()
+        assert server.stdout_text() == "", (
+            f"a start that failed at the bind wrote to stdout: {server.stdout_text()!r}"
         )
-        tail = server.stderr_text()[len(prefix):].splitlines()[0]
+        # The bind is step 5, after the processor-parallelism record is queued,
+        # so that record opens stderr ahead of the error line (SPEC/GRAPH.md
+        # "Processor Parallelism", rule 4).
+        _, rest = split_serve_failure_stderr(server.stderr_text(), server.env)
+        prefix = f"Error: graph server error: cannot bind {bad_socket}: "
+        assert rest.startswith(prefix), (
+            f"the line after the processor-parallelism record is {rest!r}, "
+            f"want prefix {prefix!r}"
+        )
+        tail = rest[len(prefix):].splitlines()[0]
         assert tail.strip() != "", "the OS diagnostic tail must be non-empty"
 
 

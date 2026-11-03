@@ -38,6 +38,7 @@
   - [Server Startup](#server-startup)
   - [Server Shutdown and the Drain](#server-shutdown-and-the-drain)
   - [Server Options](#server-options)
+  - [Processor Parallelism](#processor-parallelism)
   - [Server Diagnostics on Stderr](#server-diagnostics-on-stderr)
   - [Concurrency Inside the Server](#concurrency-inside-the-server)
   - [Durability and Checkpointing in a Long-Lived Process](#durability-and-checkpointing-in-a-long-lived-process)
@@ -3527,6 +3528,16 @@ each step is what makes a later one safe.
    platform with POSIX file modes, a listener bound under the process umask and
    narrowed afterwards does not meet this step. On Windows the listener is bound
    and the mode set afterwards, as that rule states.
+
+   **The processor parallelism is established first.** Before the listener is
+   bound, the server establishes the Go runtime's `GOMAXPROCS` setting in force
+   and writes the record that states it, as
+   [Processor Parallelism](#processor-parallelism) requires. Every refusal of
+   steps 1 to 4 has been passed by then, so a start refused at any of those steps
+   writes no such record, while a start that fails at the bind or at step 6 has
+   already written it and reports it ahead of its error line (that section, rule
+   4); and the record precedes both the first accepted connection and the store
+   open of step 6, so it states the value in force when engine work begins.
 6. **Back the store up when it is still in the single-file format, then open the
    store and construct the engine**, through the one lifecycle
    `internal/graphstore` owns, so the server is on the same single path as the
@@ -3980,6 +3991,98 @@ expects a host and a port and would fail to parse it. Groadmap neither supports
 such a driver nor works around the address: the transport is a socket, a socket
 has no host and no port, and a routing table over one describes nothing.
 
+### Processor Parallelism
+
+**One value governs the engine's parallelism, and the server reports it on every
+start.** Every parallel worker count the engine derives — the parallel scan, the
+index backfill, the label count and the bulk load among them — is read from the Go
+runtime's `GOMAXPROCS` setting at the moment the work starts, and from nothing
+else. That setting is therefore the single lever over how many processors the
+engine's work may occupy at once. It is not an engine option, so the rule of
+[Engine Construction and Lifecycle](#engine-construction-and-lifecycle) that keeps
+every engine option at its default is untouched by it.
+
+1. **The server MUST establish the `GOMAXPROCS` setting in force on every start,
+   automatically.** No flag, no configuration file and no action by the operator
+   is involved: the server applies rule 2 or rule 3, whichever the environment
+   selects, before the listener is bound and before the store is opened
+   ([Server Startup](#server-startup), step 5), so the setting is established
+   before any connection is accepted and before any engine work runs.
+2. **When the `GOMAXPROCS` environment variable is not set, the server MUST NOT
+   change the setting.** The variable counts as not set when it is absent and
+   when it is present with an empty value. The value in force is then the Go
+   runtime's own default `GOMAXPROCS`, which is the **usable CPU count**. The
+   runtime derives that default from the CPUs available to the process: the
+   machine's logical CPUs, the process's CPU affinity mask and, on Linux, the
+   process's cgroup CPU quota. The count is read on the host the server is
+   running on, at every start; no value specific to any host is fixed in this
+   specification, in the code, or in the build.
+3. **When the `GOMAXPROCS` environment variable is set, the server MUST leave the
+   setting unchanged.** A value in the environment is the operator's explicit
+   choice, and the server neither adjusts it nor replaces it.
+4. **The server MUST write exactly one record stating the setting in force.** The
+   record is a structured record of
+   [Server Diagnostics on Stderr](#server-diagnostics-on-stderr), at level
+   `INFO`, with the message `processor parallelism` and these attributes:
+
+   | Attribute | Value |
+   |-----------|-------|
+   | `source` | `derived` when rule 2 left the runtime's default in force; `environment` when rule 3 left the environment's value in force |
+   | `gomaxprocs` | The `GOMAXPROCS` setting in force once the rule has run; equal to `cpus` when `source` is `derived` |
+   | `cpus` | The usable CPU count of rule 2; present only when `source` is `derived` |
+
+   When `source` is `environment`, the record carries no `cpus` attribute. The
+   runtime's derived default is not observable while an environment value is in
+   force without changing the setting, which rule 3 forbids, and a count drawn
+   from any other source would be a different quantity under the same name. The
+   record is written once per start, at the point rule 1 places it; a start
+   refused at an earlier step of [Server Startup](#server-startup) writes no such
+   record. It is queued with the other startup records and reaches stderr by one
+   of two paths, depending on how the start ends:
+
+   - **A start that succeeds** flushes the record with the other startup records
+     at step 7, so it reaches stderr before the socket announcement reaches
+     stdout.
+   - **A start that fails at or after the bind of step 5** — the bind itself, or
+     the backup, the open or the engine construction of step 6 — empties the
+     queue before the invocation's error line is written. The record therefore
+     reaches stderr ahead of every other record of the start and ahead of the
+     error line ([Server Diagnostics on Stderr](#server-diagnostics-on-stderr),
+     rule 2), and stdout stays empty. The AI-agent hint keeps the position
+     `HELP.md § AI_AGENT environment variable` fixes for it: when `AI_AGENT=1` is
+     active, the hint line and its blank line are written first and the record
+     follows them; otherwise the record is the first line and the hint follows
+     the error line. A start that fails at the bind or at the backup or open
+     of step 6 writes neither startup warning of
+     [Socket Path and Permissions](#socket-path-and-permissions), rules 5 and 6,
+     because the engine emits them only while the server is being constructed.
+5. **Under rule 2, a change to the CPUs available to a running server is applied
+   while it serves; under rule 3, it is not.** The Go runtime periodically
+   updates its default `GOMAXPROCS` when the logical CPU count, the CPU affinity
+   mask or the cgroup quota changes, and setting a custom value through the
+   environment variable or by calling `runtime.GOMAXPROCS` disables those
+   updates. Because the server never sets the value under rule 2, the runtime's
+   automatic updates stay active, and a CPU affinity mask or cgroup quota changed
+   while the server serves is applied by the runtime without a restart. Under
+   rule 3 the environment's value stays in force for the life of the process.
+   Under either rule, the record of rule 4 states the value in force at startup
+   only; no further record is written when the runtime updates it.
+
+**What this rule does not change.** Three neighbouring settings stay exactly as
+the sections that own them fix them, and each is stated so that this rule is not
+read as a general tuning of the server:
+
+- **The parallel-scan threshold stays at the engine's default.** Whether a scan
+  runs in parallel at all is still the engine's gate, as
+  [Engine Construction and Lifecycle](#engine-construction-and-lifecycle)
+  records; this rule changes how many workers a parallel scan may use, not when
+  one is chosen.
+- **Memory is untouched.** No memory budget and no Go runtime soft memory limit is
+  set, and every decision of [Peak Resident Memory](#peak-resident-memory) stands.
+- **The connection and transaction quotas are unchanged.** The maximum number of
+  connections and every other quota of [Server Options](#server-options) are
+  left as that section states.
+
 ### Server Diagnostics on Stderr
 
 The server's stderr carries two different kinds of line, and only one of them is
@@ -3990,10 +4093,12 @@ the plain text the rest of this product writes.
    line of `key=value` pairs, which reads on a terminal and needs no parsing
    tool. The two startup warnings of
    [Socket Path and Permissions](#socket-path-and-permissions), rules 5 and 6,
-   are records of this kind, and so is everything the engine reports while a
-   session is being served. It is the same handler type, configured the same way,
-   that `rmp web` uses for the same purpose (`WEB.md § Logger Configuration`); the
-   two long-lived surfaces MUST NOT answer this question differently.
+   are records of this kind, so is the record of
+   [Processor Parallelism](#processor-parallelism), rule 4, and so is everything
+   the engine reports while a session is being served. It is the same handler
+   type, configured the same way, that `rmp web` uses for the same purpose
+   (`WEB.md § Logger Configuration`); the two long-lived surfaces MUST NOT answer
+   this question differently.
 2. **The invocation's own error line.** A failure that ends the process is
    reported in the project's plain-text error form — the `Error: ` prefix, the
    sentinel, and the AI-agent hint — exactly as a short-lived `rmp` invocation
@@ -6333,8 +6438,9 @@ what is compared is a store no process holds open.
     that stream
     ([Query Notifications as Diagnostics](#query-notifications-as-diagnostics),
     rule 5). A graph server that starts, serves a writing statement and stops
-    cleanly on `SIGINT` writes its two startup warnings and nothing further, with
-    no checkpoint record of any kind among them. The criterion MUST compare the
+    cleanly on `SIGINT` writes its processor-parallelism record, its two startup
+    warnings and nothing further, with no checkpoint record of any kind among
+    them. The criterion MUST compare the
     complete stream in both halves, because an implementation that emitted the
     new diagnostic speculatively — on every checkpoint, or on every checkpoint
     that returned any error at all — would satisfy a check that merely searched
