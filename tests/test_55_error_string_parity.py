@@ -144,7 +144,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import (GroadmapTestBase, REPO_ROOT, COMMIT_OPEN_HASH,
                              COMMIT_CLOSE_HASH, commit_flags_for,
-                             measure_socket_path_bound)
+                             measure_socket_path_bound,
+                             split_serve_failure_stderr)
 # The socket-path bound is MEASURED, never written down: it is 107 bytes on
 # Linux and Windows and 103 on macOS, FreeBSD and OpenBSD, so a literal here
 # would agree with a hard-coded implementation on one host and confirm the
@@ -1545,7 +1546,8 @@ class TestErrorStringParity:
         REACHED.add(key)
 
     def check_head(self, key, args, exit_code, tail_contains, subs=None,
-                   stdin=None, note="", stdin_fd=None, timeout=None, extra_env=None):
+                   stdin=None, note="", stdin_fd=None, timeout=None, extra_env=None,
+                   late_serve_failure=False):
         """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
 
         Everything BEFORE the named placeholder is compared character for
@@ -1559,7 +1561,14 @@ class TestErrorStringParity:
 
         `key` must be declared in TAIL_EXEMPT_KEYS: a string is never
         compared by head alone unless the narrowing is declared and reasoned
-        there."""
+        there.
+
+        `late_serve_failure` marks a `rmp graph serve` start that fails at or
+        after the bind of Server Startup step 5. Such a start has already
+        written its processor-parallelism record, which opens stderr ahead of
+        the error line (SPEC/GRAPH.md "Processor Parallelism", rule 4): the
+        record is validated by split_serve_failure_stderr, and the error line
+        asserted is the one that follows it."""
         assert key in CORPUS, (
             f"case references a string extraction no longer finds in "
             f"SPEC/COMMANDS.md: {key!r} ({note})"
@@ -1586,7 +1595,13 @@ class TestErrorStringParity:
 
         rc, out, err = self.run_stdin(args, stdin, stdin_fd=stdin_fd, timeout=timeout,
                                       extra_env=extra_env)
-        actual_line = err.splitlines()[0] if err else ""
+        stream = err
+        if late_serve_failure:
+            child_env = dict(os.environ)
+            child_env["HOME"] = str(self.test.home_dir)
+            child_env.update(extra_env or {})
+            _, stream = split_serve_failure_stderr(err, child_env)
+        actual_line = stream.splitlines()[0] if stream else ""
         assert rc == exit_code, (
             f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
             f"  args: {args}\n  stdout: {out!r}\n  stderr: {err!r}"
@@ -4670,7 +4685,8 @@ class TestErrorStringParity:
         missing_directory = os.path.join(home, "no-such-directory", "graph.sock")
         self.check_head("Error: graph server error: cannot bind <socket>: <detail>",
                         ["graph", "serve", "-r", r, "--socket", missing_directory], 1, (),
-                        subs={"<socket>": missing_directory}, note="socket directory absent", timeout=60)
+                        subs={"<socket>": missing_directory}, note="socket directory absent", timeout=60,
+                        late_serve_failure=True)
 
         shared = os.path.join(home, "shared.sock")
         self.test.start_graph_server(r, socket_path=shared)
@@ -4738,7 +4754,8 @@ class TestErrorStringParity:
         self.check_head(
             "Error: graph store error: graph store backup failed; the store was not migrated: <detail>",
             ["graph", "serve", "-r", unconverted], 1,
-            ("operator-notes",), note="a symbolic link inside a single-file store", timeout=60)
+            ("operator-notes",), note="a symbolic link inside a single-file store", timeout=60,
+            late_serve_failure=True)
         assert not (graph_dir / "wal.control").exists(), (
             "a backup that failed must leave the store unconverted; graph/ now holds wal.control")
         leftovers = sorted(p.name for p in graph_dir.parent.iterdir() if p.name.startswith("graph-backup-"))

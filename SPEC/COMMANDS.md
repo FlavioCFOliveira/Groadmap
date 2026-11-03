@@ -4310,7 +4310,13 @@ canonical for the path, the mode, and the access model.
   unchanged, when it is. The server changes the setting in neither case. It is
   informational and is not a failure. Like the warnings below, it is written
   **before** the socket object appears on stdout. A start refused before the
-  listener is bound writes no such record.
+  listener is bound writes no such record. A start that fails at the bind or
+  later still writes it, ahead of every other record and ahead of the start's
+  `Error:` line, and stdout stays empty; neither startup warning is written when
+  the failure is the bind, the pre-migration backup or the store open. When
+  `AI_AGENT=1` is active, the AI-agent hint line and its blank line precede the
+  record; otherwise the record is the first line and the hint follows the
+  `Error:` line (`HELP.md § AI_AGENT environment variable`).
   `GRAPH.md § Processor Parallelism` is canonical for the rule and for the
   record's attributes.
 - **The two startup warnings (stderr):** one for a server running without

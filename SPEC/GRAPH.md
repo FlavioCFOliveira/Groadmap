@@ -3533,10 +3533,11 @@ each step is what makes a later one safe.
    bound, the server establishes the Go runtime's `GOMAXPROCS` setting in force
    and writes the record that states it, as
    [Processor Parallelism](#processor-parallelism) requires. Every refusal of
-   steps 1 to 4 has been passed by then, so a server that cannot start writes no
-   such record; and the record precedes both the first accepted connection and
-   the store open of step 6, so it states the value in force when engine work
-   begins.
+   steps 1 to 4 has been passed by then, so a start refused at any of those steps
+   writes no such record, while a start that fails at the bind or at step 6 has
+   already written it and reports it ahead of its error line (that section, rule
+   4); and the record precedes both the first accepted connection and the store
+   open of step 6, so it states the value in force when engine work begins.
 6. **Back the store up when it is still in the single-file format, then open the
    store and construct the engine**, through the one lifecycle
    `internal/graphstore` owns, so the server is on the same single path as the
@@ -4036,8 +4037,25 @@ every engine option at its default is untouched by it.
    from any other source would be a different quantity under the same name. The
    record is written once per start, at the point rule 1 places it; a start
    refused at an earlier step of [Server Startup](#server-startup) writes no such
-   record. It is flushed with the other startup records at step 7, so it reaches
-   stderr before the socket announcement reaches stdout.
+   record. It is queued with the other startup records and reaches stderr by one
+   of two paths, depending on how the start ends:
+
+   - **A start that succeeds** flushes the record with the other startup records
+     at step 7, so it reaches stderr before the socket announcement reaches
+     stdout.
+   - **A start that fails at or after the bind of step 5** — the bind itself, or
+     the backup, the open or the engine construction of step 6 — empties the
+     queue before the invocation's error line is written. The record therefore
+     reaches stderr ahead of every other record of the start and ahead of the
+     error line ([Server Diagnostics on Stderr](#server-diagnostics-on-stderr),
+     rule 2), and stdout stays empty. The AI-agent hint keeps the position
+     `HELP.md § AI_AGENT environment variable` fixes for it: when `AI_AGENT=1` is
+     active, the hint line and its blank line are written first and the record
+     follows them; otherwise the record is the first line and the hint follows
+     the error line. A start that fails at the bind or at the backup or open
+     of step 6 writes neither startup warning of
+     [Socket Path and Permissions](#socket-path-and-permissions), rules 5 and 6,
+     because the engine emits them only while the server is being constructed.
 5. **Under rule 2, a change to the CPUs available to a running server is applied
    while it serves; under rule 3, it is not.** The Go runtime periodically
    updates its default `GOMAXPROCS` when the logical CPU count, the CPU affinity
